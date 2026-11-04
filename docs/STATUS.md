@@ -136,3 +136,13 @@ Regression tests: `corrections-and-photos.test.ts`. External requirements: [EXTE
 - Rejecting a face check still voids the record at once, for supervisors too. It is audited and has history, but does not wait for an owner.
 - Only a company owner can delete a photo, with a reason, audited.
 - Each company sets its own photo period. Automatic photo deletion is on hold: it needs `PHOTO_AUTO_DELETE_ENABLED=true` and the company's setting, after legal review.
+
+## Mobile reliability (4 Nov 2026)
+
+On branch `phase-d-mobile`. Audit: [MOBILE-AUDIT.md](MOBILE-AUDIT.md). Phone tests: [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md). What is still unverified: [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).
+
+- Saved locations are removed only on the server's answer. Ending a shift, losing the sign-in, a 403 or starting the next shift no longer discards them.
+- Check-ins and shift ends can be saved without a connection and are sent later. The server judges them on their evidence, flags them `OFFLINE_CAPTURE`, and never accepts one earlier than the session start it recorded. Companies set the limit (`offlineAttendanceHours`, default 24; 0 turns it off).
+- Starting a shift, breaks and overtime still need a connection.
+- A supervisor's face rejection applies at once; an owner can override it (migration 023).
+- **Not tested on a real phone.** Offline behaviour must not be claimed to customers until the device plan passes.

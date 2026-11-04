@@ -6,6 +6,7 @@
  * family, so refresh is single-flight: concurrent 401s share one refresh call.
  */
 import { API_URL } from '../config';
+import { sessionIsGone, singleFlight } from './auth-rules';
 import { clearCredentials, getTokens, setTokens } from '../secure';
 import type { RefreshResponse } from './types';
 
@@ -33,7 +34,6 @@ export function onAuthLost(l: AuthLostListener): () => void {
 }
 
 let accessMemo: string | null = null;
-let refreshInFlight: Promise<string> | null = null;
 
 export function setAccessTokenMemo(t: string | null) {
   accessMemo = t;
@@ -85,9 +85,7 @@ async function authLost(reason: string) {
 }
 
 /** Single-flight refresh. Resolves with the new access token. */
-export function refreshAccessToken(): Promise<string> {
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
+export const refreshAccessToken = singleFlight(async (): Promise<string> => {
     const t = await getTokens();
     if (!t) {
       await authLost('not signed in');
@@ -96,20 +94,14 @@ export function refreshAccessToken(): Promise<string> {
     const res = await rawFetch('/api/v1/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: t.refreshToken }) }, 20_000);
     if (!res.ok) {
       const err = await toApiError(res);
-      // Only these mean the refresh token is invalid, revoked or expired. Anything else is a passing problem,
-      // and treating it as a lost sign-in would throw away a session that still works.
-      if (res.status === 400 || res.status === 401 || res.status === 403) await authLost(err.code);
+      if (sessionIsGone(res.status)) await authLost(err.code);
       throw err;
     }
     const data = (await res.json()) as RefreshResponse;
     await setTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
     accessMemo = data.accessToken;
     return data.accessToken;
-  })().finally(() => {
-    refreshInFlight = null;
-  });
-  return refreshInFlight;
-}
+});
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';

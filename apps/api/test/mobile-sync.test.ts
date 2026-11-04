@@ -11,10 +11,11 @@ import { DateTime } from 'luxon';
 import { one, q } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { createEmployee, createTestDatabase, fakeJpeg, mobileLogin, seedBase, WP } from './helpers.js';
-// @ts-ignore  The phone's code, shared as source; checked by the mobile app's own typecheck.
-import { addEvent, emptyOutbox, flushReadings, runOutbox } from '../../mobile/src/lib/sync/engine.ts';
-// @ts-ignore
-import { emptyQueue, enqueue, toWire } from '../../mobile/src/lib/tracking/queue-core.ts';
+
+// The phone's own code, loaded at run time. The mobile app's typecheck covers it.
+const load = (path: string) => import(/* @vite-ignore */ new URL(path, import.meta.url).href);
+const { addEvent, emptyOutbox, flushReadings, runOutbox } = await load('../../mobile/src/lib/sync/engine.ts');
+const { emptyQueue, enqueue, toWire } = await load('../../mobile/src/lib/tracking/queue-core.ts');
 
 let app: Express;
 let db: Awaited<ReturnType<typeof createTestDatabase>>;

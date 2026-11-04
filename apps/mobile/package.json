@@ -46,7 +46,7 @@
     "typecheck": "tsc --noEmit",
     "doctor": "expo-doctor",
     "export:android": "expo export --platform android --output-dir dist",
-    "test": "node --test src/lib/tracking/queue-core.test.ts src/lib/sync/engine.test.ts"
+    "test": "node --test src/lib/tracking/queue-core.test.ts src/lib/sync/engine.test.ts src/lib/api/auth-rules.test.ts"
   },
   "private": true
 }
