@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // mobile-sync.test.ts loads the phone's source, and the mobile tsconfig needs packages CI has not installed here.
+  esbuild: { tsconfigRaw: '{}' },
   test: {
     env: {
       NODE_ENV: 'test',
