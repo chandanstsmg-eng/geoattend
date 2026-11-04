@@ -36,4 +36,15 @@ Rollback: [migrations/022_rollback.sql](migrations/022_rollback.sql).
 | `attendance_records` | Trigger refuses any change away from `VOIDED` | Unchanged |
 | `review_requests` | Unique index: one open dispute per record | Unchanged. The migration stops if a record has two open disputes |
 
-Limit: a mistaken void cannot be undone by anyone, including the owner.
+Limit: a mistaken void cannot be undone by anyone, including the owner. Migration 023 adds one exception, for rejected face checks.
+
+## 023_face_rejection_override
+
+Rollback: [migrations/023_rollback.sql](migrations/023_rollback.sql). **Not applied to any live database yet.**
+
+| Object | Change | Existing rows |
+|---|---|---|
+| `attendance_records` | `verification_status` also allows `PENDING_VERIFICATION` | Unchanged |
+| `attendance_void_is_final()` | Also allows the restore when a face check or offline record was rejected and the owner's override set `geoattend.face_override` for that transaction | Unchanged |
+
+Every other void stays final. The override is the only code that sets the value, and it records the whole record before and after in review history and the audit log. Rolling back removes the exception and refuses to run while any record is waiting for verification; records already restored stay restored.

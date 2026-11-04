@@ -9,20 +9,25 @@
  * Submission order: reserve upload (intent) → PUT JPEG → FRESH high-accuracy
  * fix → POST /attendance. "Attendance recorded" is shown only after the server
  * answered 200/201.
+ *
+ * With no connection the photo and a fresh fix are saved on the phone and sent later (lib/sync/outbox);
+ * the employee is told it is saved, not recorded. The server still decides when it arrives.
  */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { CameraView, useCameraPermissions, type CameraType } from 'expo-camera';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
-import { File, UploadType } from 'expo-file-system';
+import { File } from 'expo-file-system';
 import * as Location from 'expo-location';
 import { randomUUID } from 'expo-crypto';
 import { api, ApiError, errorMessage } from '../../lib/api/client';
 import type { AttendanceResponse, IntentResponse, SessionStatus } from '../../lib/api/types';
 import { deviceMeta } from '../../lib/device';
 import { qk, queryClient } from '../../lib/queryClient';
+import { saveCheckIn } from '../../lib/sync/outbox';
+import { putPhoto } from '../../lib/sync/upload';
 import { bestFix, toReading } from '../../lib/tracking/runtime';
 import { loadMeta } from '../../lib/tracking/store';
 import { toWire } from '../../lib/tracking/queue-core';
@@ -107,6 +112,9 @@ async function compress(uri: string, width: number, height: number): Promise<{ u
 export default function CaptureScreen() {
   // Snapshot at open: the session id and evidence rules for this attempt. The server re-checks eligibility on submit.
   const [status] = useState(() => queryClient.getQueryData<SessionStatus | null>(qk.status) ?? null);
+  // Offline the server cannot say the employee has arrived, so the capture is allowed and judged when it is sent.
+  const offline = useLocalSearchParams<{ offline?: string }>().offline === '1';
+  const allowed = !!status?.attendanceAvailable || (offline && (status?.tracking.offlineAttendanceHours ?? 0) > 0);
   const [perm] = useCameraPermissions();
   const cam = useRef<CameraView>(null);
   const [ready, setReady] = useState(false);
@@ -120,10 +128,10 @@ export default function CaptureScreen() {
 
   useEffect(() => {
     // Safety net: never show the camera unless the server says attendance is available.
-    if (!status?.attendanceAvailable) router.replace('/shift');
-  }, [status?.attendanceAvailable]);
+    if (!allowed) router.replace('/shift');
+  }, [allowed]);
 
-  if (!status?.attendanceAvailable) return null;
+  if (!status || !allowed) return null;
   if (perm && !perm.granted) {
     return (
       <SafeAreaView style={st.dark}>
@@ -160,6 +168,25 @@ export default function CaptureScreen() {
     setPhase('camera');
   };
 
+  /** No connection: keep the photo and a fresh fix on the phone, under the same key as the attempt. */
+  const saveForLater = async (a: Attempt) => {
+    setStep('location');
+    setFixAccuracy(null);
+    const meta = await loadMeta();
+    const fix = await bestFix(status.tracking.maxAccuracyM, { onProgress: setFixAccuracy });
+    const reading = toReading(fix, 'FOREGROUND', status.session.id, meta.userId);
+    if (!reading) throw new Error('The phone returned a location without accuracy information. Retry.');
+    await saveCheckIn({
+      id: a.idempotencyKey,
+      status,
+      photoUri: a.uri,
+      sizeBytes: a.sizeBytes,
+      evidence: toWire(reading),
+      device: await deviceMeta({ cameraFacing: facing, photoBytes: a.sizeBytes, backgroundLocation: meta.backgroundGranted ?? null }),
+    });
+    router.replace({ pathname: '/success', params: { pending: '1', capturedAt: reading.clientTime } });
+  };
+
   const submit = async () => {
     const a = attempt.current;
     if (!a) return retake();
@@ -167,6 +194,7 @@ export default function CaptureScreen() {
     setFailure(null);
     setPhase('submitting');
     try {
+      if (offline) return await saveForLater(a);
       const sessionId = status.session.id;
       if (!a.photoId || !a.uploaded) {
         setStep('upload');
@@ -176,28 +204,7 @@ export default function CaptureScreen() {
         });
         a.photoId = intent.photoId;
         a.uploaded = false;
-        let put;
-        try {
-          put = await new File(a.uri).upload(intent.upload.url, { httpMethod: 'PUT', uploadType: UploadType.BINARY_CONTENT, headers: intent.upload.headers });
-        } catch {
-          throw new ApiError(0, 'NETWORK_ERROR', 'The photo upload did not complete.');
-        }
-        if (put.status === 409 && put.body.includes('ALREADY_UPLOADED')) {
-          // A previous try already stored this slot.
-        } else if (put.status < 200 || put.status >= 300) {
-          let code = `UPLOAD_${put.status}`;
-          let message = `The photo upload failed (${put.status}).`;
-          try {
-            const b = JSON.parse(put.body);
-            code = b?.error?.code ?? code;
-            message = b?.error?.message ?? message;
-          } catch {
-            /* S3 XML or empty body */
-          }
-          if (put.status === 413 || code === 'TOO_LARGE' || code === 'NOT_AN_IMAGE' || code === 'WRONG_TYPE') throw new ApiError(422, 'PHOTO_INVALID', message);
-          if (code === 'SLOT_CLOSED' || put.status === 403) throw new ApiError(422, 'PHOTO_EXPIRED', 'The upload slot expired.');
-          throw new ApiError(put.status >= 500 ? 0 : put.status, code, message);
-        }
+        await putPhoto(a.uri, intent.upload);
         a.uploaded = true;
       }
 
@@ -210,7 +217,7 @@ export default function CaptureScreen() {
       // phone's first, coarse one — which the server would refuse as too inaccurate.
       let fix = await bestFix(status.tracking.maxAccuracyM, { onProgress: setFixAccuracy });
       if ((Date.now() - fix.timestamp) / 1000 > maxAge / 2) fix = await bestFix(status.tracking.maxAccuracyM, { settleMs: 10_000, onProgress: setFixAccuracy });
-      const reading = toReading(fix, 'FOREGROUND');
+      const reading = toReading(fix, 'FOREGROUND', sessionId, meta.userId);
       if (!reading) throw new Error('The phone returned a location without accuracy information. Retry.');
 
       setStep('verify');
@@ -240,6 +247,16 @@ export default function CaptureScreen() {
         },
       });
     } catch (e) {
+      // The connection dropped mid-way. The same key is reused, so if the server did get it nothing doubles.
+      if (!offline && e instanceof ApiError && (e.isNetwork || e.status >= 500) && (status.tracking.offlineAttendanceHours ?? 0) > 0) {
+        try {
+          return await saveForLater(a);
+        } catch (saveError) {
+          setFailure(describe(saveError));
+          setPhase('failed');
+          return;
+        }
+      }
       const f = describe(e);
       if (e instanceof ApiError && (e.code === 'PHOTO_EXPIRED' || e.code === 'PHOTO_MISSING')) {
         a.photoId = null;
@@ -308,10 +325,10 @@ export default function CaptureScreen() {
         ) : null}
         {phase === 'submitting' ? (
           <View style={st.steps}>
-            <StepLine label="Uploading photo" state={step === 'upload' ? 'active' : 'done'} />
+            {offline ? null : <StepLine label="Uploading photo" state={step === 'upload' ? 'active' : 'done'} />}
             <StepLine label={step === 'location' && fixAccuracy != null ? `Getting a precise location (±${fixAccuracy} m, need ±${status.tracking.maxAccuracyM} m)` : 'Getting a fresh precise location'} state={step === 'location' ? 'active' : step === 'verify' ? 'done' : 'todo'} />
-            <StepLine label="Server verification" state={step === 'verify' ? 'active' : 'todo'} />
-            <Text style={st.whiteText}>Attendance is not recorded until the server confirms it. Keep the app open.</Text>
+            {offline ? null : <StepLine label="Server verification" state={step === 'verify' ? 'active' : 'todo'} />}
+            <Text style={st.whiteText}>{offline ? 'No connection: this is saved on your phone and sent later.' : 'Attendance is not recorded until the server confirms it. Keep the app open.'}</Text>
           </View>
         ) : null}
         {phase === 'failed' && failure ? (

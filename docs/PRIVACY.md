@@ -32,3 +32,7 @@ The attendance photo is evidence for human review. GeoAttend also compares it wi
 ## GPS spoofing
 
 A typical app cannot completely prevent location spoofing (mock-location apps, rooted devices, emulators, GPS spoofers). GeoAttend records the OS mock-location flag as a risk indicator and supports manual review; device-integrity attestation (Play Integrity / App Attest) could be added as a further *signal*, still not as proof.
+
+## Data held on the phone
+
+Without a connection, the app keeps location readings, the attendance photo and the location of a check-in on the phone until the server has answered. They stay there through a restart, a lost sign-in or signing out, and are sent only for the employee they belong to. They are excluded from Android's cloud backup. They are not encrypted on the phone beyond what Android provides for app-private storage. This needs to be part of the legal review.

@@ -116,7 +116,7 @@ export default function BreakScreen() {
       // The server only accepts a break that starts inside the workplace area, judged from a fresh fix.
       setBusy('Confirming you are at the workplace…');
       const fix = await bestFix(status.tracking.maxAccuracyM);
-      const reading = toReading(fix, 'FOREGROUND');
+      const reading = toReading(fix, 'FOREGROUND', status.session.id, null);
       if (!reading) throw new Error('The phone returned a location without accuracy information. Retry.');
       setBusy('Starting break…');
       const next = await api<SessionStatus>(`/tracking/sessions/${status.session.id}/breaks`, {

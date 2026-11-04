@@ -9,7 +9,7 @@ import { assertInOrg, employeeSite, siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl, deleteObject, detectImageType, readLocalObject, requestOrigin, verifyToken, writeLocalObject } from '../../lib/storage.js';
 import { readingSchema } from '../tracking/tracking.routes.js';
 import { assertApprovedDevice } from '../devices/devices.routes.js';
-import { correctAttendance, requestCorrection, createIntent, createManualAttendance, resolveReview, submitAttendance } from './attendance.service.js';
+import { correctAttendance, requestCorrection, createIntent, createManualAttendance, resolveReview, submitAttendance, verifyOfflineRecord } from './attendance.service.js';
 
 export const attendanceRouter = Router();
 mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
@@ -23,6 +23,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       idempotencyKey: z.string().min(16).max(100),
       contentType: z.enum(['image/jpeg', 'image/png']),
       sizeBytes: z.number().int().positive(),
+      capturedOffline: z.boolean().optional(),
     }),
     handler: async ({ user, body, req, res }) => {
       await assertApprovedDevice(user);
@@ -41,6 +42,8 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       idempotencyKey: z.string().min(16).max(100),
       evidence: readingSchema,
       device: z.record(z.string(), z.union([z.string().max(200), z.number(), z.boolean(), z.null()])).optional(),
+      /** Captured without a connection and sent later: judged on the evidence, flagged OFFLINE_CAPTURE. */
+      capturedOffline: z.boolean().optional(),
     }),
     handler: async ({ user, body, res }) => {
       await assertApprovedDevice(user);
@@ -62,7 +65,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       workplaceId: z.uuid().optional(),
       employeeId: z.uuid().optional(),
       shiftId: z.uuid().optional(),
-      status: z.enum(['VERIFIED', 'MANUAL_APPROVED', 'CORRECTED', 'DISPUTED', 'VOIDED']).optional(),
+      status: z.enum(['VERIFIED', 'MANUAL_APPROVED', 'CORRECTED', 'DISPUTED', 'VOIDED', 'PENDING_VERIFICATION']).optional(),
       late: z.enum(['true', 'false']).optional(),
       ...paging,
     }),
@@ -95,6 +98,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
                 count(*) FILTER (WHERE ar.verification_status <> 'VOIDED' AND (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())))::int AS missing_checkout,
                 count(*) FILTER (WHERE ar.verification_status <> 'VOIDED' AND cardinality(array_remove(array_remove(COALESCE(ar.risk_flags, '{}'::text[]), 'SIMULATED'), 'BACKGROUND_LOCATION_UNAVAILABLE')) > 0)::int AS location_exceptions,
                 count(*) FILTER (WHERE ar.verification_status = 'DISPUTED')::int AS disputed,
+                count(*) FILTER (WHERE ar.verification_status = 'PENDING_VERIFICATION')::int AS pending_verification,
                 count(*) FILTER (WHERE ar.session_id IS NULL AND ar.verification_status <> 'VOIDED')::int AS manual
          FROM attendance_records ar LEFT JOIN tracking_sessions s ON s.id = ar.session_id WHERE ${where}`,
         params,
@@ -246,6 +250,19 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
         await audit({ actor: user, action: 'attendance_photo.delete', resourceType: 'attendance_photo', resourceId: p.id, before: { attendanceId: params.id, status: p.status, employeeId: p.employee_id }, reason: body.reason, req });
       }
       return { ok: true };
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/verification',
+    summary: 'Decide a record sent late from the phone: approve it, or reject it with a reason (audited)',
+    access: 'admin',
+    params: idParams,
+    scope: 'attendance',
+    body: z.object({ decision: z.enum(['APPROVE', 'REJECT']), note: z.string().trim().min(3).max(500) }),
+    handler: async ({ user, params, body, req }) => {
+      const r = await verifyOfflineRecord(user, params.id, body.decision, body.note, req);
+      return { id: r.id, verificationStatus: r.verification_status };
     },
   }),
   route({

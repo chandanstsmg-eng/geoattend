@@ -7,6 +7,8 @@
  * row lock on the session (SELECT … FOR UPDATE), so concurrent uploads from a
  * device, the sweeper and admin actions are serialised.
  */
+import { assertPayrollMonthOpen } from '../payroll/guard.js';
+import { audit } from '../../lib/audit.js';
 import type pg from 'pg';
 import { distanceMeters, isValidLatLng, OPEN_STATES, STATE_LABELS, TRACKING_STATES, type SessionState } from '@geoattend/shared';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
@@ -344,7 +346,10 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
   const sorted = [...readings].sort((a, b) => new Date(a.clientTime).getTime() - new Date(b.clientTime).getTime());
 
   for (const r of sorted) {
-    if (s.ended_at || !OPEN_STATES.includes(s.state)) {
+    // A reading taken before the session closed is history the phone could not send in time:
+    // kept for the trail, but it can no longer change the session.
+    const closed = !!s.ended_at || !OPEN_STATES.includes(s.state);
+    if (closed && !(s.ended_at && new Date(r.clientTime) <= new Date(s.ended_at))) {
       results.push({ clientEventId: r.clientEventId, status: 'REJECTED', reason: 'SESSION_CLOSED' });
       continue;
     }
@@ -356,7 +361,7 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
     const clientTime = new Date(r.clientTime);
     const distance = distanceMeters(workplace, { lat: r.latitude, lng: r.longitude });
     const lastClient = s.last_location_client_at ? new Date(s.last_location_client_at) : null;
-    const isHistorical = lastClient !== null && clientTime <= lastClient;
+    const isHistorical = closed || (lastClient !== null && clientTime <= lastClient);
     const delayed = now.getTime() - clientTime.getTime() > settings.tracking.staleAfterSec * 1000;
 
     // Evaluate first (pure) so the stored row carries the classification used.
@@ -618,28 +623,31 @@ export async function finalizeLocked(
     reason: string;
     /** When and why open overtime ends (default: now, by whoever closes the session). */
     overtimeEnd?: { at: Date; reason: OvertimeEndReason };
+    /** The employee ended the shift earlier, on the phone, without a connection. */
+    endedAt?: Date | null;
   },
 ) {
   if (s.ended_at) return;
-  await q(`UPDATE absence_intervals SET ended_at = GREATEST(now(), started_at), status = 'SHIFT_ENDED' WHERE session_id = $1 AND status = 'OPEN'`, [s.id], db);
-  await closeBreak(db, outbox, s, new Date(), 'SHIFT_ENDED');
+  const endedAt = opts.endedAt ?? null;
+  await q(`UPDATE absence_intervals SET ended_at = GREATEST(COALESCE($2::timestamptz, now()), started_at), status = 'SHIFT_ENDED' WHERE session_id = $1 AND status = 'OPEN'`, [s.id, endedAt], db);
+  await closeBreak(db, outbox, s, endedAt ?? new Date(), 'SHIFT_ENDED');
   const overtime = await closeOvertime(
     db,
     outbox,
     s,
-    opts.overtimeEnd?.at ?? sessionNow(s),
+    opts.overtimeEnd?.at ?? endedAt ?? sessionNow(s),
     opts.overtimeEnd?.reason ?? (opts.authorization === 'TERMINATED' ? 'ADMIN' : opts.authorization === 'ENDED' ? 'EMPLOYEE' : 'SYSTEM'),
   );
   await q(`UPDATE attendance_photos SET status = 'EXPIRED' WHERE session_id = $1 AND status IN ('PENDING_UPLOAD', 'UPLOADED')`, [s.id], db);
   // An open manual review stays open: the shift ending must not turn an unanswered request into an absence.
   await transition(db, outbox, s, 'SHIFT_END_PENDING', opts.reason, opts.actor, opts.actorId);
   await q(
-    `UPDATE tracking_sessions SET ended_at = now(), authorization_status = $2, termination_reason = $3, terminated_by = $4, candidate_since = NULL, candidate_count = 0 WHERE id = $1`,
-    [s.id, opts.authorization, opts.reason, opts.authorization === 'TERMINATED' ? opts.actorId : null],
+    `UPDATE tracking_sessions SET ended_at = COALESCE($5::timestamptz, now()), authorization_status = $2, termination_reason = $3, terminated_by = $4, candidate_since = NULL, candidate_count = 0 WHERE id = $1`,
+    [s.id, opts.authorization, opts.reason, opts.authorization === 'TERMINATED' ? opts.actorId : null, endedAt],
     db,
   );
   await transition(db, outbox, s, 'SHIFT_COMPLETED', 'location collection stopped', 'SYSTEM');
-  s.ended_at = new Date();
+  s.ended_at = endedAt ?? new Date();
 
   const type = opts.authorization === 'TERMINATED' ? 'TRACKING_TERMINATED' : 'SHIFT_COMPLETED';
   await notify(db, outbox, {
@@ -673,13 +681,47 @@ export async function finalizeLocked(
   }
 }
 
-export async function endSession(sessionId: string, actorUser: { id: string; role: string }, actor: Actor, reason?: string, endPhotoId?: string | null) {
+/** The end time of a shift ended on the phone without a connection, kept between the session's start and now. */
+async function offlineEndTime(db: pg.PoolClient, s: any, clientTime: string) {
+  const { tracking } = await getSettings(s.org_id, db);
+  if (!tracking.offlineAttendanceHours) throw conflict('OFFLINE_ATTENDANCE_OFF', 'This company does not accept attendance saved without a connection.');
+  const now = sessionNow(s);
+  const t = new Date(clientTime);
+  if (now.getTime() - t.getTime() > tracking.offlineAttendanceHours * 3600_000) {
+    throw new HttpError(422, 'OFFLINE_TOO_OLD', `This shift end was saved more than ${tracking.offlineAttendanceHours} hours ago. Ask your manager to correct the record.`);
+  }
+  return new Date(Math.min(now.getTime(), Math.max(t.getTime(), new Date(s.started_at).getTime())));
+}
+
+export async function endSession(sessionId: string, actorUser: { id: string; role: string }, actor: Actor, reason?: string, endPhotoId?: string | null, clientEndedAt?: string | null) {
   const outbox = new Outbox();
   const s = await tx(async (db) => {
     const s = await lockSession(db, sessionId);
     if (!s) throw notFound('Session');
     if (actorUser.role === 'EMPLOYEE' && s.employee_id !== actorUser.id) throw forbidden();
-    if (s.ended_at) return s;
+    const at = clientEndedAt ? await offlineEndTime(db, s, clientEndedAt) : null;
+    const logEnd = async (before: unknown) => {
+      // The worked time now rests on the phone's word, so the record waits for a person. The device's own time is kept as sent.
+      await q(
+        `UPDATE attendance_records SET risk_flags = array_append(risk_flags, 'OFFLINE_END'), updated_at = now(),
+           verification_status = CASE WHEN verification_status = 'VERIFIED' THEN 'PENDING_VERIFICATION' ELSE verification_status END
+         WHERE session_id = $1 AND verification_status <> 'VOIDED' AND NOT 'OFFLINE_END' = ANY(risk_flags)`,
+        [s.id],
+        db,
+      );
+      await audit({ actor: { id: actorUser.id, role: actorUser.role as 'EMPLOYEE', orgId: s.org_id }, action: 'session.end_offline', resourceType: 'tracking_session', resourceId: s.id, before: { endedAt: before }, after: { endedAt: at, deviceTime: clientEndedAt, sentAt: sessionNow(s) } }, db);
+    };
+    if (s.ended_at) {
+      // The window closed first. The time the employee really ended replaces the automatic one.
+      if (at && s.authorization_status === 'EXPIRED' && at < new Date(s.ended_at)) {
+        await assertPayrollMonthOpen(s.org_id, s.shift_date, db);
+        await q(`UPDATE tracking_sessions SET ended_at = $2, authorization_status = 'ENDED', termination_reason = 'shift ended by employee' WHERE id = $1`, [s.id, at], db);
+        await q(`UPDATE absence_intervals SET ended_at = GREATEST(started_at, LEAST(ended_at, $2)) WHERE session_id = $1`, [s.id, at], db);
+        await q(`UPDATE session_breaks SET ended_at = GREATEST(started_at, LEAST(ended_at, $2)) WHERE session_id = $1`, [s.id, at], db);
+        await logEnd(s.ended_at);
+      }
+      return s;
+    }
     if (endPhotoId) await attachEndPhoto(db, s, endPhotoId);
     const terminated = actorUser.role === 'ADMIN';
     await finalizeLocked(db, outbox, s, {
@@ -687,7 +729,9 @@ export async function endSession(sessionId: string, actorUser: { id: string; rol
       actorId: actorUser.id,
       authorization: terminated ? 'TERMINATED' : 'ENDED',
       reason: terminated ? `terminated by administrator: ${reason ?? 'no reason given'}` : 'shift ended by employee',
+      endedAt: at,
     });
+    if (at) await logEnd(null);
     return s;
   });
   outbox.flush();
@@ -903,6 +947,7 @@ export async function sessionStatus(sessionId: string, db?: Queryable) {
       distanceFilterM: settings.tracking.distanceFilterM,
       maxAccuracyM: settings.tracking.maxAccuracyM,
       offlineQueueMax: settings.tracking.offlineQueueMax,
+      offlineAttendanceHours: settings.tracking.offlineAttendanceHours,
       staleAfterSec: settings.tracking.staleAfterSec,
       evidenceMaxAgeSec: settings.tracking.evidenceMaxAgeSec,
       requireBackgroundLocation: settings.tracking.requireBackgroundLocation,

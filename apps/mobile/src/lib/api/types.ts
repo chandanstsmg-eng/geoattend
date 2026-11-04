@@ -108,6 +108,7 @@ export interface SessionStatus {
     distanceFilterM: number;
     maxAccuracyM: number;
     offlineQueueMax: number;
+    offlineAttendanceHours?: number;
     staleAfterSec: number;
     evidenceMaxAgeSec: number;
     requireBackgroundLocation?: boolean;
@@ -306,6 +307,10 @@ export interface AttendanceResponse {
 }
 
 export interface AttendanceHistoryItem {
+  face_review?: string | null;
+  face_review_note?: string | null;
+  risk_flags?: string[] | null;
+  rejection_note?: string | null;
   id: string;
   shift_date: string;
   recorded_at: string;

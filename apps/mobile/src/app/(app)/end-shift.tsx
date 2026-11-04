@@ -1,7 +1,7 @@
 /**
  * End-of-shift selfie, then end the shift. The photo is compared with the enrolled face on the
- * server; a match is deleted straight away. If the photo cannot be sent, the employee can still
- * end the shift without it (the manager sees that no end photo was checked).
+ * server. If the photo cannot be sent, the employee can still end the shift without it (the manager
+ * sees that no end photo was checked), and without a connection the end time is saved and sent later.
  */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';

@@ -20,6 +20,9 @@ const COUNTS = `
          -- Face checks follow the rostered workplace of the record, like attendance itself.
          (SELECT count(*)::int FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
             WHERE ar.face_review = 'PENDING' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}) AS faces,
+         -- Records sent late from the phone, by the workplace of the record.
+         (SELECT count(*)::int FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
+            WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}) AS verifications,
          -- Finished overtime waiting for a decision, by the workplace where it was worked.
          (SELECT count(*)::int FROM overtime_entries o JOIN users u ON u.id = o.employee_id
             WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')} AND ${overtimeCounts()}) AS overtime`;
@@ -33,7 +36,7 @@ mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
     access: 'admin',
     handler: async ({ user }) => {
       const c = await one(COUNTS, [user.orgId, user.sites]);
-      return { ...c, total: c.leave + c.reviews + c.devices + c.faces + c.overtime };
+      return { ...c, total: c.leave + c.reviews + c.devices + c.faces + c.overtime + c.verifications };
     },
   }),
   route({
@@ -43,7 +46,7 @@ mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
     access: 'admin',
     handler: async ({ user }) => {
       const org = [user.orgId, user.sites];
-      const [leave, reviews, devices, counts] = await Promise.all([
+      const [leave, reviews, devices, verifications, counts] = await Promise.all([
         q(
           `SELECT l.*, (l.end_date - l.start_date + 1)::int AS days, u.full_name, ep.employee_code,
                   (SELECT count(*)::int FROM leave_requests o WHERE o.employee_id = l.employee_id AND o.status = 'APPROVED'
@@ -69,9 +72,17 @@ mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
            WHERE d.status = 'PENDING' AND u.is_active AND u.org_id = $1 AND ${SITE} ORDER BY d.created_at`,
           org,
         ),
+        q(
+          `SELECT ar.id, ar.employee_id, ar.shift_date, ar.recorded_at, ar.evidence_client_time, ar.evidence_distance_m, ar.evidence_accuracy_m, ar.radius_m_at_record, ar.risk_flags, ar.is_late, ar.late_by_minutes,
+                  ar.device_meta->>'receivedAt' AS received_at, u.full_name, ep.employee_code, sh.name AS shift_name, w.name AS workplace_name
+           FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
+           JOIN shifts sh ON sh.id = ar.shift_id JOIN workplaces w ON w.id = ar.workplace_id
+           WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')} ORDER BY ar.recorded_at LIMIT 200`,
+          org,
+        ),
         one(COUNTS, org),
       ]);
-      return { leave, reviews, devices, counts: { ...counts, total: counts.leave + counts.reviews + counts.devices + counts.faces + counts.overtime } };
+      return { leave, reviews, devices, verifications, counts: { ...counts, total: counts.leave + counts.reviews + counts.devices + counts.faces + counts.overtime + counts.verifications } };
     },
   }),
 ]);

@@ -57,12 +57,16 @@ export default function AccountScreen() {
     }
   };
 
+  const saved = snap.queueLength + snap.events.filter((e) => e.status === 'PENDING').length;
+
   const confirmSignOut = () =>
     Alert.alert(
       'Sign out?',
-      openSession
-        ? 'Signing out stops location tracking on this phone immediately. Your shift stays open on the server — end the shift first if you have finished work.'
-        : 'You will need your password to sign in again.',
+      `${
+        openSession
+          ? 'Signing out stops location tracking on this phone immediately. Your shift stays open on the server — end the shift first if you have finished work.'
+          : 'You will need your password to sign in again.'
+      }${saved ? ` ${saved} saved item${saved === 1 ? ' is' : 's are'} not sent yet: they stay on this phone and go when you sign in again.` : ''}`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
@@ -103,7 +107,8 @@ export default function AccountScreen() {
         <Row label="Server" value={API_URL || 'not configured'} />
         <Row label="Device ID" value={deviceId ? `${deviceId.slice(0, 8)}…` : '—'} />
         <Row label="Tracking on this phone" value={snap.meta.sessionId ? (snap.meta.mode === 'foreground' ? 'Only while app open' : 'Active') : 'Off'} />
-        <Row label="Queued locations" value={String(snap.queueLength)} />
+        <Row label="Saved locations, not sent" value={String(snap.queueLength)} />
+        <Row label="Saved check-ins and shift ends" value={String(snap.events.filter((e) => e.status === 'PENDING').length)} />
       </Card>
 
       <Button title="Sign out" variant="danger" onPress={confirmSignOut} />

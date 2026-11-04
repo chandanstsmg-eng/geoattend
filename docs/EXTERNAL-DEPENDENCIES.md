@@ -98,7 +98,7 @@ No real phone has run this version. The test requires:
 - A signed build from EAS, with `EXPO_PUSH_ENABLED` and an Expo access token for push.
 - A real workplace with a geofence, and a tester walking in and out.
 
-Each phone must pass: permission prompts, including "allow all the time"; a full shift with the screen off; battery saver on; check-in photo and face check; airplane mode, network loss and restart during a shift, with pending events then synchronising and no duplicates; an expired session; a phone change needing approval.
+The full steps and a results sheet are in [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md).
 
 Offline operation must not be claimed until these pass (Phase D).
 

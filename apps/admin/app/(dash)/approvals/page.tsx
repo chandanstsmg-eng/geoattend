@@ -114,6 +114,33 @@ export default function ApprovalsPage() {
               </Card>
             )}
 
+            {d.verifications?.length > 0 && (
+              <Card title={<>Sent late from a phone <Badge tone="amber">{d.verifications.length}</Badge></>} padded={false}>
+                <ul className="divide-y divide-gray-100">
+                  {d.verifications.map((v: any) => (
+                    <Item
+                      key={v.id}
+                      icon={<Hourglass className="h-4 w-4" />}
+                      who={v.full_name}
+                      onWho={() => setEmployee(v.employee_id)}
+                      meta={`${v.shift_name} · ${fmtDate(v.shift_date)} · ${v.workplace_name}`}
+                      actions={
+                        <>
+                          <LinkButton href={`/attendance?record=${v.id}`} size="sm">See evidence</LinkButton>
+                          <Button size="sm" variant="primary" loading={busy(`vf-${v.id}`)} onClick={() => go(`vf-${v.id}`, `/attendance/${v.id}/verification`, { decision: 'APPROVE', note: 'Checked in approvals' })}><Check className="h-4 w-4" aria-hidden /> Approve</Button>
+                          <Button size="sm" onClick={() => setRejecting({ title: 'Reject this record', description: `${v.full_name}'s attendance for ${fmtDate(v.shift_date)} stops counting.`, run: (note) => post(`/attendance/${v.id}/verification`, { decision: 'REJECT', note }) })}><X className="h-4 w-4" aria-hidden /> Reject</Button>
+                        </>
+                      }
+                    >
+                      Phone time {v.evidence_client_time ? new Date(v.evidence_client_time).toLocaleString() : 'not available'}{v.received_at ? `, received ${new Date(v.received_at).toLocaleString()}` : ''}.{' '}
+                      {v.evidence_distance_m != null ? `${Math.round(v.evidence_distance_m)} m from the centre (±${Math.round(v.evidence_accuracy_m)} m, area ${v.radius_m_at_record} m).` : 'No location.'}{' '}
+                      {(v.risk_flags ?? []).join(', ')}
+                    </Item>
+                  ))}
+                </ul>
+              </Card>
+            )}
+
             {d.counts.faces > 0 && <FaceReviews onWho={setEmployee} onReject={setRejecting} onDone={done} />}
 
             {d.reviews.length > 0 && (

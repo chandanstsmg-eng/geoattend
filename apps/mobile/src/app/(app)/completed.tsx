@@ -20,7 +20,9 @@ export default function CompletedScreen() {
         <Body center>{p.shiftName ? `${p.shiftName} is complete.` : 'Your shift is complete.'} No location is collected until you start another shift.</Body>
       </View>
       {running ? <Banner tone="danger" title="Location updates are still registered on this phone" message="Restart the app; GeoAttend stops them automatically when no shift is open." /> : null}
-      {p.offline ? (
+      {p.offline === 'saved' ? (
+        <Banner tone="warning" title="Saved on this phone, not sent yet" message="The time you ended is sent by itself when the connection returns. Until then the shift stays open on the server." />
+      ) : p.offline ? (
         <Banner tone="warning" title="Ended on this phone only" message="The server could not be reached. It will mark tracking as interrupted and close the shift automatically at the end of the shift window." />
       ) : null}
       <Card>

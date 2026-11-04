@@ -45,7 +45,7 @@ export function SeverityBadge({ severity }: { severity: string }) {
 }
 
 export function VerificationBadge({ status }: { status: string }) {
-  const tone = status === 'VERIFIED' ? 'green' : status === 'MANUAL_APPROVED' ? 'navy' : status === 'CORRECTED' ? 'blue' : status === 'DISPUTED' ? 'amber' : 'red';
+  const tone = status === 'VERIFIED' ? 'green' : status === 'MANUAL_APPROVED' ? 'navy' : status === 'CORRECTED' ? 'blue' : status === 'DISPUTED' || status === 'PENDING_VERIFICATION' ? 'amber' : 'red';
   const label = status.replace('_', ' ').toLowerCase();
   return <Badge dot tone={tone}>{label[0]!.toUpperCase() + label.slice(1)}</Badge>;
 }

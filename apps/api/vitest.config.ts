@@ -17,5 +17,8 @@ export default defineConfig({
     hookTimeout: 120_000,
     include: ['test/**/*.test.ts'],
     globalSetup: ['test/global-setup.ts'],
+    // mobile-sync.test.ts uses the phone's own source. Node loads it directly, as the mobile tests do: Vite would need
+    // the mobile tsconfig, which extends a package that is not installed when these tests run.
+    server: { deps: { external: [/apps[\\/]mobile[\\/]/] } },
   },
 });

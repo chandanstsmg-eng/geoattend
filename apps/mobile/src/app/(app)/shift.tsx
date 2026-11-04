@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AppState, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import { EndShiftButton, RequestReviewButton, TakeBreakButton } from '../../components/shift/actions';
+import { EndShiftButton, RequestReviewButton, TakeBreakButton, openCaptureFlow } from '../../components/shift/actions';
+import { SyncBanner } from '../../components/SyncStatus';
 import {
   AbsenceView,
   AccuracyWarningView,
@@ -25,7 +26,7 @@ import { Banner, Button, Card, ErrorState, Gap, H2, Loading, Muted, Screen } fro
 import { errorMessage } from '../../lib/api/client';
 import type { PermissionReport, SessionStatus } from '../../lib/api/types';
 import { fmtDateTime } from '../../lib/format';
-import { useStatus, useTrackingSnapshot } from '../../lib/hooks';
+import { useOnline, useStatus, useTrackingSnapshot } from '../../lib/hooks';
 import { PRE_ATTENDANCE_STATES } from '../../lib/states';
 import { permissionUsable, readPermissionSnapshot } from '../../lib/tracking/runtime';
 import { space } from '../../lib/theme';
@@ -50,6 +51,7 @@ function pickView(status: SessionStatus, local: PermissionReport | null): [React
 export default function ShiftScreen() {
   const statusQ = useStatus({ poll: true });
   const snap = useTrackingSnapshot();
+  const online = useOnline();
   const [local, setLocal] = useState<PermissionReport | null>(null);
 
   const readLocal = useCallback(() => {
@@ -91,13 +93,31 @@ export default function ShiftScreen() {
   }
 
   const [view, offerReview] = pickView(status, local);
+  const savedCheckIn = snap.events.some((e) => e.kind === 'CHECK_IN' && e.sessionId === status.session.id && e.status === 'PENDING');
+  // The server cannot see the arrival without a connection, so the employee can capture it now and it is judged later.
+  const offerOffline = !online && !savedCheckIn && !status.attendance && !status.attendanceAvailable && (status.tracking.offlineAttendanceHours ?? 0) > 0;
   return (
     <Screen onRefresh={() => void statusQ.refetch()} refreshing={statusQ.isFetching}>
       {statusQ.isError ? <Banner tone="warning" title="Offline — last known status" /> : null}
       <TrackingStrip status={status} />
       <TrackingBanners status={status} />
+      <SyncBanner />
       <OvertimeOffer status={status} />
-      {view}
+      {savedCheckIn ? (
+        <Card>
+          <H2>Check-in saved on this phone</H2>
+          <Muted>Not recorded yet. It is sent by itself when the connection returns.</Muted>
+        </Card>
+      ) : (
+        view
+      )}
+      {offerOffline ? (
+        <Card>
+          <H2>No connection?</H2>
+          <Muted>If you are at work, check in now. Your photo and location are saved on this phone, and the server decides when they arrive.</Muted>
+          <Button title="Check in offline" onPress={() => void openCaptureFlow(status, { offline: true })} accessibilityHint="Saves your photo and location on this phone" />
+        </Card>
+      ) : null}
       <Gap size={space.sm} />
       <View style={{ gap: space.sm }}>
         <TakeBreakButton status={status} />

@@ -16,7 +16,7 @@ import { audit } from '../../lib/audit.js';
 import { siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl, createUploadUrl, inspectObject, newObjectKey, requestOrigin } from '../../lib/storage.js';
 import { confirmUpload } from '../attendance/photo-upload.js';
-import { correctAttendance } from '../attendance/attendance.service.js';
+import { correctAttendance, overrideFaceRejection } from '../attendance/attendance.service.js';
 import { MODEL_NAME, faceEngine } from './engine.js';
 import { readPhoto } from './faces.js';
 
@@ -236,6 +236,20 @@ mount(facesRouter, '/api/v1/faces', 'faces', [
       await audit({ actor: user, action: `face_review.${body.decision.toLowerCase()}`, resourceType: 'attendance_record', resourceId: params.id, reason: body.note, req });
       // A kept photo follows the normal retention period from here.
       return { id: params.id, faceReview: body.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED' };
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/reviews/:id/override',
+    summary: 'Owner overrides a rejected face check or offline record: the attendance counts again (reason required, audited)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'attendance',
+    body: z.object({ reason: z.string().trim().min(5).max(500) }),
+    handler: async ({ params, body, user, req }) => {
+      const r = await overrideFaceRejection(user, params.id, body.reason, req);
+      return { id: r.id, verificationStatus: r.verification_status, faceReview: r.face_review };
     },
   }),
 ]);

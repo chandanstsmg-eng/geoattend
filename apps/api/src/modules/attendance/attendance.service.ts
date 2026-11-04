@@ -32,6 +32,7 @@ import { assertPayrollMonthOpen } from '../payroll/guard.js';
 import { DateTime } from 'luxon';
 
 export interface IntentInput {
+  capturedOffline?: boolean;
   sessionId: string;
   idempotencyKey: string;
   contentType: PhotoType;
@@ -48,7 +49,9 @@ export async function createIntent(employeeId: string, input: IntentInput, origi
     if (!s) throw notFound('Session');
     if (s.employee_id !== employeeId) throw forbidden();
     if (s.has_attendance) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded for this shift.');
-    if (s.state !== 'ATTENDANCE_READY' && s.state !== 'ATTENDANCE_SUBMISSION_PENDING') {
+    const offline = !!input.capturedOffline;
+    if (offline && !(await getSettings(s.org_id, db)).tracking.offlineAttendanceHours) throw conflict('OFFLINE_ATTENDANCE_OFF', 'This company does not accept attendance saved without a connection.');
+    if (!offline && s.state !== 'ATTENDANCE_READY' && s.state !== 'ATTENDANCE_SUBMISSION_PENDING') {
       throw conflict('ATTENDANCE_LOCKED', 'Attendance is not available yet. Reach the workplace area and wait for verification.', { state: s.state });
     }
     // A retake replaces any earlier unused upload slot.
@@ -60,7 +63,7 @@ export async function createIntent(employeeId: string, input: IntentInput, origi
       [employeeId, s.id, key, input.contentType, input.sizeBytes, input.idempotencyKey, config.storage.uploadUrlTtlSec, s.is_simulated],
       db,
     );
-    await transition(db, outbox, s, 'ATTENDANCE_SUBMISSION_PENDING', 'attendance photo capture started', actor, actor === 'EMPLOYEE' ? employeeId : null);
+    if (!offline) await transition(db, outbox, s, 'ATTENDANCE_SUBMISSION_PENDING', 'attendance photo capture started', actor, actor === 'EMPLOYEE' ? employeeId : null);
     return photo;
   });
   outbox.flush();
@@ -74,6 +77,7 @@ export interface SubmitInput {
   idempotencyKey: string;
   evidence: Omit<ReadingInput, 'source'>;
   device?: Record<string, unknown>;
+  capturedOffline?: boolean;
 }
 
 type SubmitOutcome = { ok: true; record: any; replay: boolean } | { ok: false; error: HttpError };
@@ -106,7 +110,8 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
     const s = await lockSession(db, input.sessionId);
     if (!s) throw notFound('Session');
     if (s.employee_id !== employeeId) throw forbidden();
-    if (s.ended_at) throw conflict('SESSION_CLOSED', 'This shift session has ended.');
+    const offline = !!input.capturedOffline;
+    if (s.ended_at && !offline) throw conflict('SESSION_CLOSED', 'This shift session has ended.');
     const settings = await getSettings(s.org_id, db);
     const now = sessionNow(s);
 
@@ -139,7 +144,15 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
     const ev = input.evidence;
     const evTime = new Date(ev.clientTime);
     const ageSec = (now.getTime() - evTime.getTime()) / 1000;
-    if (!(ageSec <= settings.tracking.evidenceMaxAgeSec)) {
+    if (offline) {
+      // Saved on the phone without a connection. Phone clocks can be changed, so the arrival can never
+      // be earlier than the session start the server recorded itself.
+      const hours = settings.tracking.offlineAttendanceHours;
+      if (!hours) return { ok: false, error: conflict('OFFLINE_ATTENDANCE_OFF', 'This company does not accept attendance saved without a connection.') };
+      if (ageSec > hours * 3600) return fail(db, outbox, s, 'OFFLINE_TOO_OLD', `This check-in was saved more than ${hours} hours ago. Ask your manager to correct the record.`);
+      if (s.ended_at && evTime > new Date(s.ended_at)) return { ok: false, error: conflict('SESSION_CLOSED', 'This shift session had ended before this check-in.') };
+      await assertPayrollMonthOpen(s.org_id, s.shift_date, db);
+    } else if (!(ageSec <= settings.tracking.evidenceMaxAgeSec)) {
       return fail(db, outbox, s, 'EVIDENCE_STALE', `The location fix is older than ${settings.tracking.evidenceMaxAgeSec} seconds. Get a fresh fix and retry.`);
     }
     // Fake GPS anywhere in this shift's trail counts, not only in the final fix (GPS-06).
@@ -165,13 +178,13 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
     if (r0?.status === 'REJECTED') return fail(db, outbox, s, 'EVIDENCE_INVALID', `The location evidence was rejected (${r0.reason}).`);
 
     // The state machine may just have re-locked attendance (employee left before submitting).
-    if (s.state !== 'ATTENDANCE_SUBMISSION_PENDING' && s.state !== 'ATTENDANCE_READY') {
+    if (!offline && s.state !== 'ATTENDANCE_SUBMISSION_PENDING' && s.state !== 'ATTENDANCE_READY') {
       return fail(db, outbox, s, 'NOT_ELIGIBLE', 'You are no longer inside the workplace area. Attendance is locked again.', { state: s.state });
     }
     const distance = distanceMeters({ lat: s.wp_lat, lng: s.wp_lng }, { lat: ev.latitude, lng: ev.longitude });
     const cls = classifyReading(distance, ev.accuracyM, engineRules(settings, Number(s.radius_m)), 'EXIT');
     if (cls !== 'INSIDE') {
-      await transition(db, outbox, s, 'ATTENDANCE_READY', `submission evidence ${cls.toLowerCase()}`, actor);
+      if (!offline) await transition(db, outbox, s, 'ATTENDANCE_READY', `submission evidence ${cls.toLowerCase()}`, actor);
       return fail(
         db,
         outbox,
@@ -183,8 +196,10 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
       );
     }
 
-    const { minutes: lateBy, isLate } = lateness(now, new Date(s.scheduled_start_at), s.arrival_grace_minutes);
+    const arrivedAt = offline ? new Date(Math.max(evTime.getTime(), new Date(s.started_at).getTime())) : now;
+    const { minutes: lateBy, isLate } = lateness(arrivedAt, new Date(s.scheduled_start_at), s.arrival_grace_minutes);
     const flags: string[] = [];
+    if (offline) flags.push('OFFLINE_CAPTURE');
     if (s.is_simulated) flags.push('SIMULATED');
     if (ev.isMocked || mockedTrail) flags.push('MOCK_LOCATION_REPORTED');
     flags.push(...untrusted);
@@ -193,8 +208,8 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
     const record = await one(
       `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key, photo_id,
          evidence_latitude, evidence_longitude, evidence_accuracy_m, evidence_distance_m, evidence_client_time, radius_m_at_record,
-         is_late, late_by_minutes, verification_status, risk_flags, device_meta, is_simulated, challenge)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'VERIFIED',$16,$17,$18,$19)
+         is_late, late_by_minutes, verification_status, risk_flags, device_meta, is_simulated, challenge, recorded_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$21,$16,$17,$18,$19,COALESCE($20::timestamptz, now()))
        ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING
        RETURNING *`,
       [
@@ -214,9 +229,12 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
         isLate,
         isLate ? lateBy : 0,
         flags,
-        JSON.stringify(input.device ?? {}),
+        JSON.stringify({ ...(input.device ?? {}), ...(offline ? { receivedAt: now.toISOString() } : {}) }),
         s.is_simulated,
         challengeFor(s.id).en,
+        offline ? arrivedAt : null,
+        // The server did not see this happen, so it is never recorded as verified. A person decides.
+        offline ? 'PENDING_VERIFICATION' : 'VERIFIED',
       ],
       db,
     );
@@ -230,9 +248,11 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
     );
     s.has_attendance = true;
     await q('UPDATE tracking_sessions SET candidate_since = NULL, candidate_count = 0 WHERE id = $1', [s.id], db);
-    await transition(db, outbox, s, 'PRESENT', 'attendance verified and recorded by server', actor, actor === 'EMPLOYEE' ? employeeId : null, {
-      metadata: { attendanceId: record.id, distanceM: Math.round(distance * 10) / 10, accuracyM: ev.accuracyM },
-    });
+    if (!s.ended_at) {
+      await transition(db, outbox, s, 'PRESENT', 'attendance verified and recorded by server', actor, actor === 'EMPLOYEE' ? employeeId : null, {
+        metadata: { attendanceId: record.id, distanceM: Math.round(distance * 10) / 10, accuracyM: ev.accuracyM },
+      });
+    }
     await notify(db, outbox, {
       type: 'ATTENDANCE_MARKED',
       severity: 'INFO',
@@ -454,6 +474,9 @@ async function applyCorrection(db: Queryable, outbox: Outbox, approver: AuthUser
   if (!before) throw notFound('Attendance record');
   if (before.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'A voided record cannot be changed. Its history stays in the audit log.');
   await assertPayrollMonthOpen(approver.orgId, before.shift_date, db);
+  if (before.verification_status === 'PENDING_VERIFICATION' && c.verificationStatus === 'VERIFIED') {
+    throw conflict('NEEDS_VERIFICATION', 'This record was sent late from the phone. Decide it in Approvals.');
+  }
   // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
   let isLate = c.isLate ?? null;
   let lateBy = c.lateByMinutes ?? null;
@@ -553,6 +576,74 @@ async function decideCorrection(db: Queryable, outbox: Outbox, admin: AuthUser, 
   await q(`UPDATE review_requests SET status = 'REJECTED', resolved_by = $2, resolved_at = now(), resolution_note = $3 WHERE id = $1`, [r.id, admin.id, note], db);
   await audit({ actor: admin, action: 'review.reject', resourceType: 'review_request', resourceId: r.id, before: { status: r.status }, after: { status: 'REJECTED', attendanceId: r.attendance_id, requestedBy: r.requested_by }, reason: note, req }, db);
   return { status: 'REJECTED', attendanceId: r.attendance_id };
+}
+
+/**
+ * A supervisor or owner decides a record the phone sent late. Approving counts it as approved by that
+ * person, never as verified by the server. Rejecting voids it with a reason, and an owner can override that.
+ * The evidence, the device's own time and the whole record before and after stay.
+ */
+export async function verifyOfflineRecord(reviewer: AuthUser, attendanceId: string, decision: 'APPROVE' | 'REJECT', note: string, req?: any) {
+  const outbox = new Outbox();
+  const updated = await tx(async (db) => {
+    const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
+    if (!before) throw notFound('Attendance record');
+    if (before.verification_status !== 'PENDING_VERIFICATION') throw conflict('NOT_PENDING', 'This record is not waiting for verification.');
+    await assertPayrollMonthOpen(reviewer.orgId, before.shift_date, db);
+    const after = await one(
+      decision === 'APPROVE'
+        ? `UPDATE attendance_records SET verification_status = 'MANUAL_APPROVED', approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $1 RETURNING *`
+        : `UPDATE attendance_records SET verification_status = 'VOIDED', risk_flags = array_append(risk_flags, 'VERIFICATION_REJECTED'), updated_at = now() WHERE id = $1 AND $2::uuid IS NOT NULL RETURNING *`,
+      [attendanceId, reviewer.id],
+      db,
+    );
+    await q(
+      `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, status, before_data, after_data, requested_by, resolved_by, resolved_at, resolution_note, is_simulated)
+       VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, 'APPLIED', $5, $6, $7, $7, now(), $8, $9)`,
+      [before.employee_id, before.session_id, attendanceId, `Offline record ${decision === 'APPROVE' ? 'approved' : 'rejected'}: ${note}`, JSON.stringify(before), JSON.stringify(after), reviewer.id, note, before.is_simulated],
+      db,
+    );
+    await audit({ actor: reviewer, action: decision === 'APPROVE' ? 'attendance.verify' : 'attendance.verify_reject', resourceType: 'attendance_record', resourceId: attendanceId, before, after, reason: note, req }, db);
+    outbox.push({ type: 'attendance.recorded', attendanceId, employeeId: before.employee_id });
+    return after;
+  });
+  outbox.flush();
+  return updated;
+}
+
+/**
+ * The owner overrides a rejected face check or a rejected offline record: the record counts again, as CORRECTED. The rejection,
+ * its reason and the whole record before and after stay in review history and the audit log.
+ */
+export async function overrideFaceRejection(owner: AuthUser, attendanceId: string, reason: string, req?: any) {
+  const overridable = (r: any) => r.verification_status === 'VOIDED' && (r.face_review === 'REJECTED' || (r.risk_flags ?? []).includes('VERIFICATION_REJECTED'));
+  const outbox = new Outbox();
+  const updated = await tx(async (db) => {
+    const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
+    if (!before) throw notFound('Attendance record');
+    if (!overridable(before)) throw conflict('NOT_FACE_REJECTED', 'Only attendance voided by a rejected face check or a rejected offline record can be overridden.');
+    await assertPayrollMonthOpen(owner.orgId, before.shift_date, db);
+    // Lasts for this transaction only; the database refuses every other way of lifting a void.
+    await q(`SELECT set_config('geoattend.face_override', 'on', true)`, [], db);
+    const after = await one(
+      `UPDATE attendance_records SET verification_status = 'CORRECTED', face_review = CASE WHEN face_review = 'REJECTED' THEN 'APPROVED' ELSE face_review END,
+         face_reviewed_by = CASE WHEN face_review = 'REJECTED' THEN $2 ELSE face_reviewed_by END, face_reviewed_at = CASE WHEN face_review = 'REJECTED' THEN now() ELSE face_reviewed_at END,
+         face_review_note = CASE WHEN face_review = 'REJECTED' THEN $3 ELSE face_review_note END, approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
+      [attendanceId, owner.id, `Owner override: ${reason}`],
+      db,
+    );
+    await q(
+      `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, status, before_data, after_data, requested_by, resolved_by, resolved_at, is_simulated)
+       VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, 'APPLIED', $5, $6, $7, $7, now(), $8)`,
+      [before.employee_id, before.session_id, attendanceId, `Rejection overridden: ${reason}`, JSON.stringify(before), JSON.stringify(after), owner.id, before.is_simulated],
+      db,
+    );
+    await audit({ actor: owner, action: 'face_review.override', resourceType: 'attendance_record', resourceId: attendanceId, before, after, reason, req }, db);
+    outbox.push({ type: 'attendance.recorded', attendanceId, employeeId: before.employee_id });
+    return after;
+  });
+  outbox.flush();
+  return updated;
 }
 
 /** Admin-entered attendance when no device evidence exists (e.g. broken phone). Always MANUAL_APPROVED and audited. */
