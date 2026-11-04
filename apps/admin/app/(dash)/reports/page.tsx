@@ -18,7 +18,7 @@ const HOURS_SERIES = [
 
 const hours = (m: number) => (m / 60).toFixed(1);
 
-/** Per-employee month totals — the numbers payroll needs. */
+/** Per-employee month totals. */
 function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string; includeSimulated: string }) {
   const [month, setMonth] = useState(todayISO().slice(0, 7));
   const q = useQuery({ queryKey: ['reports', 'monthly', month, workplaceId, includeSimulated], queryFn: () => get(`/reports/monthly${qs({ month, workplaceId, includeSimulated })}`) });
@@ -30,7 +30,7 @@ function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Input type="month" aria-label="Month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-auto" />
-          <LinkButton href={`/api/v1/reports/monthly.csv${qs({ month, workplaceId, includeSimulated })}`} size="sm"><Download className="h-4 w-4" aria-hidden /> CSV for payroll</LinkButton>
+          <LinkButton href={`/api/v1/reports/monthly.csv${qs({ month, workplaceId, includeSimulated })}`} size="sm"><Download className="h-4 w-4" aria-hidden /> Download CSV</LinkButton>
         </div>
       }
     >

@@ -29,7 +29,7 @@ export function DayClose({ date, onEmployee }: { date: string; onEmployee: (id: 
   });
 
   return (
-    <Card title="Daily close" description={`Confirm the attendance of ${fmtDate(date)}. Payroll can be approved only when every working day is confirmed.`}>
+    <Card title="Daily close" description={`Confirm the attendance of ${fmtDate(date)}.`}>
       <QueryState query={day}>
         {(d: any) => (
           <div className="space-y-4">

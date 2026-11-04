@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Download, Lock, Plus, Trash2, Unlock, Wallet } from 'lucide-react';
 import { del, get, post } from '@/lib/api';
 import { fmtDateTime, todayISO } from '@/lib/format';
+import { useMe } from '@/lib/me';
 import { LinkButton, Badge, Button, Card, ConfirmButton, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, Select, Table, Td, Textarea, Th } from '@/components/ui';
 import { PayForm, PAY_TYPE_LABEL, inr } from '@/components/pay-form';
 import { UnconfirmedDays } from '@/components/day-close';
@@ -13,6 +14,20 @@ const KINDS = { ADVANCE: 'Advance (deducted)', BONUS: 'Bonus', ALLOWANCE: 'Allow
 const hours = (m: number) => (m / 60).toFixed(1);
 
 export default function PayrollPage() {
+  const { me, query } = useMe();
+  if (query.isPending) return null;
+  if (!me?.features?.payroll) {
+    return (
+      <>
+        <PageHeader title="Payroll" />
+        <EmptyState title="Payroll is not part of this release">Attendance, working hours and overtime are in Reports. Payroll records already saved are kept.</EmptyState>
+      </>
+    );
+  }
+  return <Payroll />;
+}
+
+function Payroll() {
   const qc = useQueryClient();
   const [month, setMonth] = useState(todayISO().slice(0, 7));
   const [payFor, setPayFor] = useState<any | null>(null);
@@ -219,7 +234,7 @@ function ReopenModal({ open, month, onClose }: { open: boolean; month: string; o
     },
   });
   return (
-    <Modal open={open} onOpenChange={(o) => !o && onClose()} title={`Reopen ${month}?`} description="The frozen payslips are discarded and pay is recalculated from current attendance. Employees stop seeing these payslips until you approve again.">
+    <Modal open={open} onOpenChange={(o) => !o && onClose()} title={`Reopen ${month}?`} description="These payslips are kept as history and pay is recalculated from current attendance. Employees stop seeing them until you approve again.">
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); reopen.mutate(); }}>
         <Field label="Reason (recorded in the audit log)"><Textarea required minLength={5} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
         <InlineError error={reopen.error} />

@@ -201,7 +201,7 @@ mount(workplacesRouter, '/api/v1/workplaces', 'workplaces', [
     handler: async ({ params, body, user, req }) => {
       const before = await one('SELECT is_active FROM workplaces WHERE id = $1', [params.id]);
       if (!before) throw notFound('Workplace');
-      await q('UPDATE workplaces SET is_active = $2, updated_at = now() WHERE id = $1', [params.id, body.isActive]);
+      await q(`UPDATE workplaces SET is_active = $2, deactivated_on = CASE WHEN $2 THEN NULL ELSE (now() AT TIME ZONE timezone)::date END, updated_at = now() WHERE id = $1`, [params.id, body.isActive]);
       await audit({ actor: user, action: body.isActive ? 'workplace.enable' : 'workplace.disable', resourceType: 'workplace', resourceId: params.id, before, after: { is_active: body.isActive }, reason: body.reason, req });
       return one(`${SELECT} WHERE w.id = $1`, [params.id]);
     },

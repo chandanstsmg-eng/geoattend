@@ -28,6 +28,8 @@ import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
 import { engineRules, ingestLocked, lockSession, sessionNow, transition, type Actor, type ReadingInput } from '../tracking/tracking.service.js';
 import { challengeFor } from '../faces/faces.js';
+import { assertPayrollMonthOpen } from '../payroll/guard.js';
+import { DateTime } from 'luxon';
 
 export interface IntentInput {
   sessionId: string;
@@ -181,8 +183,7 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
       );
     }
 
-    const lateBy = Math.floor((now.getTime() - new Date(s.scheduled_start_at).getTime()) / 60000);
-    const isLate = lateBy > s.arrival_grace_minutes;
+    const { minutes: lateBy, isLate } = lateness(now, new Date(s.scheduled_start_at), s.arrival_grace_minutes);
     const flags: string[] = [];
     if (s.is_simulated) flags.push('SIMULATED');
     if (ev.isMocked || mockedTrail) flags.push('MOCK_LOCATION_REPORTED');
@@ -265,6 +266,26 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
 }
 
 // ───────────────────────── reviews, disputes, corrections ─────────────────────────
+
+/** The one rule for lateness: minutes after the scheduled start, late only beyond the grace period. */
+export function lateness(arrival: Date, scheduledStart: Date, graceMinutes: number) {
+  const minutes = Math.floor((arrival.getTime() - scheduledStart.getTime()) / 60000);
+  const isLate = minutes > graceMinutes;
+  return { minutes, isLate, lateBy: isLate ? minutes : 0 };
+}
+
+/** The shift's start on `date` and its grace period, as they were on that date. */
+async function shiftStartOn(db: Queryable, shiftId: string, date: string) {
+  const d = await one(
+    `SELECT COALESCE(r.start_time, sh.start_time) AS start_time, COALESCE(r.timezone, sh.timezone) AS timezone, COALESCE(r.arrival_grace_minutes, sh.arrival_grace_minutes) AS grace
+     FROM shifts sh LEFT JOIN LATERAL (
+       SELECT * FROM shift_revisions x WHERE x.shift_id = sh.id AND $2::date <= x.valid_to AND (x.valid_from IS NULL OR $2::date >= x.valid_from) ORDER BY x.valid_to LIMIT 1
+     ) r ON true WHERE sh.id = $1`,
+    [shiftId, date],
+    db,
+  );
+  return { at: DateTime.fromISO(`${date}T${d.start_time}`, { zone: d.timezone }).toJSDate(), grace: d.grace as number };
+}
 
 export async function requestManualReview(employeeId: string, sessionId: string, reason: string) {
   const outbox = new Outbox();
@@ -362,6 +383,7 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
     if (!r) throw notFound('Review request');
     if (r.status !== 'OPEN') throw conflict('REVIEW_CLOSED', 'This request has already been resolved.');
     let attendanceId: string | null = r.attendance_id;
+    let arrivalAt: Date | null = null;
 
     if (r.kind === 'MANUAL_REVIEW') {
       if (decision === 'ACKNOWLEDGE') throw new HttpError(400, 'BAD_DECISION', 'Approve or reject a manual review.');
@@ -369,14 +391,19 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
       if (decision === 'APPROVE') {
         if (!s) throw conflict('SESSION_REQUIRED', 'The related session no longer exists.');
         if (s.has_attendance) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded for this shift.');
-        const lateBy = Math.floor((Date.now() - new Date(s.scheduled_start_at).getTime()) / 60000);
+        await assertPayrollMonthOpen(admin.orgId, s.shift_date, db);
+        // Arrival is when the employee asked to be marked present, not when someone got to the request.
+        // The approver's name and time are stored separately. No location at that moment: flagged for anyone reading the record.
+        arrivalAt = new Date(r.created_at);
+        const supported = r.before_data?.lastDistanceM != null;
+        const { isLate, lateBy } = lateness(arrivalAt, new Date(s.scheduled_start_at), s.arrival_grace_minutes);
         const rec = await one(
           `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key,
              evidence_latitude, evidence_longitude, evidence_accuracy_m, evidence_distance_m, evidence_client_time, radius_m_at_record,
-             is_late, late_by_minutes, verification_status, risk_flags, is_simulated)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'MANUAL_APPROVED','{MANUAL_REVIEW}',$15)
+             is_late, late_by_minutes, verification_status, risk_flags, is_simulated, recorded_at, approved_by, approved_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'MANUAL_APPROVED',$15,$16,$17,$18,now())
            ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING RETURNING id`,
-          [s.employee_id, s.workplace_id, s.shift_id, s.id, s.shift_date, `review:${r.id}`, s.last_latitude, s.last_longitude, s.last_accuracy_m, s.last_distance_m, s.last_location_client_at, s.radius_m, lateBy > s.arrival_grace_minutes, Math.max(0, lateBy > s.arrival_grace_minutes ? lateBy : 0), s.is_simulated],
+          [s.employee_id, s.workplace_id, s.shift_id, s.id, s.shift_date, `review:${r.id}`, s.last_latitude, s.last_longitude, s.last_accuracy_m, s.last_distance_m, s.last_location_client_at, s.radius_m, isLate, lateBy, supported ? ['MANUAL_REVIEW'] : ['MANUAL_REVIEW', 'ARRIVAL_TIME_UNVERIFIED'], s.is_simulated, arrivalAt, admin.id],
           db,
         );
         if (!rec) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded for this shift.');
@@ -396,7 +423,7 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
 
     const status = decision === 'APPROVE' ? 'APPROVED' : decision === 'REJECT' ? 'REJECTED' : 'ACKNOWLEDGED';
     await q(`UPDATE review_requests SET status = $2, resolved_by = $3, resolved_at = now(), resolution_note = $4, attendance_id = COALESCE(attendance_id, $5) WHERE id = $1`, [reviewId, status, admin.id, note, attendanceId], db);
-    await audit({ actor: admin, action: `review.${decision.toLowerCase()}`, resourceType: 'review_request', resourceId: reviewId, before: { status: r.status }, after: { status, attendanceId }, reason: note, req }, db);
+    await audit({ actor: admin, action: `review.${decision.toLowerCase()}`, resourceType: 'review_request', resourceId: reviewId, before: { status: r.status }, after: { status, attendanceId, ...(arrivalAt ? { arrivalAt, approvedAt: new Date() } : {}) }, reason: note, req }, db);
     return { status, attendanceId };
   });
   outbox.flush();
@@ -417,15 +444,27 @@ export async function correctAttendance(admin: AuthUser, attendanceId: string, c
   const updated = await tx(async (db) => {
     const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
     if (!before) throw notFound('Attendance record');
+    await assertPayrollMonthOpen(admin.orgId, before.shift_date, db);
+    // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
+    let isLate = c.isLate ?? null;
+    let lateBy = c.lateByMinutes ?? null;
+    if (c.recordedAt && isLate === null && lateBy === null) {
+      const session = before.session_id ? await one('SELECT scheduled_start_at FROM tracking_sessions WHERE id = $1', [before.session_id], db) : null;
+      const shift = await shiftStartOn(db, before.shift_id, before.shift_date);
+      const l = lateness(new Date(c.recordedAt), session ? new Date(session.scheduled_start_at) : shift.at, shift.grace);
+      isLate = l.isLate;
+      lateBy = l.lateBy;
+    }
     const after = await one(
       `UPDATE attendance_records SET
          verification_status = COALESCE($2, CASE WHEN verification_status = 'VERIFIED' THEN 'CORRECTED' ELSE verification_status END),
-         recorded_at = COALESCE($3, recorded_at),
+         original_recorded_at = CASE WHEN $3::timestamptz IS NOT NULL THEN COALESCE(original_recorded_at, recorded_at) ELSE original_recorded_at END,
+         recorded_at = COALESCE($3::timestamptz, recorded_at),
          is_late = COALESCE($4, is_late),
          late_by_minutes = COALESCE($5, late_by_minutes),
          updated_at = now()
        WHERE id = $1 RETURNING *`,
-      [attendanceId, c.verificationStatus ?? null, c.recordedAt ?? null, c.isLate ?? null, c.lateByMinutes ?? null],
+      [attendanceId, c.verificationStatus ?? null, c.recordedAt ?? null, isLate, lateBy],
       db,
     );
     await q(
@@ -445,8 +484,9 @@ export async function correctAttendance(admin: AuthUser, attendanceId: string, c
 }
 
 /** Admin-entered attendance when no device evidence exists (e.g. broken phone). Always MANUAL_APPROVED and audited. */
-export async function createManualAttendance(admin: AuthUser, input: { employeeId: string; shiftId: string; shiftDate: string; recordedAt: string; reason: string }, req?: any) {
+export async function createManualAttendance(admin: AuthUser, input: { employeeId: string; shiftId: string; shiftDate: string; recordedAt: string; workedMinutes?: number; reason: string }, req?: any) {
   return tx(async (db) => {
+    await assertPayrollMonthOpen(admin.orgId, input.shiftDate, db);
     const shift = await one(
       `SELECT sh.* FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id WHERE esa.employee_id = $1 AND esa.shift_id = $2
        AND esa.effective_from <= $3::date AND (esa.effective_to IS NULL OR esa.effective_to >= $3::date)`,
@@ -456,11 +496,13 @@ export async function createManualAttendance(admin: AuthUser, input: { employeeI
     if (!shift) throw new HttpError(400, 'NOT_ASSIGNED', 'The employee was not assigned to this shift on that date.');
     const wp = await one('SELECT * FROM workplaces WHERE id = $1', [shift.workplace_id], db);
     const emp = await one('SELECT is_demo FROM users WHERE id = $1', [input.employeeId], db);
+    const start = await shiftStartOn(db, shift.id, input.shiftDate);
+    const { isLate, lateBy } = lateness(new Date(input.recordedAt), start.at, start.grace);
     const rec = await one(
-      `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags, is_simulated)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'MANUAL_APPROVED','{ADMIN_ENTERED}',$8)
+      `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags, is_simulated, is_late, late_by_minutes, manual_worked_minutes, approved_by, approved_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'MANUAL_APPROVED','{ADMIN_ENTERED}',$8,$9,$10,$11,$12,now())
        ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING RETURNING *`,
-      [input.employeeId, wp.id, shift.id, input.shiftDate, input.recordedAt, `manual:${crypto.randomUUID()}`, wp.radius_m, emp?.is_demo ?? false],
+      [input.employeeId, wp.id, shift.id, input.shiftDate, input.recordedAt, `manual:${crypto.randomUUID()}`, wp.radius_m, emp?.is_demo ?? false, isLate, lateBy, input.workedMinutes ?? null, admin.id],
       db,
     );
     if (!rec) throw conflict('ALREADY_RECORDED', 'An attendance record already exists for this employee, shift and date.');

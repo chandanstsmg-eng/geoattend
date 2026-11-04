@@ -52,6 +52,8 @@ export const config = {
 
   demoMode: bool('DEMO_MODE', false),
   demoPassword: str('DEMO_PASSWORD'),
+  /** Off until payroll rules are confirmed by a qualified person; see modules/payroll/guard.ts. */
+  payrollEnabled: bool('PAYROLL_ENABLED', false),
 
   storage: {
     driver: str('STORAGE_DRIVER', 'local') as 'local' | 's3',

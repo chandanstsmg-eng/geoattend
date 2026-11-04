@@ -19,11 +19,16 @@ export async function defaultDate(orgId: string, workplaceId?: string | null) {
   return DateTime.now().setZone(w?.timezone ?? 'UTC').toISODate()!;
 }
 
-/** Every (employee, shift) pair of the company scheduled on `date`, with attendance and session outcome. */
+/**
+ * Every (employee, shift) pair of the company scheduled on `date`, with attendance and session outcome.
+ * Past days use the facts of that day, not today's: the shift as it was then (shift_revisions), people
+ * employed then (joined_on, left_on) and workspaces not yet disabled.
+ */
 export async function roster(orgId: string, date: string, workplaceId: string | null, includeSimulated = true, sites: string[] | null = null) {
   return q(
     `SELECT u.id AS employee_id, u.full_name, ep.employee_code, u.is_demo,
-            w.id AS workplace_id, w.name AS workplace_name, sh.id AS shift_id, sh.name AS shift_name, sh.start_time, sh.end_time, sh.timezone,
+            w.id AS workplace_id, w.name AS workplace_name, sh.id AS shift_id, sh.name AS shift_name,
+            COALESCE(rev.start_time, sh.start_time) AS start_time, COALESCE(rev.end_time, sh.end_time) AS end_time, COALESCE(rev.timezone, sh.timezone) AS timezone,
             ar.id AS attendance_id, ar.recorded_at, ar.is_late, ar.late_by_minutes, ar.verification_status, ar.evidence_distance_m, ar.evidence_accuracy_m, ar.risk_flags,
             s.id AS session_id, s.state, s.started_at, s.ended_at, s.last_location_at, s.termination_reason,
             aw.worked_minutes, aw.scheduled_minutes, aw.ended_early_minutes, aw.in_progress,
@@ -32,17 +37,23 @@ export async function roster(orgId: string, date: string, workplaceId: string | 
             (SELECT count(*)::int FROM absence_intervals a WHERE a.session_id = s.id AND a.prolonged_at IS NOT NULL) AS prolonged_count,
             (SELECT COALESCE(ROUND(SUM(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at))) / 60), 0)::int FROM absence_intervals a WHERE a.session_id = s.id) AS away_minutes
      FROM employee_shift_assignments esa
-     JOIN users u ON u.id = esa.employee_id AND u.role = 'EMPLOYEE' AND u.is_active
+     JOIN users u ON u.id = esa.employee_id AND u.role = 'EMPLOYEE'
      JOIN employee_profiles ep ON ep.user_id = u.id
-     JOIN shifts sh ON sh.id = esa.shift_id AND sh.is_active
-     JOIN workplaces w ON w.id = sh.workplace_id AND w.is_active
+     JOIN shifts sh ON sh.id = esa.shift_id
+     LEFT JOIN LATERAL (
+       SELECT r.* FROM shift_revisions r WHERE r.shift_id = sh.id AND $1::date <= r.valid_to AND (r.valid_from IS NULL OR $1::date >= r.valid_from) ORDER BY r.valid_to LIMIT 1
+     ) rev ON true
+     JOIN workplaces w ON w.id = sh.workplace_id AND (w.is_active OR $1::date < w.deactivated_on)
      LEFT JOIN attendance_records ar ON ar.employee_id = u.id AND ar.shift_id = sh.id AND ar.shift_date = $1 AND ar.verification_status <> 'VOIDED'
      LEFT JOIN tracking_sessions s ON s.employee_id = u.id AND s.shift_id = sh.id AND s.shift_date = $1
      LEFT JOIN attendance_work aw ON aw.attendance_id = ar.id
      WHERE esa.effective_from <= $1 AND (esa.effective_to IS NULL OR esa.effective_to >= $1)
-       AND EXTRACT(ISODOW FROM $1::date)::smallint = ANY (sh.days_of_week)
+       AND COALESCE(rev.is_active, sh.is_active)
+       AND (ep.joined_on IS NULL OR $1::date >= ep.joined_on)
+       AND (CASE WHEN ep.left_on IS NOT NULL THEN $1::date <= ep.left_on ELSE u.is_active END)
+       AND EXTRACT(ISODOW FROM $1::date)::smallint = ANY (COALESCE(rev.days_of_week, sh.days_of_week))
        AND ($2::uuid IS NULL OR w.id = $2) AND ($3 OR NOT u.is_demo) AND u.org_id = $4 AND ${siteFilter('w.id', '$5')}
-     ORDER BY w.name, sh.start_time, u.full_name`,
+     ORDER BY w.name, start_time, u.full_name`,
     [date, workplaceId, includeSimulated, orgId, sites],
   );
 }
@@ -82,6 +93,9 @@ export function workFlags(
 /**
  * Per-employee totals for a calendar month, built from the daily roster so leave, holidays
  * and no-shows are judged exactly as on the overview. Days after today are not counted.
+ * Days are counted per person, not per shift: two shifts on one date are one day, so a single
+ * absence is never counted twice (`missed_shifts` keeps the shifts missed on days worked).
+ * Hours come from the same engine as the hours report, so the two always agree.
  */
 export async function monthlySummary(orgId: string, month: string, workplaceId: string | null, includeSimulated: boolean) {
   const first = DateTime.fromISO(`${month}-01`);
@@ -91,35 +105,53 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
   for (let d = first; d <= last; d = d.plus({ days: 1 })) {
     const date = d.toISODate()!;
     const isToday = date === today.toISODate();
+    const byEmployee = new Map<string, any[]>();
     for (const r of await withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated))) {
-      let t = totals.get(r.employee_id);
+      byEmployee.set(r.employee_id, [...(byEmployee.get(r.employee_id) ?? []), r]);
+    }
+    for (const [employeeId, shifts] of byEmployee) {
+      const r = shifts[0];
+      let t = totals.get(employeeId);
       if (!t) {
-        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0 };
-        totals.set(r.employee_id, t);
+        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0 };
+        totals.set(employeeId, t);
       }
       t.scheduled++;
+      const attended = shifts.filter((s) => s.attendance_id);
+      const decided = !isToday || shifts.some((s) => s.no_show || s.ended_at);
       const half = r.on_leave?.half_day ? 0.5 : 1;
       const addLeave = (days: number) => {
         t.leave += days;
         if (r.on_leave.leave_type === 'UNPAID') t.unpaid_leave += days;
         else t.paid_leave += days;
       };
-      if (r.attendance_id) {
+      if (attended.length) {
         // Working on a half-day leave counts as half a day present and half a day on leave.
         t.present += r.on_leave?.half_day ? 0.5 : 1;
         if (r.on_leave?.half_day) addLeave(0.5);
-        if (r.is_late) t.late++;
-        t.worked_minutes += r.worked_minutes ?? 0;
-        t.overtime_minutes += r.overtime_minutes;
-        if (r.left_early) t.left_early++;
-      } else if (r.holiday) t.holidays++;
+        if (attended.some((s) => s.is_late)) t.late++;
+        if (attended.some((s) => s.left_early)) t.left_early++;
+        t.missed_shifts += shifts.filter((s) => !s.attendance_id && !s.holiday && !s.on_leave && (!isToday || s.no_show || s.ended_at)).length;
+      } else if (shifts.some((s) => s.holiday)) t.holidays++;
       else if (r.on_leave) {
         addLeave(half);
-        if (half < 1 && (!isToday || r.no_show || r.ended_at)) t.absent += 0.5;
-      } else if (!isToday || r.no_show || r.ended_at) t.absent++;
+        if (half < 1 && decided) t.absent += 0.5;
+      } else if (decided) t.absent++;
     }
   }
-  return { month, from: first.toISODate(), to: last >= first ? last.toISODate() : null, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
+  const to = last >= first ? last.toISODate()! : null;
+  if (to) {
+    const { workforce } = await getSettings(orgId);
+    const records = await loadWorkRecords({ orgId, sites: null }, { from: first.toISODate()!, to, workplaceId, includeSimulated });
+    for (const h of computeHours(records, workforce, first.toISODate()!, to)) {
+      const t = totals.get(h.employee_id);
+      if (t) {
+        t.worked_minutes = h.regular_minutes;
+        t.overtime_minutes = h.overtime_minutes;
+      }
+    }
+  }
+  return { month, from: first.toISODate(), to, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
 }
 
 function sendCsv(res: any, name: string, csv: string) {
@@ -275,7 +307,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
   route({
     method: 'get',
     path: '/monthly.csv',
-    summary: 'Monthly totals per employee (CSV, ready for payroll)',
+    summary: 'Monthly totals per employee (CSV)',
     access: 'admin',
     ownerOnly: true,
     raw: true,

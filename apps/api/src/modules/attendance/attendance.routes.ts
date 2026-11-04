@@ -128,7 +128,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
     path: '/manual',
     summary: 'Create an attendance record without device evidence (audited, MANUAL_APPROVED)',
     access: 'admin',
-    body: z.object({ employeeId: z.uuid(), shiftId: z.uuid(), shiftDate: isoDate, recordedAt: z.iso.datetime({ offset: true }), reason: z.string().trim().min(5).max(1000) }),
+    body: z.object({ employeeId: z.uuid(), shiftId: z.uuid(), shiftDate: isoDate, recordedAt: z.iso.datetime({ offset: true }), workedMinutes: z.number().int().min(0).max(1440).optional(), reason: z.string().trim().min(5).max(1000) }),
     handler: async ({ user, body, req, res }) => {
       await assertInOrg('employee', body.employeeId, user.orgId, user.sites);
       await assertInOrg('shift', body.shiftId, user.orgId, user.sites);

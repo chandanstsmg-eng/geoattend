@@ -249,7 +249,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
   const isOwner = me.access?.role !== 'SUPERVISOR';
   // Supervisors see day-to-day pages only (the API refuses the rest anyway).
   const groups = (me.demoMode ? [...NAV, { title: 'Demo', items: [{ href: '/demo', label: 'Demo simulator', icon: FlaskConical, owner: true }] }] : NAV)
-    .map((g) => ({ ...g, items: g.items.filter((n) => isOwner || !n.owner) }))
+    .map((g) => ({ ...g, items: g.items.filter((n) => (isOwner || !n.owner) && (n.href !== '/payroll' || me.features?.payroll)) }))
     .filter((g) => g.items.length > 0);
   // Arriving on a page inside a collapsed group (a link, the back button) opens that group again.
   const currentGroup = groups.find((g) => g.items.some((n) => isActive(n.href, path)))?.title;

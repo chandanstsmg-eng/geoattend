@@ -102,3 +102,16 @@ Local data changed (audited, reason recorded): 5 roster assignments moved from "
 Audit, design rules and remaining work: [UI-AUDIT.md](UI-AUDIT.md). Evidence from the running app on the sample database: 23 interaction checks passed (sign-in, navigation, search, sorting, drawer, keyboard, forms, toasts, confirmations, a simulated feed failure, supervisor limits, phone menu and roster); every route crawled as owner and supervisor at 1920, 1440, 1366, 1024, 768, 390 and 360 px with no page overflow and no console errors. A real bug found this way: the account menu opened off-screen on desktop, so Sign out could not be reached (the blurred header re-anchored `fixed`); menus now render in a portal.
 
 Not run: a production `next build`, and mobile changes were not part of this pass.
+
+## Payroll and attendance history (4 Nov 2026)
+
+| Area | Change | Evidence |
+|---|---|---|
+| Payroll | Off unless `PAYROLL_ENABLED=true`. Approval, live pay, salary sheets, pay setup, adjustments and employee pay views are refused by the API; approved history stays readable to the owner | `payroll-attendance-history.test.ts`, real server and browser run |
+| Payroll logic (behind the switch) | Finished months only, proration from employment dates, leavers kept, one day per person per date, revisions instead of deletion, repeat "paid" refused, simulated people excluded, frozen months block attendance, overtime and leave changes | same test file |
+| Attendance | Manual review uses the request time, approver stored separately, review survives the shift end, corrections keep `original_recorded_at` and re-judge lateness, manual records judge lateness and accept hours | same test file |
+| History | `shift_revisions`, `joined_on`, `left_on`, `deactivated_on`; scheduled minutes from the session snapshot | same test file; [MIGRATIONS.md](MIGRATIONS.md) |
+| Hours | The monthly report uses the hours engine, so it agrees with the hours report; away time before arrival is not deducted | same test file |
+| Overtime | Company `overtimeMultiplier` (default 1) for new pay setups; no statutory rate assumed | same test file |
+
+Not done: PF, ESI, PT and TDS; `carryForward` is still not posted to the next month; payroll approval still computes outside its transaction. All three stay behind the switch.

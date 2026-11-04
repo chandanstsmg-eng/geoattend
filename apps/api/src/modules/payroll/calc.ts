@@ -3,7 +3,7 @@
  *
  *  MONTHLY  amount per month. Loss of pay = per-day rate × (absent days + unpaid leave),
  *           per-day rate = amount ÷ calendar days in the month (weekly offs, holidays and
- *           paid leave are paid).
+ *           paid leave are paid). Someone employed for part of the month earns those days only.
  *  DAILY    amount per day present (half-day paid leave counts as half a day).
  *  HOURLY   amount per hour worked.
  *  Overtime is paid per hour at the hourly equivalent × the employee's multiplier
@@ -22,6 +22,8 @@ export interface PaySetup {
 
 export interface MonthAttendance {
   daysInMonth: number;
+  /** Days of the month the person was employed; the whole month when not given. */
+  employedDays?: number;
   scheduled: number;
   present: number;
   paidLeave: number;
@@ -51,10 +53,11 @@ export function calculatePay(pay: PaySetup, a: MonthAttendance, adj: Adjustments
   let payableDays: number | null = null;
   if (pay.payType === 'MONTHLY') {
     const perDay = pay.amount / a.daysInMonth;
-    lossOfPayDays = Math.min(a.daysInMonth, a.absent + a.unpaidLeave);
+    const employed = a.employedDays ?? a.daysInMonth;
+    lossOfPayDays = Math.min(employed, a.absent + a.unpaidLeave);
     lossOfPay = perDay * lossOfPayDays;
-    basic = pay.amount;
-    payableDays = a.daysInMonth - lossOfPayDays;
+    basic = employed === a.daysInMonth ? pay.amount : perDay * employed;
+    payableDays = employed - lossOfPayDays;
   } else if (pay.payType === 'DAILY') {
     payableDays = a.present + a.paidLeave;
     basic = pay.amount * payableDays;

@@ -630,7 +630,7 @@ export async function finalizeLocked(
     opts.overtimeEnd?.reason ?? (opts.authorization === 'TERMINATED' ? 'ADMIN' : opts.authorization === 'ENDED' ? 'EMPLOYEE' : 'SYSTEM'),
   );
   await q(`UPDATE attendance_photos SET status = 'EXPIRED' WHERE session_id = $1 AND status IN ('PENDING_UPLOAD', 'UPLOADED')`, [s.id], db);
-  await q(`UPDATE review_requests SET status = 'CANCELLED', resolution_note = 'Shift ended', resolved_at = now() WHERE session_id = $1 AND kind = 'MANUAL_REVIEW' AND status = 'OPEN'`, [s.id], db);
+  // An open manual review stays open: the shift ending must not turn an unanswered request into an absence.
   await transition(db, outbox, s, 'SHIFT_END_PENDING', opts.reason, opts.actor, opts.actorId);
   await q(
     `UPDATE tracking_sessions SET ended_at = now(), authorization_status = $2, termination_reason = $3, terminated_by = $4, candidate_since = NULL, candidate_count = 0 WHERE id = $1`,

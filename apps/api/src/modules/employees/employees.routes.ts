@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { DateTime } from 'luxon';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
@@ -10,10 +11,11 @@ import { assertInOrg, siteFilter } from '../../lib/tenancy.js';
 import { audit } from '../../lib/audit.js';
 import { endSession } from '../tracking/tracking.service.js';
 import { addRosterEntry, rosterEntryBody } from '../roster/roster.js';
+import { defaultDate } from '../reports/reports.routes.js';
 
 const SELECT_EMPLOYEE = `
   SELECT u.id, u.email, u.full_name, u.is_active, u.is_demo, u.last_login_at, u.created_at,
-         ep.employee_code, ep.phone, ep.department, ep.designation,
+         ep.employee_code, ep.phone, ep.department, ep.designation, ep.joined_on, ep.left_on,
          wa.workplace_id, w.name AS workplace_name, ep.supervisor_id, su.full_name AS supervisor_name,
          (SELECT json_agg(json_build_object('assignmentId', esa.id, 'shiftId', sh.id, 'name', sh.name, 'startTime', sh.start_time, 'endTime', sh.end_time,
                                             'daysOfWeek', sh.days_of_week, 'effectiveFrom', esa.effective_from, 'effectiveTo', esa.effective_to,
@@ -65,6 +67,8 @@ const employeeBody = z.object({
   phone: z.string().trim().max(40).nullable().optional(),
   department: z.string().trim().max(100).nullable().optional(),
   designation: z.string().trim().max(100).nullable().optional(),
+  joinedOn: isoDate.nullable().optional(),
+  leftOn: isoDate.nullable().optional(),
 });
 
 async function loadEmployee(id: string) {
@@ -97,7 +101,7 @@ async function createEmployee(
     [body.email, await hashPassword(password), body.fullName, !body.password, actor.orgId],
     db,
   );
-  await q(`INSERT INTO employee_profiles (user_id, employee_code, phone, department, designation) VALUES ($1,$2,$3,$4,$5)`, [u.id, body.employeeCode, body.phone ?? null, body.department ?? null, body.designation ?? null], db);
+  await q(`INSERT INTO employee_profiles (user_id, employee_code, phone, department, designation, joined_on) VALUES ($1,$2,$3,$4,$5,$6)`, [u.id, body.employeeCode, body.phone ?? null, body.department ?? null, body.designation ?? null, body.joinedOn ?? null], db);
   if (body.workplaceId) await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by) VALUES ($1,$2,$3)`, [u.id, body.workplaceId, actor.id], db);
   if (body.shiftId) await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, created_by) VALUES ($1,$2,$3)`, [u.id, body.shiftId, actor.id], db);
   await audit({ actor, action, resourceType: 'user', resourceId: u.id, after: { ...body, password: undefined }, req }, db);
@@ -200,6 +204,9 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     body: employeeBody.partial(),
     handler: async ({ params, body, user, req }) => {
       const before = await loadEmployee(params.id);
+      const joined = 'joinedOn' in body ? body.joinedOn : before.joined_on;
+      const left = 'leftOn' in body ? body.leftOn : before.left_on;
+      if (joined && left && left < joined) throw badRequest('BAD_DATES', 'The last working day cannot be before the joining date.');
       await tx(async (db) => {
         if (body.email && (await one('SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2', [body.email, params.id], db))) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
         if (body.employeeCode && (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND user_id <> $2 AND org_id = $3', [body.employeeCode, params.id, user.orgId], db))) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
@@ -208,9 +215,10 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
           `UPDATE employee_profiles SET employee_code = COALESCE($2, employee_code),
              phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,
              department = CASE WHEN $5::boolean THEN $6 ELSE department END,
-             designation = CASE WHEN $7::boolean THEN $8 ELSE designation END
+             designation = CASE WHEN $7::boolean THEN $8 ELSE designation END,
+             joined_on = $9, left_on = $10
            WHERE user_id = $1`,
-          [params.id, body.employeeCode ?? null, 'phone' in body, body.phone ?? null, 'department' in body, body.department ?? null, 'designation' in body, body.designation ?? null],
+          [params.id, body.employeeCode ?? null, 'phone' in body, body.phone ?? null, 'department' in body, body.department ?? null, 'designation' in body, body.designation ?? null, joined ?? null, left ?? null],
           db,
         );
       });
@@ -227,11 +235,18 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     ownerOnly: true,
     params: idParams,
     scope: 'employee',
-    body: z.object({ reason: z.string().trim().min(3).max(500) }),
+    body: z.object({ reason: z.string().trim().min(3).max(500), lastWorkingDay: isoDate.optional() }),
     handler: async ({ params, body, user, req }) => {
       const e = await loadEmployee(params.id);
       if (e.open_session) await endSession(e.open_session.id, user, 'ADMIN', `employee deactivated: ${body.reason}`);
-      await q('UPDATE users SET is_active = false, updated_at = now() WHERE id = $1', [params.id]);
+      // Their past days stay in reports up to this date. Today counts only if they attended, so leaving is not a no-show.
+      const today = await defaultDate(user.orgId);
+      const workedToday = await one(`SELECT 1 FROM attendance_records WHERE employee_id = $1 AND shift_date = $2 AND verification_status <> 'VOIDED'`, [params.id, today]);
+      const lastDay = body.lastWorkingDay ?? (workedToday ? today : DateTime.fromISO(today).minus({ days: 1 }).toISODate());
+      await tx(async (db) => {
+        await q('UPDATE users SET is_active = false, updated_at = now() WHERE id = $1', [params.id], db);
+        await q('UPDATE employee_profiles SET left_on = GREATEST($2::date, joined_on) WHERE user_id = $1', [params.id, lastDay], db);
+      });
       await revokeAllForUser(params.id);
       await audit({ actor: user, action: 'employee.deactivate', resourceType: 'user', resourceId: params.id, reason: body.reason, req });
       return loadEmployee(params.id);
@@ -247,7 +262,10 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     scope: 'employee',
     handler: async ({ params, user, req }) => {
       await loadEmployee(params.id);
-      await q('UPDATE users SET is_active = true, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1', [params.id]);
+      await tx(async (db) => {
+        await q('UPDATE users SET is_active = true, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1', [params.id], db);
+        await q('UPDATE employee_profiles SET left_on = NULL WHERE user_id = $1', [params.id], db);
+      });
       await audit({ actor: user, action: 'employee.reactivate', resourceType: 'user', resourceId: params.id, req });
       return loadEmployee(params.id);
     },

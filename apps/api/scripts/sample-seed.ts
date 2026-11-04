@@ -23,6 +23,7 @@
 import { DateTime } from 'luxon'; // reads no configuration, so a static import is fine
 
 process.env.PG_DATABASE ||= 'geoattend_demo';
+process.env.PAYROLL_ENABLED = 'true'; // the sample history includes paid months, built with the real calculation
 
 const { config } = await import('../src/config.js');
 const { dropDatabase, ensureDatabase } = await import('../src/db/postgres.js');

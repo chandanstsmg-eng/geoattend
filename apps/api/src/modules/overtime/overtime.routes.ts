@@ -8,6 +8,7 @@
  * was already approved keeps its frozen payslips.
  */
 import { Router } from 'express';
+import { assertPayrollMonthOpen } from '../payroll/guard.js';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { getPool, one, q, tx } from '../../db/pool.js';
@@ -157,6 +158,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
       const o = await tx(async (db) => {
         const before = await one(`SELECT o.*, ${CLAIMED} AS claimed_minutes FROM overtime_entries o WHERE o.id = $1 FOR UPDATE`, [params.id], db);
         if (!before) throw notFound('Overtime');
+        await assertPayrollMonthOpen(user.orgId, before.shift_date, db);
         if (!before.ended_at) throw conflict('OVERTIME_RUNNING', 'This overtime is still running. It can be approved once the employee ends it.');
         const minutes = body.decision === 'APPROVE' ? (body.minutes ?? before.claimed_minutes) : null;
         if (minutes != null && minutes > before.claimed_minutes) {
@@ -197,6 +199,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
     handler: async ({ body, user, req }) => {
       const outbox = new Outbox();
       const rows = await tx(async (db) => {
+        for (const o of await q(`SELECT DISTINCT o.shift_date FROM overtime_entries o WHERE o.id = ANY($1::uuid[])`, [body.ids], db)) await assertPayrollMonthOpen(user.orgId, o.shift_date, db);
         const done = await q(
           `UPDATE overtime_entries o SET status = 'APPROVED', approved_minutes = ${CLAIMED}, decided_by = $3, decided_at = now(), decision_note = NULL
            FROM users u

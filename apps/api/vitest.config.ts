@@ -6,6 +6,7 @@ export default defineConfig({
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
       DEMO_MODE: 'true',
+      PAYROLL_ENABLED: 'true', // tests of the switched-off state set config.payrollEnabled themselves
       STORAGE_DRIVER: 'local',
       STORAGE_LOCAL_DIR: 'data/test-photos',
       // Tests run without a .env (CI, fresh checkouts) and never use the developer's secrets.

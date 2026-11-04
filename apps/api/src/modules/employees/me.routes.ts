@@ -11,6 +11,8 @@ import { employeeAssignment, sessionStatus } from '../tracking/tracking.service.
 import { reportIssue } from '../attendance/attendance.service.js';
 import { workFlags } from '../reports/reports.routes.js';
 import { computeMonth } from '../payroll/payroll.routes.js';
+import { assertPayrollEnabled } from '../payroll/guard.js';
+import { config } from '../../config.js';
 
 export const meRouter = Router();
 mount(meRouter, '/api/v1/me', 'me', [
@@ -142,13 +144,14 @@ mount(meRouter, '/api/v1/me', 'me', [
     access: 'employee',
     handler: async ({ user }) => {
       const month = DateTime.now().toFormat('yyyy-MM');
+      if (!config.payrollEnabled) return { month, estimate: null, payslips: [] };
       const [current] = await computeMonth(user.orgId, month, user.id);
       const payslips = await q(
         `SELECT p.id, p.month, p.net_amount::float AS net_amount, r.status, r.paid_at FROM payslips p JOIN payroll_runs r ON r.id = p.run_id
-         WHERE p.employee_id = $1 ORDER BY p.month DESC LIMIT 24`,
+         WHERE p.employee_id = $1 AND r.superseded_at IS NULL ORDER BY p.month DESC LIMIT 24`,
         [user.id],
       );
-      const locked = await one(`SELECT 1 FROM payroll_runs WHERE org_id = $1 AND month = $2`, [user.orgId, month]);
+      const locked = await one(`SELECT 1 FROM payroll_runs WHERE org_id = $1 AND month = $2 AND superseded_at IS NULL`, [user.orgId, month]);
       return { month, estimate: current?.result && !locked ? { attendance: current.attendance, result: current.result, adjustments: current.adjustments, payType: current.pay!.payType } : null, payslips };
     },
   }),
@@ -159,9 +162,10 @@ mount(meRouter, '/api/v1/me', 'me', [
     access: 'employee',
     params: z.object({ id: z.uuid() }),
     handler: async ({ user, params }) => {
+      assertPayrollEnabled();
       const p = await one(
         `SELECT p.id, p.month, p.net_amount::float AS net_amount, p.data, r.status, r.paid_at, o.name AS company_name FROM payslips p
-         JOIN payroll_runs r ON r.id = p.run_id JOIN organizations o ON o.id = r.org_id WHERE p.id = $1 AND p.employee_id = $2`,
+         JOIN payroll_runs r ON r.id = p.run_id JOIN organizations o ON o.id = r.org_id WHERE p.id = $1 AND p.employee_id = $2 AND r.superseded_at IS NULL`,
         [params.id, user.id],
       );
       if (!p) throw notFound('Payslip');
