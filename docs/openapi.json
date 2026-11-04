@@ -8293,7 +8293,7 @@
         "tags": [
           "attendance"
         ],
-        "summary": "Delete an attendance photo before its retention date (reason required, audited)",
+        "summary": "Delete an attendance photo before its retention date (company owner only, reason required, audited)",
         "security": [
           {
             "bearer": []
@@ -8364,7 +8364,7 @@
         "tags": [
           "attendance"
         ],
-        "summary": "Correct an attendance record (mandatory reason, audited)",
+        "summary": "Correct an attendance record (mandatory reason, audited). An owner's correction applies at once; a supervisor's waits for an owner (202).",
         "security": [
           {
             "bearer": []

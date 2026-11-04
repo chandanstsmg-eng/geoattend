@@ -63,6 +63,8 @@ export const config = {
   demoPassword: str('DEMO_PASSWORD'),
   /** Off until payroll rules are confirmed by a qualified person; see modules/payroll/guard.ts. */
   payrollEnabled: bool('PAYROLL_ENABLED', false),
+  /** Off until the retention rules have had legal review: nothing deletes employee photos automatically. */
+  photoAutoDeleteEnabled: bool('PHOTO_AUTO_DELETE_ENABLED', false),
 
   storage: {
     driver: str('STORAGE_DRIVER', 'local') as 'local' | 's3',

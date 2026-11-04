@@ -83,6 +83,7 @@ services:
       S3_BUCKET: ${S3_BUCKET:-geoattend-photos}
       DEMO_MODE: 'false'
       PAYROLL_ENABLED: 'false'
+      PHOTO_AUTO_DELETE_ENABLED: 'false'
       COOKIE_SECURE: 'true'
       PUBLIC_API_URL: ${PUBLIC_API_URL:?set PUBLIC_API_URL in .env}
       DASHBOARD_URL: ${DASHBOARD_URL:?set DASHBOARD_URL in .env}

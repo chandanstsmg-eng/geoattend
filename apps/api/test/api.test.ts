@@ -800,8 +800,11 @@ describe('admin workflows', () => {
     const live = await onShift();
     await live.send(reading(50, 5, live.clock(0)));
     await q(`UPDATE location_updates SET received_at = now() - interval '400 days' WHERE session_id = $1`, [live.sessionId]);
+    config.photoAutoDeleteEnabled = true; // deletion is on hold by default: corrections-and-photos.test.ts
+    await saveSettingsSection(DEFAULT_ORG_ID, 'retention', { ...(await getSettings(DEFAULT_ORG_ID)).retention, photoAutoDelete: true }, null);
     invalidateSettings();
     const summary = await runRetention(null, DEFAULT_ORG_ID);
+    config.photoAutoDeleteEnabled = false;
     expect(summary!.photosDeleted).toBeGreaterThanOrEqual(1);
     expect((await one('SELECT count(*)::int AS n FROM location_updates WHERE session_id = $1', [ctx.sessionId])).n).toBe(0);
     expect((await one('SELECT count(*)::int AS n FROM location_updates WHERE session_id = $1', [live.sessionId])).n).toBe(1); // open session untouched

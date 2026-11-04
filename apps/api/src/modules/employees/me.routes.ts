@@ -6,7 +6,7 @@ import { DateTime } from 'luxon';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { mount, route } from '../../lib/http.js';
 import { currentInstance, nextInstance, todayIn } from '../../lib/shift-window.js';
-import { getSettings, hasAcknowledgedNotice } from '../settings/settings.service.js';
+import { getSettings, photoDeletionAllowed, hasAcknowledgedNotice } from '../settings/settings.service.js';
 import { employeeAssignment, sessionStatus } from '../tracking/tracking.service.js';
 import { reportIssue } from '../attendance/attendance.service.js';
 import { workFlags } from '../reports/reports.routes.js';
@@ -185,7 +185,7 @@ mount(meRouter, '/api/v1/me', 'me', [
         controller: s.privacy.controller,
         contact: s.privacy.contact,
         text: s.privacy.text,
-        retention: { locationDays: s.retention.locationDays, photoDays: s.retention.photoDays },
+        retention: { locationDays: s.retention.locationDays, photoDays: s.retention.photoDays, photoAutoDelete: photoDeletionAllowed(s) },
         tracking: { updateIntervalSec: s.tracking.updateIntervalSec, earlyStartMinutes: s.tracking.earlyStartMinutes, endGraceMinutes: s.tracking.endGraceMinutes },
         acknowledged: user.role === 'EMPLOYEE' ? await hasAcknowledgedNotice(user.id, user.orgId) : true,
       };

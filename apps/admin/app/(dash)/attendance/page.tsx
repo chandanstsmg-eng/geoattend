@@ -307,7 +307,8 @@ function RecordDetail({ id }: { id: string }) {
     onSuccess: (r: any) => { setPhoto(r); setPhotoErr(null); },
     onError: (e) => setPhotoErr(errorMessage(e)),
   });
-  const correct = useMutation({ meta: { success: 'Record corrected' },
+  const { isOwner } = useMe();
+  const correct = useMutation({ meta: { success: isOwner ? 'Record corrected' : 'Sent to the owner for approval' },
     mutationFn: () => post(`/attendance/${id}/corrections`, { reason: corr.reason, ...(corr.verificationStatus ? { verificationStatus: corr.verificationStatus } : {}), ...(corr.isLate ? { isLate: corr.isLate === 'true', ...(corr.isLate === 'false' ? { lateByMinutes: 0 } : {}) } : {}) }),
     onSuccess: () => { setCorr({ reason: '', verificationStatus: '', isLate: '' }); refresh(); },
   });
@@ -370,9 +371,9 @@ function RecordDetail({ id }: { id: string }) {
                     <img src={photo.url} alt={`Attendance photo of ${r.full_name}`} className="max-h-80 rounded-md border border-gray-200" referrerPolicy="no-referrer" />
                     {photo.isSimulated && <span className="absolute left-2 top-2 rounded bg-violet-600 px-2 py-0.5 text-xs font-bold text-white">SIMULATED CAPTURE — not a photograph</span>}
                   </div>
-                  <p className="text-xs text-gray-500">Signed link valid for a short time. This view was recorded in the audit log. Retained until {fmtDate(r.photo_retention_until)}.</p>
+                  <p className="text-xs text-gray-500">Signed link valid for a short time. This view was recorded in the audit log. Retention date {fmtDate(r.photo_retention_until)}.</p>
                   <FaceCheck record={r} />
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>Delete photo…</Button>
+                  {isOwner && <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>Delete photo…</Button>}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -388,7 +389,7 @@ function RecordDetail({ id }: { id: string }) {
               )}
             </Card>
 
-            <Card title="Correct this record">
+            <Card title="Correct this record" description={isOwner ? undefined : 'Your correction goes to the owner. The record does not change until it is approved.'}>
               <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); correct.mutate(); }}>
                 <Field label="Verification status">
                   <Select value={corr.verificationStatus} onChange={(e) => setCorr({ ...corr, verificationStatus: e.target.value })}>
@@ -407,7 +408,7 @@ function RecordDetail({ id }: { id: string }) {
                   <Field label="Reason (required, audited)"><Textarea required minLength={5} value={corr.reason} onChange={(e) => setCorr({ ...corr, reason: e.target.value })} /></Field>
                 </div>
                 <div className="sm:col-span-2"><InlineError error={correct.error} /></div>
-                <div className="sm:col-span-2"><Button type="submit" variant="primary" loading={correct.isPending}>Apply correction</Button></div>
+                <div className="sm:col-span-2"><Button type="submit" variant="primary" loading={correct.isPending}>{isOwner ? 'Apply correction' : 'Send for approval'}</Button></div>
               </form>
             </Card>
 
@@ -421,7 +422,7 @@ function RecordDetail({ id }: { id: string }) {
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge tone="navy">{h.kind.replace('_', ' ').toLowerCase()}</Badge>
                         <Badge>{h.status.toLowerCase()}</Badge>
-                        <span className="text-xs text-gray-500">{fmtDateTime(h.created_at)} · {h.by_name}</span>
+                        <span className="text-xs text-gray-500">{fmtDateTime(h.created_at)} · {h.kind === 'ADMIN_CORRECTION' ? `requested by ${h.requested_by_name}${h.resolved_by_name ? `, decided by ${h.resolved_by_name}` : ''}` : h.by_name}</span>
                       </div>
                       <p className="mt-1 text-gray-700">{h.reason}</p>
                       {h.resolution_note && <p className="mt-1 text-xs text-gray-500">Resolution: {h.resolution_note}</p>}
@@ -448,7 +449,13 @@ function RecordDetail({ id }: { id: string }) {
   );
 }
 
+/** What a supervisor's correction would change, in words. */
+function proposal(p: any) {
+  return [p?.verificationStatus && `status to ${p.verificationStatus.replace('_', ' ').toLowerCase()}`, p?.recordedAt && `arrival to ${fmtDateTime(p.recordedAt)}`, p?.isLate != null && (p.isLate ? 'mark late' : 'mark not late')].filter(Boolean).join(', ');
+}
+
 function Reviews() {
+  const { isOwner } = useMe();
   const qc = useQueryClient();
   const [status, setStatus] = useState('OPEN');
   const list = useQuery({ queryKey: ['reviews', status], queryFn: () => get<any[]>(`/attendance/reviews${qs({ status })}`) });
@@ -485,11 +492,14 @@ function Reviews() {
                   <Td className="max-w-md text-sm">
                     {r.reason}
                     {r.kind === 'MANUAL_REVIEW' && r.before_data && <div className="mt-1 text-xs text-gray-500">At request: {r.before_data.state?.toLowerCase().replaceAll('_', ' ')}, {metres(r.before_data.lastDistanceM)} ±{r.before_data.lastAccuracyM ? Math.round(r.before_data.lastAccuracyM) : '?'} m</div>}
+                    {r.kind === 'ADMIN_CORRECTION' && <div className="mt-1 text-xs text-gray-500">Requested by {r.requested_by_name}{r.status === 'OPEN' && proposal(r.after_data) ? `: ${proposal(r.after_data)}` : ''}</div>}
                     {r.resolution_note && <div className="mt-1 text-xs text-gray-500">Resolution: {r.resolution_note} {r.resolved_by_name && `— ${r.resolved_by_name}`}</div>}
                   </Td>
                   <Td><Badge>{r.status.toLowerCase()}</Badge></Td>
                   <Td className="whitespace-nowrap">
-                    {r.status === 'OPEN' && (r.kind === 'TECHNICAL_ISSUE' ? (
+                    {r.status === 'OPEN' && (r.kind === 'ADMIN_CORRECTION' && !isOwner ? (
+                      <span className="text-xs text-gray-500">Waiting for the owner</span>
+                    ) : r.kind === 'TECHNICAL_ISSUE' ? (
                       <Button size="sm" onClick={() => setActing({ r, decision: 'ACKNOWLEDGE' })}>Acknowledge</Button>
                     ) : (
                       <div className="flex gap-1">
@@ -508,7 +518,7 @@ function Reviews() {
         open={!!acting}
         onOpenChange={(o) => !o && setActing(null)}
         title={acting ? `${acting.decision === 'APPROVE' ? 'Approve' : acting.decision === 'REJECT' ? 'Reject' : 'Acknowledge'} request` : ''}
-        description={acting?.r.kind === 'MANUAL_REVIEW' && acting.decision === 'APPROVE' ? 'Approving creates a MANUAL_APPROVED attendance record using the last known location as evidence.' : acting?.r.kind === 'DISPUTE' && acting.decision === 'APPROVE' ? 'Accepting a dispute marks it resolved; apply the actual change with a correction on the record.' : 'Your note is shown to the employee and kept in the audit log.'}
+        description={acting?.r.kind === 'ADMIN_CORRECTION' && acting.decision === 'APPROVE' ? 'Approving applies the change. The original record, who asked and who approved are all kept.' : acting?.r.kind === 'MANUAL_REVIEW' && acting.decision === 'APPROVE' ? 'Approving creates a MANUAL_APPROVED attendance record using the last known location as evidence.' : acting?.r.kind === 'DISPUTE' && acting.decision === 'APPROVE' ? 'Accepting a dispute marks it resolved; apply the actual change with a correction on the record.' : 'Your note is shown to the employee and kept in the audit log.'}
       >
         <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); resolve.mutate(); }}>
           <Field label="Note (required)"><Textarea required minLength={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>

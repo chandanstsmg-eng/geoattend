@@ -12,7 +12,7 @@ import { distanceMeters, isValidLatLng, OPEN_STATES, STATE_LABELS, TRACKING_STAT
 import { one, q, tx, type Queryable } from '../../db/pool.js';
 import { HttpError, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { currentInstance, nextInstance, type DateRange } from '../../lib/shift-window.js';
-import { getSettings, hasAcknowledgedNotice, orgOfUser, type Settings } from '../settings/settings.service.js';
+import { getSettings, photoDeletionAllowed, hasAcknowledgedNotice, orgOfUser, type Settings } from '../settings/settings.service.js';
 import { challengeFor } from '../faces/faces.js';
 import { config } from '../../config.js';
 import { createUploadUrl, deleteObject, inspectObject, newObjectKey } from '../../lib/storage.js';
@@ -720,7 +720,7 @@ async function attachEndPhoto(db: pg.PoolClient, s: any, photoId: string) {
       [p.id, obj.sizeBytes, obj.sha256, settings.retention.photoDays],
       db,
     );
-  } else {
+  } else if (photoDeletionAllowed(settings)) {
     await deleteObject(p.object_key);
     await q(`UPDATE attendance_photos SET status = 'DELETED', deleted_at = now(), deleted_reason = 'no attendance to verify' WHERE id = $1`, [p.id], db);
   }

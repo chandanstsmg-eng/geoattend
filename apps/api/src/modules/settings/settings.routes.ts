@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { config } from '../../config.js';
 import { mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
-import { badRequest } from '../../lib/errors.js';
+import { badRequest, conflict } from '../../lib/errors.js';
 import { runRetention } from '../jobs/retention.js';
 import { GEOFENCE_FLOOR_M, getSettings, saveSettingsSection, settingsSchema, type Settings } from './settings.service.js';
 
@@ -23,6 +23,7 @@ mount(settingsRouter, '/api/v1/settings', 'settings', [
         webPush: !!config.push.vapidPrivateKey,
         email: !!config.email.smtpUrl,
         expoPush: config.push.expoPushEnabled,
+        photoAutoDelete: config.photoAutoDeleteEnabled,
       },
     }),
   }),
@@ -43,6 +44,9 @@ mount(settingsRouter, '/api/v1/settings', 'settings', [
       if (section === 'geofence' && value.minRadiusM > value.maxRadiusM) throw badRequest('BAD_RANGE', 'Minimum radius must not exceed maximum.');
       if (section === 'geofence' && (value.minRadiusM < GEOFENCE_FLOOR_M || value.presetsM.some((p: number) => p < GEOFENCE_FLOOR_M)))
         throw badRequest('RADIUS_TOO_SMALL', `Geofences smaller than ${GEOFENCE_FLOOR_M} m lock out genuine workers (indoor GPS is often ±30–60 m).`);
+      if (section === 'retention' && value.photoAutoDelete && !config.photoAutoDeleteEnabled) {
+        throw conflict('PHOTO_DELETION_ON_HOLD', 'Automatic photo deletion is on hold until the retention rules have been legally reviewed.');
+      }
       if (section === 'privacy') {
         // Any change to the notice text creates a new version that employees must acknowledge.
         const changed = value.text !== before.privacy.text || value.controller !== before.privacy.controller || value.contact !== before.privacy.contact;

@@ -29,7 +29,7 @@ export default function PrivacyPage() {
                 <KeyValue
                   items={[
                     ['Location history', `${d.retention.locationDays} days, then deleted automatically`],
-                    ['Attendance photos', `${d.retention.photoDays} days, then deleted automatically`],
+                    ['Attendance photos', d.retention.photoAutoDelete ? `${d.retention.photoDays} days, then deleted automatically` : `Retention date ${d.retention.photoDays} days after capture. Not deleted automatically yet`],
                     ['Attendance records', 'Kept for payroll and legal record keeping'],
                     ['Location updates', `About every ${Math.round(d.tracking.updateIntervalSec)} s, only during an active shift or overtime`],
                     ['Tracking window', `From ${d.tracking.earlyStartMinutes} min before a shift until ${d.tracking.endGraceMinutes} min after it`],

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { NOTIFICATION_TYPES } from '@geoattend/shared';
+import { config } from '../../config.js';
 import { one, q, type Queryable } from '../../db/pool.js';
 
 export const trackingSchema = z.object({
@@ -52,6 +53,8 @@ export const alertsSchema = z.object({
 export const retentionSchema = z.object({
   locationDays: z.number().int().min(1).max(3650),
   photoDays: z.number().int().min(1).max(3650),
+  /** The company's choice to delete photos after photoDays. Has no effect while the server switch is off. */
+  photoAutoDelete: z.boolean(),
   notificationDays: z.number().int().min(7).max(3650),
 });
 
@@ -157,7 +160,8 @@ Who can see it
 • Administrators of your organisation. Every view of location history or attendance photos by an administrator is recorded in an audit log.
 
 How long it is kept
-• Raw location history and attendance photos are deleted automatically after the retention periods configured by your organisation (shown below).
+• Raw location history is deleted automatically after the period configured by your organisation (shown below).
+• Attendance photos are kept for the period shown below. They are deleted automatically only if that has been switched on, which is also shown below.
 • Attendance records (times, verification status) are kept for payroll and legal record keeping.
 
 Your choices
@@ -202,7 +206,7 @@ export const DEFAULT_SETTINGS: Settings = {
     webPushTypes: ['BREAK_OVERDUE', 'PROLONGED_ABSENCE', 'TRACKING_INTERRUPTED', 'PERMISSION_REVOKED', 'DUPLICATE_SUBMISSION', 'MANUAL_REVIEW_REQUESTED', 'LATE_ARRIVAL', 'NO_SHOW', 'LEAVE_REQUESTED'],
     emailTypes: ['PROLONGED_ABSENCE', 'MANUAL_REVIEW_REQUESTED', 'NO_SHOW'],
   },
-  retention: { locationDays: 90, photoDays: 180, notificationDays: 365 },
+  retention: { locationDays: 90, photoDays: 180, photoAutoDelete: false, notificationDays: 365 },
   // 100 m by default: smaller circles reject genuine workers whose phones report ±30–60 m indoors.
   geofence: { presetsM: [50, 100, 200, 500], minRadiusM: 50, maxRadiusM: 1000 },
   // Version 2: overtime (tracking after the shift, anywhere, until the employee ends it).
@@ -233,6 +237,9 @@ export async function getSettings(orgId: string, db?: Queryable): Promise<Settin
   cache.set(orgId, parsed);
   return parsed;
 }
+
+/** Whether anything may delete this company's photos on its own: the server switch and the company's choice. */
+export const photoDeletionAllowed = (s: Pick<Settings, 'retention'>) => config.photoAutoDeleteEnabled && s.retention.photoAutoDelete;
 
 export function invalidateSettings(orgId?: string) {
   if (orgId) cache.delete(orgId);

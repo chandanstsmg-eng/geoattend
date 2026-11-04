@@ -1,5 +1,7 @@
 # Deployment
 
+What must exist outside this repository, and what has really been tested: [EXTERNAL-DEPENDENCIES.md](EXTERNAL-DEPENDENCIES.md).
+
 > The Dockerfiles and `docker-compose.yml` were written for this project but **have not been built or run here** (Docker is not installed on the development machine). Build them in a test environment before relying on them.
 
 ## Production requirements
@@ -50,7 +52,7 @@ See `.env.example` for every variable with comments. Key production values:
 1. Create a bucket with *Block all public access*.
 2. CORS on the bucket: allow `PUT` from any origin is **not** needed for the native app; add the dashboard origin for `GET` only if you serve images cross-origin.
 3. The API issues pre-signed `PUT` URLs (5 min, content type and length signed) and pre-signed `GET` URLs (2 min). After upload the API re-reads the object's size and first bytes to confirm it is a real JPEG/PNG.
-4. Lifecycle rule (defence in depth): expire objects older than your photo retention + 30 days.
+4. No lifecycle rule that expires objects: it would delete employee photos without the application knowing, and automatic photo deletion is on hold until the legal review. See [EXTERNAL-DEPENDENCIES.md](EXTERNAL-DEPENDENCIES.md).
 
 Uploads, signed downloads, deletion, private access and outages are tested against a local SeaweedFS server (pps/api/test/s3-storage.test.ts, run with `S3_TEST_ENDPOINT`). **No cloud provider has been tested yet**; run that test against yours before launch.
 

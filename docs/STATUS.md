@@ -126,3 +126,13 @@ See [MIGRATIONS.md](MIGRATIONS.md) for 022. Regression tests: `security.test.ts`
 - `TRUST_PROXY` is parsed correctly; login limits are per address and account.
 - S3: uploads are confirmed against the bucket, signed links work, face checks use the configured credentials, outages answer 503. Tested on SeaweedFS, not on a cloud provider.
 - Production refuses to start with placeholder or missing settings, or with payroll on. Docker files are updated but have never been built.
+
+## Owner's decisions on Phase C (4 Nov 2026)
+
+Regression tests: `corrections-and-photos.test.ts`. External requirements: [EXTERNAL-DEPENDENCIES.md](EXTERNAL-DEPENDENCIES.md).
+
+- Voided records stay as history and count in no attendance, hours, lateness, overtime or pay figure. Overtime on a voided shift stays recorded but leaves every total and the approval queue, and cannot be approved.
+- A supervisor's correction is a request: mandatory reason, nothing changes until an owner approves. The full record before and after, who asked and who approved are kept. An owner's own correction applies at once.
+- Rejecting a face check still voids the record at once, for supervisors too. It is audited and has history, but does not wait for an owner.
+- Only a company owner can delete a photo, with a reason, audited.
+- Each company sets its own photo period. Automatic photo deletion is on hold: it needs `PHOTO_AUTO_DELETE_ENABLED=true` and the company's setting, after legal review.

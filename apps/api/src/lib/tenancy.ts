@@ -52,6 +52,9 @@ export async function assertInOrg(scope: Scope, id: string, orgId: string, sites
  * SQL condition limiting rows to a supervisor's sites; always true for owners.
  * `param` is the placeholder that will hold `user.sites` (null for owners).
  */
+/** SQL: this overtime entry counts, i.e. its shift's attendance was not voided. The entry itself stays as history. */
+export const overtimeCounts = (o = 'o') => `NOT EXISTS (SELECT 1 FROM attendance_records voided WHERE voided.id = ${o}.attendance_id AND voided.verification_status = 'VOIDED')`;
+
 export const siteFilter = (workplaceExpr: string, param: string) => `(${param}::uuid[] IS NULL OR ${workplaceExpr} = ANY(${param}::uuid[]))`;
 
 /**

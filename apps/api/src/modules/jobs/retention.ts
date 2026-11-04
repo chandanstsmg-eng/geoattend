@@ -1,7 +1,7 @@
 /**
- * Data retention. Raw location history and attendance photos are deleted after
- * each company's configured periods; attendance records themselves (times, status,
- * evidence summary) are kept for payroll/legal record keeping.
+ * Data retention. Raw location history is deleted after each company's configured
+ * period; attendance records themselves (times, status, evidence summary) are kept for
+ * payroll/legal record keeping. Photos are deleted only where photoDeletionAllowed() says so.
  * Each run is summarised in that company's audit log.
  */
 import { q } from '../../db/pool.js';
@@ -9,7 +9,7 @@ import { audit } from '../../lib/audit.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { deleteObject } from '../../lib/storage.js';
 import { logger } from '../../lib/logger.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, photoDeletionAllowed } from '../settings/settings.service.js';
 
 /** Runs retention for one company, or for every company when `orgId` is omitted. */
 export async function runRetention(actor: AuthUser | null = null, orgId?: string, now = new Date()) {
@@ -22,7 +22,8 @@ export async function runRetention(actor: AuthUser | null = null, orgId?: string
 }
 
 async function runForOrg(orgId: string, actor: AuthUser | null, now: Date) {
-  const { retention } = await getSettings(orgId);
+  const settings = await getSettings(orgId);
+  const { retention } = settings;
   const inOrg = `employee_id IN (SELECT id FROM users WHERE org_id = $3)`;
 
   // 1. Raw location history (only of closed sessions — never cut a live session's trail).
@@ -45,8 +46,11 @@ async function runForOrg(orgId: string, actor: AuthUser | null, now: Date) {
        OR (status IN ('PENDING_UPLOAD', 'UPLOADED', 'EXPIRED') AND created_at < $1::timestamptz - interval '1 day'))`,
     [now, orgId],
   );
+  // On hold, the photos stay and are only counted, so the run can say what is waiting.
+  const deleting = photoDeletionAllowed(settings);
+  const photosHeld = deleting ? 0 : photos.length;
   let photosDeleted = 0;
-  for (const p of photos) {
+  for (const p of deleting ? photos : []) {
     try {
       await deleteObject(p.object_key);
       await q(`UPDATE attendance_photos SET status = 'DELETED', deleted_at = now(), deleted_reason = 'retention policy' WHERE id = $1`, [p.id]);
@@ -59,7 +63,7 @@ async function runForOrg(orgId: string, actor: AuthUser | null, now: Date) {
   // 3. Old notifications.
   const notes = await q(`DELETE FROM notifications WHERE created_at < $1::timestamptz - make_interval(days => $2) AND org_id = $3 RETURNING id`, [now, retention.notificationDays, orgId]);
 
-  const summary = { locationUpdatesDeleted: loc.length, photosDeleted, notificationsDeleted: notes.length, policy: retention };
+  const summary = { locationUpdatesDeleted: loc.length, photosDeleted, photosHeld, notificationsDeleted: notes.length, policy: retention };
   if (actor || loc.length || photosDeleted || notes.length) {
     await audit({ actor, orgId, action: 'retention.run', resourceType: 'retention', after: summary });
   }

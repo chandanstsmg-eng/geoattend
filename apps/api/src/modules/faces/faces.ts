@@ -22,7 +22,7 @@ import { deleteObject, readObject } from '../../lib/storage.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
 import { bestMatch, faceEngine } from './engine.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, photoDeletionAllowed } from '../settings/settings.service.js';
 
 export const CHALLENGES = [
   { en: 'Hold up two fingers', hi: 'दो उंगलियाँ दिखाएँ' },
@@ -98,7 +98,8 @@ export async function sweepFaceChecks(limit = 10) {
         if (result.status === 'MATCH') {
           // Verified. The photo stays as evidence until the retention period ends, unless the
           // company chose to keep only the result and the score.
-          if (!(await getSettings(r.org_id)).workforce.keepMatchedPhotos) await discardPhoto(photoId, key, 'face matched — photo not kept');
+          const settings = await getSettings(r.org_id);
+          if (!settings.workforce.keepMatchedPhotos && photoDeletionAllowed(settings)) await discardPhoto(photoId, key, 'face matched — photo not kept');
         } else if (result.status === 'MISMATCH' || result.status === 'NO_FACE') {
           await q(
             `UPDATE attendance_records SET face_review = 'PENDING', risk_flags = CASE WHEN $2 = ANY(risk_flags) THEN risk_flags ELSE array_append(risk_flags, $2) END
