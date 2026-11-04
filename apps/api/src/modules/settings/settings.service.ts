@@ -86,6 +86,8 @@ export const workforceSchema = z.object({
   roundingMinutes: z.union([z.literal(0), z.literal(5), z.literal(6), z.literal(10), z.literal(15), z.literal(30)]),
   /** Regular time above this many hours in a Monday–Sunday week counts as overtime in reports (0 = off). */
   weeklyRegularHours: z.number().min(0).max(168),
+  /** Company overtime rate: the default for new pay setups. A company policy, not a statutory calculation. */
+  overtimeMultiplier: z.number().min(0).max(5),
   /**
    * Keep check-in selfies after the face check matches (until the photo retention period ends).
    * Off: a matched photo is deleted at once and only the result and score are kept.
@@ -205,7 +207,7 @@ export const DEFAULT_SETTINGS: Settings = {
   geofence: { presetsM: [50, 100, 200, 500], minRadiusM: 50, maxRadiusM: 1000 },
   // Version 2: overtime (tracking after the shift, anywhere, until the employee ends it).
   privacy: { version: 2, controller: 'Your organisation (configure in Settings)', contact: 'hr@example.com', text: DEFAULT_PRIVACY_TEXT },
-  workforce: { deviceBinding: 'ENFORCE', overtimeMinMinutes: 15, leftEarlyMinutes: 15, faceEnrollment: 'REQUIRED', supervisorAnnouncements: true, roundingMinutes: 0, weeklyRegularHours: 0, keepMatchedPhotos: true },
+  workforce: { deviceBinding: 'ENFORCE', overtimeMinMinutes: 15, leftEarlyMinutes: 15, faceEnrollment: 'REQUIRED', supervisorAnnouncements: true, roundingMinutes: 0, weeklyRegularHours: 0, overtimeMultiplier: 1, keepMatchedPhotos: true },
   digest: { times: ['10:00', '19:00'], whatsappNumbers: [], emailRecipients: [], monthlyReport: true },
   breaks: {
     types: [

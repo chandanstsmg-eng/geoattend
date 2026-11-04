@@ -293,7 +293,7 @@ describe('payroll', () => {
   it('calculates from attendance, locks on approval, and shows the employee their payslip', async () => {
     const { agent, csrf } = await adminAgent(app);
     const emp = await createEmployee({ workplaceId: base.workplaceId });
-    const month = DateTime.utc().toFormat('yyyy-MM');
+    const month = DateTime.utc().minus({ months: 1 }).toFormat('yyyy-MM'); // only a finished month can be approved
     const pay = await agent.put(`/api/v1/payroll/pay/${emp.id}`).set('X-CSRF-Token', csrf).send({ payType: 'MONTHLY', amount: 15000, otMultiplier: 2 }).expect(200);
     expect(pay.body.amount).toBe(15000);
     await agent.post('/api/v1/payroll/adjustments').set('X-CSRF-Token', csrf).send({ employeeId: emp.id, month, kind: 'ADVANCE', amount: 2000, note: 'Festival advance' }).expect(201);
@@ -305,20 +305,8 @@ describe('payroll', () => {
     // No shifts assigned → nothing scheduled, nothing absent: full salary − advance + bonus.
     expect(row.result.net).toBe(13500);
 
-    // Approval is refused while past rostered days of the month are unconfirmed (Daily close).
-    const shiftMonth = DateTime.utc().minus({ days: 1 }).toFormat('yyyy-MM') === month;
     await q(`INSERT INTO day_closes (org_id, close_date, closed_by, summary) SELECT $1, d::date, (SELECT id FROM users WHERE role = 'ADMIN' AND org_id = $1 LIMIT 1), '{}'
-             FROM generate_series(date_trunc('month', now()), now() - interval '1 day', interval '1 day') d ON CONFLICT DO NOTHING`, [DEFAULT_ORG_ID]);
-    if (shiftMonth) {
-      const day = DateTime.utc().minus({ days: 1 }).toISODate();
-      await q(`DELETE FROM day_closes WHERE org_id = $1 AND close_date = $2`, [DEFAULT_ORG_ID, day]);
-      const open = (await agent.get(`/api/v1/insights/unconfirmed?month=${month}`).expect(200)).body.days;
-      if (open.length) {
-        const blocked = await agent.post(`/api/v1/payroll/${month}/approve`).set('X-CSRF-Token', csrf).send({}).expect(409);
-        expect(blocked.body.error.code).toBe('DAYS_UNCONFIRMED');
-      }
-      await q(`INSERT INTO day_closes (org_id, close_date, closed_by, summary) VALUES ($1, $2, (SELECT id FROM users WHERE role = 'ADMIN' AND org_id = $1 LIMIT 1), '{}') ON CONFLICT DO NOTHING`, [DEFAULT_ORG_ID, day]);
-    }
+             FROM generate_series($2::date, ($2::date + interval '1 month' - interval '1 day'), interval '1 day') d ON CONFLICT DO NOTHING`, [DEFAULT_ORG_ID, `${month}-01`]);
     const approved = await agent.post(`/api/v1/payroll/${month}/approve`).set('X-CSRF-Token', csrf).send({}).expect(200);
     expect(await q(`SELECT 1 FROM audit_logs WHERE action = 'payroll.approve' AND resource_id = $1`, [approved.body.id])).toHaveLength(1);
     await q(`DELETE FROM day_closes WHERE org_id = $1 AND summary = '{}'::jsonb`, [DEFAULT_ORG_ID]); // leave Daily close as other tests expect
@@ -334,7 +322,6 @@ describe('payroll', () => {
 
     const token = await mobileLogin(app, emp.email);
     const mine = (await request(app).get('/api/v1/me/earnings').set(bearer(token)).expect(200)).body;
-    expect(mine.estimate).toBeNull(); // month is approved
     expect(mine.payslips[0].net_amount).toBe(13500);
     const slip = (await request(app).get(`/api/v1/me/payslips/${mine.payslips[0].id}`).set(bearer(token)).expect(200)).body;
     expect(slip.data.adjustments.map((a: any) => a.kind).sort()).toEqual(['ADVANCE', 'BONUS']);

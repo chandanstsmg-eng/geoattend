@@ -10,6 +10,8 @@ export interface Me {
   demoMode: boolean;
   /** The generated sample company (a *_demo database): show the sample-data banner and chip. */
   sampleData?: boolean;
+  /** Parts of the product switched on for this server. */
+  features?: { payroll: boolean };
 }
 
 /** The signed-in administrator (shared cache with the dashboard layout). */

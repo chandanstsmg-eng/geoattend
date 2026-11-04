@@ -106,16 +106,17 @@ function RosterList({ e, onChanged }: { e: any; onChanged: () => void }) {
 }
 
 function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
+  const { me } = useMe();
   const wps = useWorkplaces();
   const sups = useSupervisors();
-  const [form, setForm] = useState({ fullName: e.full_name, email: e.email, employeeCode: e.employee_code, phone: e.phone ?? '', department: e.department ?? '', designation: e.designation ?? '' });
+  const [form, setForm] = useState({ fullName: e.full_name, email: e.email, employeeCode: e.employee_code, phone: e.phone ?? '', department: e.department ?? '', designation: e.designation ?? '', joinedOn: e.joined_on ?? '', leftOn: e.left_on ?? '' });
   const assignSup = useMutation({ meta: { success: 'Supervisor changed', toastError: true }, mutationFn: (supervisorId: string | null) => put(`/employees/${e.id}/supervisor`, { supervisorId }), onSuccess: onChanged });
   const [reasonFor, setReasonFor] = useState<null | 'deactivate'>(null);
   const [reason, setReason] = useState('');
   const [tempPw, setTempPw] = useState<string | null>(null);
 
   const update = useMutation({ meta: { success: 'Employee saved' },
-    mutationFn: () => patch(`/employees/${e.id}`, { ...form, phone: form.phone || null, department: form.department || null, designation: form.designation || null }),
+    mutationFn: () => patch(`/employees/${e.id}`, { ...form, phone: form.phone || null, department: form.department || null, designation: form.designation || null, joinedOn: form.joinedOn || null, leftOn: form.leftOn || null }),
     onSuccess: onChanged,
   });
   const assignWp = useMutation({ meta: { success: 'Workspace changed', toastError: true }, mutationFn: (workplaceId: string | null) => put(`/employees/${e.id}/workplace`, { workplaceId }), onSuccess: onChanged });
@@ -141,6 +142,8 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
           <Field label="Phone"><Input value={form.phone} onChange={set('phone')} /></Field>
           <Field label="Department"><Input value={form.department} onChange={set('department')} /></Field>
           <Field label="Designation"><Input value={form.designation} onChange={set('designation')} /></Field>
+          <Field label="Joining date"><Input type="date" value={form.joinedOn} onChange={set('joinedOn')} /></Field>
+          <Field label="Last working day"><Input type="date" value={form.leftOn} onChange={set('leftOn')} /></Field>
           <div className="sm:col-span-2 flex items-center gap-2">
             <Button type="submit" variant="primary" loading={update.isPending}>Save profile</Button>
             {update.isSuccess && <span className="text-xs text-teal-700">Saved</span>}
@@ -173,9 +176,11 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
         </div>
       </Card>
 
-      <Card title="Salary">
-        <PayForm employeeId={e.id} />
-      </Card>
+      {me?.features?.payroll && (
+        <Card title="Salary">
+          <PayForm employeeId={e.id} />
+        </Card>
+      )}
 
       <FaceCard employeeId={e.id} />
       <PhonesCard employeeId={e.id} />

@@ -4,6 +4,7 @@
  * suppresses no-show alerts and shows as "On leave" on the overview roster.
  */
 import { Router } from 'express';
+import { assertPayrollMonthOpen } from '../payroll/guard.js';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { LEAVE_STATUSES, LEAVE_TYPES, LEAVE_TYPE_LABELS } from '@geoattend/shared';
@@ -213,6 +214,8 @@ mount(leaveRouter, '/api/v1/leave', 'leave', [
         const l = await one('SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE', [params.id], db);
         if (!l) throw notFound('Leave request');
         if (l.status !== 'PENDING') throw conflict('LEAVE_CLOSED', `This request is already ${l.status.toLowerCase()}.`);
+        await assertPayrollMonthOpen(user.orgId, l.start_date, db);
+        await assertPayrollMonthOpen(user.orgId, l.end_date, db);
         await q(`UPDATE leave_requests SET status = $2, decided_by = $3, decided_at = now(), decision_note = $4, updated_at = now() WHERE id = $1`, [params.id, body.decision, user.id, body.note ?? null], db);
         await audit({ actor: user, action: body.decision === 'APPROVED' ? 'leave.approve' : 'leave.reject', resourceType: 'leave_request', resourceId: params.id, before: { status: l.status }, after: { status: body.decision }, reason: body.note, req }, db);
         const range = fmtRange(l.start_date, l.end_date);

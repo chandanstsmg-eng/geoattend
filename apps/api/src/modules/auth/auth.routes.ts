@@ -135,7 +135,7 @@ mount(authRouter, '/api/v1/auth', 'auth', [
       const access = user.access ? { role: user.access, sites: user.sites, awayUntil: (await one('SELECT away_until FROM administrator_profiles WHERE user_id = $1', [user.id]))?.away_until ?? null } : null;
       // What the dashboard may offer this administrator (the API enforces the same rules).
       const permissions = user.access ? { publishAnnouncements: user.access === 'OWNER' || (await getSettings(user.orgId)).workforce.supervisorAnnouncements } : null;
-      return { user: publicUser(u), organization: org, access, permissions, demoMode: hasDemo && user.access !== 'SUPERVISOR', sampleData };
+      return { user: publicUser(u), organization: org, access, permissions, demoMode: hasDemo && user.access !== 'SUPERVISOR', sampleData, features: { payroll: config.payrollEnabled } };
     },
   }),
   route({

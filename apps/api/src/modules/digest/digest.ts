@@ -1,7 +1,7 @@
 /**
  * Daily summaries for owners who never open a laptop: at the company's chosen local
  * times, "who's in, who's missing, what needs me" goes to WhatsApp and e-mail. On the
- * 1st, last month's summary (CSV) is e-mailed for payroll / the accountant.
+ * 1st, last month's attendance summary (CSV) is e-mailed to the chosen recipients.
  * Each slot is claimed in digest_runs first, so it is sent at most once.
  */
 import nodemailer from 'nodemailer';
@@ -159,7 +159,7 @@ export async function sweepDigests(now = new Date()) {
           );
           const monthName = DateTime.fromISO(`${month}-01`).toFormat('LLLL yyyy');
           const result = await senders
-            .email(digest.emailRecipients, `[GeoAttend] ${org.name} — attendance for ${monthName}`, `Attached: attendance summary for ${monthName} (${s.rows.length} employees), ready for payroll.\n\nOpen the dashboard: ${config.dashboardUrl}/payroll`, [{ filename: `attendance_${month}.csv`, content: csv }])
+            .email(digest.emailRecipients, `[GeoAttend] ${org.name} — attendance for ${monthName}`, `Attached: attendance summary for ${monthName} (${s.rows.length} employees).\n\nOpen the dashboard: ${config.dashboardUrl}`, [{ filename: `attendance_${month}.csv`, content: csv }])
             .catch((e: Error) => `failed: ${e.message}`);
           await record(orgId, slot, { email: result });
         }

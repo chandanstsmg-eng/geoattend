@@ -526,10 +526,13 @@ function Reviews() {
 function ManualDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const emps = useEmployees();
-  const [f, setF] = useState({ employeeId: '', shiftId: '', shiftDate: todayISO(), recordedAt: localDateTime(), reason: '' });
+  const [f, setF] = useState({ employeeId: '', shiftId: '', shiftDate: todayISO(), recordedAt: localDateTime(), workedHours: '', reason: '' });
   const emp = emps.data?.find((e: any) => e.id === f.employeeId);
   const create = useMutation({ meta: { success: 'Attendance added' },
-    mutationFn: () => post('/attendance/manual', { ...f, recordedAt: new Date(f.recordedAt).toISOString() }),
+    mutationFn: () => {
+      const { workedHours, ...rest } = f;
+      return post('/attendance/manual', { ...rest, recordedAt: new Date(f.recordedAt).toISOString(), workedMinutes: workedHours ? Math.round(Number(workedHours) * 60) : undefined });
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['attendance'] }); qc.invalidateQueries({ queryKey: ['overview'] }); onClose(); },
   });
   return (
@@ -553,6 +556,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
         </div>
         <Field label="Shift date"><Input type="date" required value={f.shiftDate} onChange={(e) => setF({ ...f, shiftDate: e.target.value })} /></Field>
         <Field label="Attendance time"><Input type="datetime-local" required value={f.recordedAt} onChange={(e) => setF({ ...f, recordedAt: e.target.value })} /></Field>
+        <Field label="Hours worked (optional)" hint="Without this the day counts, but its hours stay unmeasured."><Input type="number" min={0} max={24} step="0.25" value={f.workedHours} onChange={(e) => setF({ ...f, workedHours: e.target.value })} /></Field>
         <div className="sm:col-span-2"><Field label="Reason (required)"><Textarea required minLength={5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
         <div className="sm:col-span-2"><InlineError error={create.error} /></div>
         <div className="sm:col-span-2 flex justify-end gap-2">
