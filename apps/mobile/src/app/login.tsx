@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError } from '../lib/api/client';
 import { useAuth } from '../lib/auth';
 import { API_URL, API_URL_CONFIGURED } from '../lib/config';
+import { useTrackingSnapshot } from '../lib/hooks';
+import { reloadOutbox } from '../lib/sync/outbox';
+import { reloadSnapshot } from '../lib/tracking/store';
 import { colors, font, space } from '../lib/theme';
 import { Banner, Button, Card, Field, Gap, Muted } from '../components/ui';
 
@@ -11,7 +14,7 @@ function loginMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.isNetwork) return `${err.message}\n(Server: ${API_URL || 'not configured'})`;
     if (err.code === 'WRONG_APP') return err.message;
-    if (err.code === 'ACCOUNT_LOCKED' || err.code === 'RATE_LIMITED') return err.message;
+    if (err.code === 'ACCOUNT_LOCKED' || err.code === 'RATE_LIMITED' || err.code.startsWith('DEVICE_')) return err.message;
     if (err.code === 'VALIDATION_FAILED' || err.status === 400) return 'Enter a valid email address and your password.';
     return err.message;
   }
@@ -20,6 +23,12 @@ function loginMessage(err: unknown): string {
 
 export default function LoginScreen() {
   const { signIn, notice } = useAuth();
+  const snap = useTrackingSnapshot();
+  useEffect(() => {
+    void reloadSnapshot();
+    void reloadOutbox();
+  }, []);
+  const saved = snap.queueLength + snap.events.filter((e) => e.status === 'PENDING').length;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -54,6 +63,7 @@ export default function LoginScreen() {
           </View>
           <Card>
             {notice ? <Banner tone="warning" title={notice} /> : null}
+            {saved ? <Banner tone="info" title={`${saved} saved item${saved === 1 ? ' is' : 's are'} waiting on this phone`} message="They are sent after you sign in." /> : null}
             {!API_URL_CONFIGURED ? (
               <Banner tone="danger" title="Server address not configured" message="Set EXPO_PUBLIC_API_URL in apps/mobile/.env to your API (LAN IP for development) and restart Metro." />
             ) : null}

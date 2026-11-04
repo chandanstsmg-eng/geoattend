@@ -96,8 +96,9 @@ export function refreshAccessToken(): Promise<string> {
     const res = await rawFetch('/api/v1/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: t.refreshToken }) }, 20_000);
     if (!res.ok) {
       const err = await toApiError(res);
-      // 4xx: the refresh token is invalid / revoked / expired — the user must sign in again.
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) await authLost(err.code);
+      // Only these mean the refresh token is invalid, revoked or expired. Anything else is a passing problem,
+      // and treating it as a lost sign-in would throw away a session that still works.
+      if (res.status === 400 || res.status === 401 || res.status === 403) await authLost(err.code);
       throw err;
     }
     const data = (await res.json()) as RefreshResponse;

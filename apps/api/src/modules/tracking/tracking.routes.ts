@@ -141,12 +141,12 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
   route({
     method: 'post',
     path: '/sessions/:id/end',
-    summary: 'End shift — stops location collection (optionally with the end-of-shift selfie)',
+    summary: 'End shift — stops location collection (optionally with the end-of-shift selfie; endedAt when it was ended without a connection)',
     access: 'employee',
     params: idParams,
-    body: z.object({ photoId: z.uuid().optional() }).optional(),
+    body: z.object({ photoId: z.uuid().optional(), endedAt: z.iso.datetime({ offset: true }).optional() }).optional(),
     handler: async ({ user, params, body }) => {
-      await endSession(params.id, user, 'EMPLOYEE', undefined, body?.photoId ?? null);
+      await endSession(params.id, user, 'EMPLOYEE', undefined, body?.photoId ?? null, body?.endedAt ?? null);
       return sessionStatus(params.id);
     },
   }),

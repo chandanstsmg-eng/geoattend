@@ -2,15 +2,17 @@ import { useState } from 'react';
 import { Alert, Linking } from 'react-native';
 import { router } from 'expo-router';
 import { Camera } from 'expo-camera';
+import { randomUUID } from 'expo-crypto';
 import { api, ApiError, errorMessage } from '../../lib/api/client';
 import type { Assignment, SessionStatus } from '../../lib/api/types';
 import { qk, queryClient } from '../../lib/queryClient';
+import { saveCheckOut } from '../../lib/sync/outbox';
 import { flush, sendFreshFix, stopTracking } from '../../lib/tracking/runtime';
 import { Button, ReasonModal } from '../ui';
 
 /**
  * Ends the shift: flush what is queued, POST end (with the end-of-shift selfie when there is
- * one), stop updates, then show the summary. Offline, the employee can stop tracking on the phone.
+ * one), stop updates, then show the summary. Offline, the end time is saved and sent later.
  */
 export async function finishShift(status: SessionStatus, photoId?: string | null): Promise<void> {
   try {
@@ -25,22 +27,28 @@ export async function finishShift(status: SessionStatus, photoId?: string | null
       params: { endedAt: closed.session.endedAt ?? new Date().toISOString(), recordedAt: closed.attendance?.recordedAt ?? '', shiftName: closed.session.shiftName },
     });
   } catch (e) {
-    const offline = e instanceof ApiError && e.isNetwork;
+    const offline = e instanceof ApiError && (e.isNetwork || e.status >= 500);
+    const canSave = (status.tracking.offlineAttendanceHours ?? 0) > 0;
     await new Promise<void>((resolve) =>
       Alert.alert(
         'Could not end the shift',
         offline
-          ? 'The server cannot be reached. You can retry, or stop tracking on this phone now — the server will mark updates as interrupted and close the shift at the end of its window.'
+          ? canSave
+            ? 'The server cannot be reached. You can retry, or end the shift now: this time is saved on the phone and sent when the connection returns.'
+            : 'The server cannot be reached. You can retry, or stop tracking on this phone now — the server will mark updates as interrupted and close the shift at the end of its window.'
           : errorMessage(e),
         offline
           ? [
               { text: 'Retry', onPress: () => void finishShift(status, photoId).then(resolve) },
               {
-                text: 'Stop tracking on this phone',
+                text: canSave ? 'End shift now' : 'Stop tracking on this phone',
                 style: 'destructive',
                 onPress: async () => {
-                  await stopTracking({ reason: 'You stopped tracking on this phone while offline.', notify: false, byUser: true });
-                  router.replace({ pathname: '/completed', params: { endedAt: new Date().toISOString(), offline: '1', shiftName: status.session.shiftName } });
+                  const endedAt = new Date().toISOString();
+                  if (canSave) await saveCheckOut(`end-${randomUUID()}`, status, endedAt);
+                  await stopTracking({ reason: 'You ended your shift while offline.', notify: false, byUser: true });
+                  queryClient.setQueryData(qk.status, null);
+                  router.replace({ pathname: '/completed', params: { endedAt, offline: canSave ? 'saved' : '1', shiftName: status.session.shiftName } });
                   resolve();
                 },
               },
@@ -197,8 +205,8 @@ export function FreshFixButton({ status, title = 'Retry fresh fix' }: { status: 
 }
 
 /** Asks for camera permission only now, when the employee chose to capture. */
-export async function openCaptureFlow(status: SessionStatus) {
-  if (!status.attendanceAvailable) {
+export async function openCaptureFlow(status: SessionStatus, opts: { offline?: boolean } = {}) {
+  if (!status.attendanceAvailable && !opts.offline) {
     Alert.alert('Attendance is locked', 'Attendance is not available yet. Reach the workplace area and wait for verification.');
     return;
   }
@@ -224,5 +232,5 @@ export async function openCaptureFlow(status: SessionStatus) {
     );
     return;
   }
-  router.push('/capture');
+  router.push(opts.offline ? { pathname: '/capture', params: { offline: '1' } } : '/capture');
 }

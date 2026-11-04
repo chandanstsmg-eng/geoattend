@@ -6,9 +6,25 @@ import { fmtDate, fmtTimeSec } from '../../lib/format';
 import { colors, font, space } from '../../lib/theme';
 
 export default function SuccessScreen() {
-  const p = useLocalSearchParams<{ ref?: string; recordedAt?: string; isLate?: string; lateBy?: string; verification?: string; replay?: string }>();
+  const p = useLocalSearchParams<{ ref?: string; recordedAt?: string; isLate?: string; lateBy?: string; verification?: string; replay?: string; pending?: string; capturedAt?: string }>();
   // A short receipt number the employee can quote if anyone says the attendance is missing.
   const receipt = p.ref ? p.ref.replace(/-/g, '').slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2') : null;
+  if (p.pending && p.capturedAt) {
+    // Saved, not recorded: the server has not seen it, so nothing here may read as confirmed.
+    return (
+      <Screen>
+        <View style={st.saved} accessibilityRole="summary" accessibilityLabel={`Check-in saved on this phone at ${fmtTimeSec(p.capturedAt)}. Not recorded yet.`}>
+          <Text style={st.savedTitle}>Saved on this phone</Text>
+          <Text style={st.time}>Taken at: {fmtTimeSec(p.capturedAt)}</Text>
+          <Muted center>Not recorded yet</Muted>
+        </View>
+        <Banner tone="warning" title="No connection" message="Your photo and location are saved. They are sent by themselves when the connection returns, and the server then decides whether the check-in is accepted." />
+        <Body>Do not uninstall the app or clear its data until it has been sent. You can see where it stands in History.</Body>
+        <Button title="Go to live shift" onPress={() => router.replace('/shift')} />
+        <Button title="See history" variant="secondary" onPress={() => router.replace('/history')} />
+      </Screen>
+    );
+  }
   if (!p.recordedAt) {
     // Defensive: never claim success without the server's timestamp.
     return <Redirect href="/shift" />;
@@ -36,6 +52,8 @@ export default function SuccessScreen() {
 }
 
 const st = StyleSheet.create({
+  saved: { alignItems: 'center', gap: space.sm, paddingVertical: space.xl, backgroundColor: colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: colors.warning },
+  savedTitle: { fontSize: font.xxl, fontWeight: '800', color: colors.warning },
   hero: { alignItems: 'center', gap: space.sm, paddingVertical: space.xl, backgroundColor: colors.successSoft, borderRadius: 16, borderWidth: 1.5, borderColor: '#B8E2C5' },
   check: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.success, alignItems: 'center', justifyContent: 'center' },
   checkText: { color: colors.white, fontSize: 40, fontWeight: '800' },

@@ -3,9 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useNetInfo } from '@react-native-community/netinfo';
 import { api, ApiError } from './api/client';
 import type { Assignment, SessionStatus } from './api/types';
-import { qk } from './queryClient';
+import { qk, queryClient } from './queryClient';
 import { reconcile } from './tracking/runtime';
-import { getSnapshot, subscribe } from './tracking/store';
+import { getSnapshot, loadMeta, subscribe } from './tracking/store';
 
 /**
  * The open session's server status (null when no session is open). The query
@@ -16,7 +16,12 @@ export function useStatus(opts: { poll?: boolean } = {}) {
     queryKey: qk.status,
     queryFn: async () => {
       const r = await reconcile();
-      if (r.offline) throw new ApiError(0, 'NETWORK_ERROR', 'Offline — showing the last known status.');
+      if (r.offline) {
+        // After a restart without a connection the screen still needs the shift, to check in or end it.
+        const last = (await loadMeta()).lastStatus;
+        if (last && !queryClient.getQueryData(qk.status)) queryClient.setQueryData(qk.status, last);
+        throw new ApiError(0, 'NETWORK_ERROR', 'Offline — showing the last known status.');
+      }
       return r.status && r.status.tracking.shouldTrack ? r.status : null;
     },
     refetchInterval: opts.poll ? 15_000 : false,

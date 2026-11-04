@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
+import { SavedOnPhone } from '../../../components/SyncStatus';
 import { Badge, Button, Card, DemoBadge, ErrorState, H2, Loading, Muted, ReasonModal, Screen } from '../../../components/ui';
 import { api, errorMessage } from '../../../lib/api/client';
 import type { AttendanceHistory, AttendanceHistoryItem, ReviewItem } from '../../../lib/api/types';
@@ -13,6 +14,7 @@ import { colors, font, space, type Tone } from '../../../lib/theme';
 const hm = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`);
 
 const STATUS_TONE: Record<string, Tone> = { VERIFIED: 'success', MANUAL_APPROVED: 'success', CORRECTED: 'info', DISPUTED: 'warning', VOIDED: 'danger' };
+const STATUS_LABEL: Record<string, string> = { VERIFIED: 'Verified', MANUAL_APPROVED: 'Approved by manager', CORRECTED: 'Corrected', DISPUTED: 'Disputed', VOIDED: 'Not counted' };
 
 /** Overtime after the shift and where its approval stands (only approved overtime is paid). */
 function OvertimeBadge({ a }: { a: AttendanceHistoryItem }) {
@@ -41,7 +43,7 @@ export default function HistoryScreen() {
   };
 
   if (history.isPending) return <Loading label="Loading history…" />;
-  if (!history.data) return <Screen><ErrorState message={errorMessage(history.error)} onRetry={refresh} /></Screen>;
+  if (!history.data) return <Screen><SavedOnPhone /><ErrorState message={errorMessage(history.error)} onRetry={refresh} /></Screen>;
   const { attendance, sessions } = history.data;
   const openDisputes = new Set((reviews.data ?? []).filter((r) => r.kind === 'DISPUTE' && r.status === 'OPEN').map((r) => r.attendance_id));
   const attendedSessionDates = new Set(attendance.map((a) => `${a.shift_date}|${a.shift_name}`));
@@ -49,6 +51,7 @@ export default function HistoryScreen() {
 
   return (
     <Screen onRefresh={refresh} refreshing={history.isFetching}>
+      <SavedOnPhone />
       {attendance.length === 0 ? (
         <Card>
           <H2>No attendance yet</H2>
@@ -65,7 +68,7 @@ export default function HistoryScreen() {
               </Muted>
             </View>
             <DemoBadge show={a.is_simulated} />
-            <Badge label={a.verification_status} tone={STATUS_TONE[a.verification_status] ?? 'neutral'} />
+            <Badge label={STATUS_LABEL[a.verification_status] ?? a.verification_status} tone={STATUS_TONE[a.verification_status] ?? 'neutral'} />
           </View>
           <Text style={st.time}>Recorded at {fmtTime(a.recorded_at)}</Text>
           <Muted>
@@ -84,6 +87,8 @@ export default function HistoryScreen() {
               {a.left_early ? <Badge label="Left early" tone="warning" /> : null}
             </View>
           ) : null}
+          {a.risk_flags?.includes('OFFLINE_CAPTURE') ? <Muted>Saved on your phone without a connection and sent later.</Muted> : null}
+          {a.verification_status === 'VOIDED' ? <Muted>{a.face_review === 'REJECTED' ? `The face check was rejected${a.face_review_note ? `: ${a.face_review_note}` : '.'} Speak to your manager if this is wrong.` : 'This record does not count. Speak to your manager if this is wrong.'}</Muted> : null}
           {a.verification_status === 'DISPUTED' || openDisputes.has(a.id) ? (
             <Muted>Dispute submitted — your administrator will review it.</Muted>
           ) : a.verification_status !== 'VOIDED' ? (

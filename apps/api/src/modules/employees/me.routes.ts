@@ -118,7 +118,7 @@ mount(meRouter, '/api/v1/me', 'me', [
     handler: async ({ user, query }) => {
       const rows = await q(
         `SELECT ar.id, ar.shift_date, ar.recorded_at, ar.verification_status, ar.is_late, ar.late_by_minutes, ar.evidence_distance_m,
-                ar.evidence_accuracy_m, w.name AS workplace_name, sh.name AS shift_name, ar.is_simulated,
+                ar.evidence_accuracy_m, w.name AS workplace_name, sh.name AS shift_name, ar.is_simulated, ar.face_review, ar.face_review_note, ar.risk_flags,
                 (SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at)) / 60), 0)::int
                    FROM absence_intervals a WHERE a.session_id = ar.session_id) AS away_minutes,
                 aw.worked_minutes, aw.scheduled_minutes, aw.ended_early_minutes, aw.in_progress,

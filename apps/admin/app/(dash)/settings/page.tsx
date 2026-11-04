@@ -26,6 +26,7 @@ const TRACKING_FIELDS: Array<[string, string, string]> = [
   ['endGraceMinutes', 'Tracking stops after shift end + (min)', 'Hard stop for location collection.'],
   ['uncertainReviewAfterSec', 'Suggest manual review after uncertain GPS for (s)', ''],
   ['offlineQueueMax', 'Offline queue size on device (readings)', 'Oldest readings are dropped beyond this.'],
+                        ['offlineAttendanceHours', 'Accept offline check-ins for (hours)', '0 turns this off. Delayed records are flagged and cannot be earlier than the shift start on the server.'],
   ['entryMinServerSpanSec', 'Arrival must also be seen by the server for (s)', 'Readings must arrive in separate uploads over this time, so a phone with a changed clock cannot unlock attendance at once. 0 turns it off.'],
 ];
 

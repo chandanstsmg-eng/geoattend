@@ -4,7 +4,7 @@
  *    permission changes, flush the queue;
  *  - every 60 s while a session is open and the app is active: same checks,
  *    plus the local "shift window closed" stop;
- *  - on reconnect: flush the offline queue;
+ *  - on reconnect: send everything saved on the phone;
  *  - notification taps open the shift screen (never the camera).
  */
 import { useEffect, useRef } from 'react';
@@ -13,11 +13,16 @@ import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { qk, queryClient } from '../lib/queryClient';
+import { reloadOutbox, syncOutbox } from '../lib/sync/outbox';
 import { flush, reportPermissionsIfChanged, stopTracking } from '../lib/tracking/runtime';
 import { loadMeta, reloadSnapshot } from '../lib/tracking/store';
 
+/** Readings first, so a shift's trail is in before its check-in and end are judged. */
+const sendSaved = () => flush().then(() => syncOutbox());
+
 async function check() {
   await reloadSnapshot();
+  await reloadOutbox();
   const meta = await loadMeta();
   if (meta.sessionId && meta.windowClosesAt && Date.now() > Date.parse(meta.windowClosesAt)) {
     await flush();
@@ -31,8 +36,8 @@ async function check() {
     } catch {
       // offline — retried later
     }
-    void flush();
   }
+  void sendSaved().catch(() => undefined);
 }
 
 export function TrackingSupervisor() {
@@ -45,7 +50,7 @@ export function TrackingSupervisor() {
     });
     const timer = setInterval(() => {
       if (AppState.currentState !== 'active') return;
-      void loadMeta().then((m) => (m.sessionId ? check() : undefined));
+      void check();
     }, 60_000);
     return () => {
       sub.remove();
@@ -58,7 +63,7 @@ export function TrackingSupervisor() {
       NetInfo.addEventListener((s) => {
         const online = !!s.isConnected && s.isInternetReachable !== false;
         if (online && wasOffline.current) {
-          void flush().then(() => queryClient.invalidateQueries({ queryKey: qk.status }));
+          void sendSaved().then(() => queryClient.invalidateQueries({ queryKey: qk.status }));
         }
         wasOffline.current = !online;
       }),

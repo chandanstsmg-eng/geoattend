@@ -27,6 +27,8 @@ export const trackingSchema = z.object({
   uncertainReviewAfterSec: z.number().int().min(60).max(3600),
   mockLocationPolicy: z.enum(['FLAG', 'BLOCK_ATTENDANCE']),
   offlineQueueMax: z.number().int().min(50).max(5000),
+  /** How long a check-in or check-out saved on the phone without a connection is accepted. 0 = not accepted. */
+  offlineAttendanceHours: z.number().int().min(0).max(72),
   /**
    * Arrival must also be seen by the server over this many seconds (readings arriving in separate
    * uploads), so a batch of readings with made-up phone times cannot unlock attendance at once.
@@ -193,6 +195,7 @@ export const DEFAULT_SETTINGS: Settings = {
     uncertainReviewAfterSec: 300,
     mockLocationPolicy: 'BLOCK_ATTENDANCE',
     offlineQueueMax: 2000,
+    offlineAttendanceHours: 24,
     entryMinServerSpanSec: 20,
     requireBackgroundLocation: true,
     requirePreciseLocation: true,

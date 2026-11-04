@@ -8,6 +8,7 @@ import { inr } from '../../../lib/money';
 import { qk } from '../../../lib/queryClient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusCard } from '../../../components/StatusCard';
+import { SyncBanner } from '../../../components/SyncStatus';
 import { TrackingBanners, TrackingStrip } from '../../../components/TrackingBanners';
 import { Badge, Banner, Body, Button, Card, DemoBadge, ErrorState, H2, Loading, Muted, Row, Screen } from '../../../components/ui';
 import { errorMessage } from '../../../lib/api/client';
@@ -86,7 +87,8 @@ export default function HomeScreen() {
       {user?.mustChangePassword ? (
         <Banner tone="warning" title="Change your temporary password" actionLabel="Change" onPress={() => router.push('/account')} />
       ) : null}
-      {statusQ.isError && statusQ.data !== undefined ? <Banner tone="warning" title="Offline — last known status" /> : null}
+      {statusQ.isError && statusQ.data !== undefined ? <Banner tone="warning" title="Offline — last known status" message="Starting a new shift needs a connection." /> : null}
+      <SyncBanner />
       {phoneIssues ? (
         <Banner
           tone={phoneIssues.fail ? 'danger' : 'warning'}

@@ -23,6 +23,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       idempotencyKey: z.string().min(16).max(100),
       contentType: z.enum(['image/jpeg', 'image/png']),
       sizeBytes: z.number().int().positive(),
+      capturedOffline: z.boolean().optional(),
     }),
     handler: async ({ user, body, req, res }) => {
       await assertApprovedDevice(user);
@@ -41,6 +42,8 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       idempotencyKey: z.string().min(16).max(100),
       evidence: readingSchema,
       device: z.record(z.string(), z.union([z.string().max(200), z.number(), z.boolean(), z.null()])).optional(),
+      /** Captured without a connection and sent later: judged on the evidence, flagged OFFLINE_CAPTURE. */
+      capturedOffline: z.boolean().optional(),
     }),
     handler: async ({ user, body, res }) => {
       await assertApprovedDevice(user);

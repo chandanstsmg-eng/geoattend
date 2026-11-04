@@ -9,15 +9,17 @@
 import { AppState, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { randomUUID } from 'expo-crypto';
-import { api, ApiError, onAuthLost } from '../api/client';
+import { api, onAuthLost } from '../api/client';
 import type { LocationsResponse, PermissionReport, SessionStatus } from '../api/types';
 import { LOCATION_TASK } from '../config';
 import { cancelLocal, notifyLocal, scheduleLocalAt } from '../notifications';
 import { qk, queryClient } from '../queryClient';
-import { getDeviceId } from '../secure';
-import { emptyQueue, enqueue, nextBatch, removeAnswered, toWire, type QueuedReading } from './queue-core';
+import { getCachedUser, getDeviceId } from '../secure';
+import { flushReadings } from '../sync/engine';
+import { syncOutbox } from '../sync/outbox';
+import { enqueue, toWire, type QueuedReading, type QueueState } from './queue-core';
 import { deviceStatus } from './device-status';
-import { clearQueueAndMeta, defaultMeta, loadMeta, loadQueue, publish, saveQueue, updateMeta, withLock } from './store';
+import { clearMeta, defaultMeta, loadMeta, loadQueue, publish, saveQueue, updateMeta, withLock } from './store';
 
 // ───────────────────────── readings ─────────────────────────
 
@@ -25,12 +27,14 @@ const finiteOrNull = (v: number | null | undefined, min: number, max: number) =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
 
 /** Map an OS location fix to an API reading. Returns null for fixes the server could not accept (no accuracy). */
-export function toReading(loc: Location.LocationObject, source: QueuedReading['source']): QueuedReading | null {
+export function toReading(loc: Location.LocationObject, source: QueuedReading['source'], sessionId: string, userId: string | null): QueuedReading | null {
   const c = loc.coords;
   if (!(typeof c.accuracy === 'number' && c.accuracy > 0 && c.accuracy <= 5000)) return null;
   if (!Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) return null;
   return {
     clientEventId: randomUUID(),
+    sessionId,
+    userId,
     latitude: c.latitude,
     longitude: c.longitude,
     accuracyM: c.accuracy,
@@ -59,12 +63,11 @@ export async function recordLocations(locs: Location.LocationObject[], source: Q
     await stopTracking({ reason: 'Your shift window has closed.', notify: true, byUser: false });
     return;
   }
-  const readings = locs.map((l) => toReading(l, source)).filter((r): r is QueuedReading => r !== null);
-  if (readings.length) {
-    const sessionId = meta.sessionId;
-    await withLock(async () => saveQueue(enqueue(await loadQueue(), sessionId, readings, meta.offlineQueueMax)));
-  }
-  await flush();
+  const sessionId = meta.sessionId;
+  const readings = locs.map((l) => toReading(l, source, sessionId, meta.userId)).filter((r): r is QueuedReading => r !== null);
+  if (readings.length) await withLock(async () => saveQueue(enqueue(await loadQueue(), readings, meta.offlineQueueMax)));
+  const out = await flush();
+  if (!out.error) await syncOutbox().catch(() => undefined);
   await maybeCheckPermissions(meta.sessionId, meta.lastPermissionCheckAt);
 }
 
@@ -88,61 +91,38 @@ export function flush(): Promise<FlushOutcome> {
   return flushInFlight;
 }
 
+const updateQueue = (fn: (q: QueueState) => QueueState) =>
+  withLock(async () => {
+    const before = await loadQueue();
+    const next = fn(before);
+    if (next !== before) await saveQueue(next);
+    return next;
+  });
+
 async function doFlush(): Promise<FlushOutcome> {
   publish({ flushing: true });
-  let sent = 0;
   try {
-    for (let round = 0; round < 20; round++) {
-      const [q, meta] = await Promise.all([loadQueue(), loadMeta()]);
-      if (!meta.sessionId) {
-        if (q.items.length) await withLock(() => saveQueue(emptyQueue()));
-        return { sent, remaining: 0, error: null };
-      }
-      if (q.sessionId && q.sessionId !== meta.sessionId) {
-        await withLock(() => saveQueue(emptyQueue(meta.sessionId)));
-        continue;
-      }
-      const batch = nextBatch(q);
-      if (!batch) return { sent, remaining: 0, error: null };
-      const sessionId = meta.sessionId;
-      await updateMeta((m) => ({ ...m, lastAttemptAt: new Date().toISOString() }));
-      let res: LocationsResponse;
-      try {
-        res = await api<LocationsResponse>('/tracking/locations', {
+    const out = await flushReadings<SessionStatus>({
+      update: updateQueue,
+      userId: async () => (await getCachedUser())?.id ?? null,
+      post: async (batch) => {
+        await updateMeta((m) => ({ ...m, lastAttemptAt: new Date().toISOString() }));
+        return api<LocationsResponse>('/tracking/locations', {
           method: 'POST',
-          body: { sessionId, source: batch.source, readings: batch.readings.map(toWire), device: await deviceStatus() },
+          body: { sessionId: batch.sessionId, source: batch.source, readings: batch.readings.map(toWire), device: await deviceStatus() },
           timeoutMs: 30_000,
         });
-      } catch (err) {
-        const e = err instanceof ApiError ? err : new ApiError(0, 'UNKNOWN', String(err));
-        if (e.status === 400) {
-          // The request itself was malformed: these readings can never be accepted. Drop them so the queue is not blocked.
-          const ids = batch.readings.map((r) => r.clientEventId);
-          await withLock(async () => {
-            const cur = await loadQueue();
-            await saveQueue({ ...removeAnswered(cur, ids), dropped: cur.dropped + ids.length });
-          });
-          await updateMeta((m) => ({ ...m, lastError: `Server rejected a batch: ${e.message}` }));
-          continue;
-        }
-        if (e.status === 403 || e.status === 404) {
-          await stopTracking({ reason: 'This shift session is no longer available on the server.', notify: true, byUser: false });
-          return { sent, remaining: 0, error: e.message };
-        }
-        // Offline, timeout, 5xx, 429, or signed out (handled by onAuthLost): keep everything queued.
-        await updateMeta((m) => ({ ...m, lastError: e.message }));
-        const left = (await loadQueue()).items.length;
-        return { sent, remaining: left, error: e.message };
-      }
-      const answered = res.results.map((r) => r.clientEventId);
-      await withLock(async () => saveQueue(removeAnswered(await loadQueue(), answered)));
-      sent += answered.length;
-      await updateMeta((m) => ({ ...m, lastSentAt: new Date().toISOString(), lastError: null }));
-      const stopped = await applyServerStatus(res.status);
-      if (stopped) return { sent, remaining: 0, error: null };
-      if (answered.length === 0) break; // defensive: never spin on a batch the server did not answer
-    }
-    return { sent, remaining: (await loadQueue()).items.length, error: null };
+      },
+      onStatus: async (status) => {
+        await updateMeta((m) => ({ ...m, lastSentAt: new Date().toISOString(), lastError: null }));
+        return applyServerStatus(status);
+      },
+      onSessionGone: async (sessionId) => {
+        if ((await loadMeta()).sessionId === sessionId) await stopTracking({ reason: 'This shift session is no longer available on the server.', notify: true, byUser: false });
+      },
+    });
+    if (out.error) await updateMeta((m) => ({ ...m, lastError: out.error }));
+    return { sent: out.sent, remaining: out.remaining, error: out.error };
   } finally {
     publish({ flushing: false });
   }
@@ -166,6 +146,7 @@ export async function applyServerStatus(status: SessionStatus): Promise<boolean>
   const becameAvailable = status.attendanceAvailable && !meta.attendanceAvailable;
   await updateMeta((m) => ({
     ...m,
+    lastStatus: status,
     windowClosesAt: status.tracking.windowClosesAt,
     offlineQueueMax: status.tracking.offlineQueueMax,
     evidenceMaxAgeSec: status.tracking.evidenceMaxAgeSec,
@@ -276,11 +257,11 @@ export function bestFix(targetAccuracyM: number, opts: { settleMs?: number; time
  */
 export async function sendFreshFix(status: SessionStatus): Promise<{ accuracyM: number; status: SessionStatus | null }> {
   const loc = await bestFix(status.tracking.maxAccuracyM);
-  const reading = toReading(loc, 'FOREGROUND');
-  if (!reading) throw new Error('The phone returned a location without accuracy information. Retry.');
   const meta = await loadMeta();
+  const reading = toReading(loc, 'FOREGROUND', status.session.id, meta.userId);
+  if (!reading) throw new Error('The phone returned a location without accuracy information. Retry.');
   if (meta.sessionId === status.session.id) {
-    await withLock(async () => saveQueue(enqueue(await loadQueue(), status.session.id, [reading], meta.offlineQueueMax)));
+    await withLock(async () => saveQueue(enqueue(await loadQueue(), [reading], meta.offlineQueueMax)));
     const out = await flush();
     if (out.error) throw new Error(`Saved on the phone; not sent yet (${out.error}).`);
     return { accuracyM: reading.accuracyM, status: queryClient.getQueryData<SessionStatus | null>(qk.status) ?? null };
@@ -357,11 +338,14 @@ export async function startTracking(status: SessionStatus): Promise<StartResult>
   const sessionId = status.session.id;
   const bg = await Location.getBackgroundPermissionsAsync();
   const backgroundGranted = bg.status === 'granted';
+  const userId = (await getCachedUser())?.id ?? null;
   await updateMeta((m) => {
     const same = m.sessionId === sessionId;
     return {
       ...defaultMeta(),
       sessionId,
+      userId,
+      lastStatus: status,
       windowClosesAt: status.tracking.windowClosesAt,
       offlineQueueMax: status.tracking.offlineQueueMax,
       evidenceMaxAgeSec: status.tracking.evidenceMaxAgeSec,
@@ -372,11 +356,6 @@ export async function startTracking(status: SessionStatus): Promise<StartResult>
       backgroundGranted,
     };
   });
-  await withLock(async () => {
-    const q = await loadQueue();
-    if (q.sessionId !== sessionId) await saveQueue(emptyQueue(sessionId));
-  });
-
   let mode: StartResult['mode'] = 'background';
   try {
     await stopLocationUpdatesSafe();
@@ -396,8 +375,9 @@ export async function startTracking(status: SessionStatus): Promise<StartResult>
       activityType: Location.ActivityType.Other,
     });
     stopForegroundWatcher();
-  } catch {
+  } catch (e) {
     // The OS refused the location task (e.g. iOS without "Always"): fall back to updates while the app is open.
+    await updateMeta((m) => ({ ...m, lastError: `Background location refused: ${e instanceof Error ? e.message : String(e)}` }));
     mode = 'foreground';
     await startForegroundWatcher(status);
   }
@@ -410,21 +390,21 @@ export async function startTracking(status: SessionStatus): Promise<StartResult>
   return { mode, backgroundGranted };
 }
 
-/** Stop collecting, discard the queue and remember why. Safe to call repeatedly. */
+/** Stop collecting and remember why. Whatever is queued stays and is still sent. Safe to call repeatedly. */
 export async function stopTracking(opts: { reason: string; notify: boolean; byUser: boolean }) {
   const meta = await loadMeta();
   await stopLocationUpdatesSafe();
   stopForegroundWatcher();
   await cancelLocal(ABSENCE_WARNING_ID);
   const wasTracking = meta.sessionId !== null;
-  await clearQueueAndMeta({ sessionId: meta.sessionId, reason: opts.reason, at: new Date().toISOString(), byUser: opts.byUser });
+  await clearMeta({ sessionId: meta.sessionId, reason: opts.reason, at: new Date().toISOString(), byUser: opts.byUser });
   publish({ updatesRunning: false });
   if (opts.notify && wasTracking) await notifyLocal('Location tracking stopped', opts.reason);
 }
 
 // Signing out (or losing the session) always stops collection.
 onAuthLost(() => {
-  void stopTracking({ reason: 'You were signed out. Location tracking has stopped.', notify: true, byUser: false });
+  void stopTracking({ reason: 'You were signed out, so location tracking stopped. Anything saved on this phone is sent after you sign in.', notify: true, byUser: false });
 });
 
 // ───────────────────────── permissions ─────────────────────────

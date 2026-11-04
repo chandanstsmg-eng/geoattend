@@ -110,7 +110,7 @@ export default function OvertimeScreen() {
       if (put.status < 200 || put.status >= 300) throw new Error(`Selfie upload failed (${put.status}). Try again.`);
       setBusy('Getting your location…');
       const fix = await bestFix(status.tracking.maxAccuracyM);
-      const reading = toReading(fix, 'FOREGROUND');
+      const reading = toReading(fix, 'FOREGROUND', status.session.id, null);
       if (!reading) throw new Error('The phone returned a location without accuracy information. Retry.');
       setBusy('Starting overtime…');
       const next = await api<SessionStatus>(`/tracking/sessions/${status.session.id}/overtime`, {

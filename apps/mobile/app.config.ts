@@ -17,6 +17,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const allowCleartext = !isProduction && (variant === 'development' || process.env.ALLOW_CLEARTEXT === '1');
   const googleMapsKey = process.env.GOOGLE_MAPS_ANDROID_API_KEY?.trim() || '';
   const projectId = process.env.EAS_PROJECT_ID?.trim() || undefined;
+  // A store build without a secure server address would fail for every employee, so it must not build at all.
+  if (isProduction && !/^https:\/\/\S+$/.test(process.env.EXPO_PUBLIC_API_URL?.trim() ?? '')) {
+    throw new Error('EXPO_PUBLIC_API_URL must be an https:// address for a production build.');
+  }
 
   return {
     ...config,
@@ -43,6 +47,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     android: {
       package: isProduction ? 'com.geoattend.employee' : `com.geoattend.employee.${variant}`,
+      // Saved locations and photos must not leave the phone through Android's cloud backup.
+      allowBackup: false,
       adaptiveIcon: {
         backgroundColor: '#1E2952',
         foregroundImage: './assets/android-icon-foreground.png',

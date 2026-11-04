@@ -4,6 +4,7 @@ import type { ApiUser, LoginResponse } from './api/types';
 import { deviceInfo, registerDevice } from './device';
 import { queryClient } from './queryClient';
 import { clearCredentials, getCachedUser, getTokens, setCachedUser, setTokens } from './secure';
+import { syncOutbox } from './sync/outbox';
 import { flush, stopTracking, withTimeout } from './tracking/runtime';
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
@@ -77,11 +78,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user);
     setStatus('signedIn');
     registerDevice().catch(() => undefined);
+    // Anything saved before the sign-in was lost goes now.
+    void flush().then(() => syncOutbox()).catch(() => undefined);
   }, []);
 
   const signOut = useCallback(async () => {
-    // Send what is still queued on the phone first: once signed out it can never be uploaded (MOB-03).
-    await withTimeout(flush(), 10_000, 'flush timed out').catch(() => undefined);
+    // Send what can be sent. The rest stays on the phone and goes when this employee signs in again.
+    await withTimeout(flush().then(() => syncOutbox()), 10_000, 'flush timed out').catch(() => undefined);
     await stopTracking({ reason: 'You signed out. Location tracking has stopped.', notify: false, byUser: true });
     const tokens = await getTokens();
     if (tokens) {

@@ -33,7 +33,7 @@ export function TrackingBanners({ status }: { status: SessionStatus | null | und
       ) : snap.queueLength > 0 ? (
         <Banner tone="info" title={`Sending ${snap.queueLength} saved location${snap.queueLength === 1 ? '' : 's'}…`} />
       ) : null}
-      {snap.dropped > 0 ? <Banner tone="warning" title={`${snap.dropped} old location${snap.dropped === 1 ? '' : 's'} lost — reconnect`} /> : null}
+      {snap.dropped > 0 ? <Banner tone="warning" title={`${snap.dropped} old location${snap.dropped === 1 ? '' : 's'} removed: the phone's limit was reached`} message="Your attendance is not affected. Reconnect to send the rest." /> : null}
       {status.session.isStale ? (
         <Banner tone="warning" title="Location not updating" message={`Last update ${fmtAgo(status.session.lastLocationAt)}`} />
       ) : null}

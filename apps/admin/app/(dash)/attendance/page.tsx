@@ -45,6 +45,13 @@ function FaceBadge({ status, score }: { status: string; score: number | null }) 
 
 /** The liveness instruction, the start/end face results, and the enrolled photo side by side. */
 function FaceCheck({ record: r }: { record: any }) {
+  const { isOwner } = useMe();
+  const qc = useQueryClient();
+  const [overrideReason, setOverrideReason] = useState('');
+  const override = useMutation({ meta: { success: 'Rejection overridden' },
+    mutationFn: () => post(`/faces/reviews/${r.id}/override`, { reason: overrideReason }),
+    onSuccess: () => { setOverrideReason(''); qc.invalidateQueries({ queryKey: ['attendance'] }); },
+  });
   const ref = useMutation({ mutationFn: () => post(`/attendance/${r.id}/reference-photo-url`) });
   const end = useMutation({ mutationFn: () => post(`/attendance/${r.id}/end-photo-url`) });
   const d = ref.data as any;
@@ -63,7 +70,13 @@ function FaceCheck({ record: r }: { record: any }) {
           </>
         )}
       </dl>
-      <p className="text-xs text-gray-500">Photos that match are deleted straight away; only the result is kept.</p>
+      {isOwner && r.face_review === 'REJECTED' && r.verification_status === 'VOIDED' && (
+        <form className="space-y-2 rounded-md bg-gray-50 p-3" onSubmit={(e) => { e.preventDefault(); override.mutate(); }}>
+          <Field label="Override this rejection (reason required, audited)"><Textarea required minLength={5} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></Field>
+          <InlineError error={override.error} />
+          <Button type="submit" size="sm" loading={override.isPending}>Count this attendance again</Button>
+        </form>
+      )}
       <div className="flex flex-wrap gap-2">
         {!d && <Button size="sm" onClick={() => ref.mutate()} loading={ref.isPending}>Show enrolled face (audited)</Button>}
         {r.end_photo_id && !end.data && <Button size="sm" onClick={() => end.mutate()} loading={end.isPending}>Show end-of-shift photo (audited)</Button>}

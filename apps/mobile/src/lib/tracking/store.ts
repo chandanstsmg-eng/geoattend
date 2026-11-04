@@ -6,7 +6,9 @@
  * A tiny in-memory snapshot + listener set feeds the UI (useSyncExternalStore).
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { DEFAULT_QUEUE_MAX, emptyQueue, type QueueState } from './queue-core';
+import type { SessionStatus } from '../api/types';
+import type { OutboxEvent } from '../sync/engine';
+import { DEFAULT_QUEUE_MAX, emptyQueue, migrateQueue, type QueueState } from './queue-core';
 
 const QUEUE_KEY = 'geoattend.queue.v1';
 const META_KEY = 'geoattend.tracking.v1';
@@ -14,6 +16,9 @@ const META_KEY = 'geoattend.tracking.v1';
 export interface TrackingMeta {
   /** Session the device is authorised to collect for. null = collect nothing. */
   sessionId: string | null;
+  userId: string | null;
+  /** The last status from the server, so the shift screen still works after a restart without a connection. */
+  lastStatus: SessionStatus | null;
   windowClosesAt: string | null;
   offlineQueueMax: number;
   evidenceMaxAgeSec: number;
@@ -34,6 +39,8 @@ export interface TrackingMeta {
 
 export const defaultMeta = (): TrackingMeta => ({
   sessionId: null,
+  userId: null,
+  lastStatus: null,
   windowClosesAt: null,
   offlineQueueMax: DEFAULT_QUEUE_MAX,
   evidenceMaxAgeSec: 60,
@@ -66,12 +73,25 @@ async function readJson<T>(key: string, fallback: T): Promise<T> {
   }
 }
 
-export const loadQueue = () => readJson<QueueState>(QUEUE_KEY, emptyQueue());
+/**
+ * A failed read throws: treating it as an empty queue would overwrite the saved readings on the next
+ * write. Unreadable content is set aside for support rather than discarded.
+ */
+export async function loadQueue(): Promise<QueueState> {
+  const raw = await AsyncStorage.getItem(QUEUE_KEY);
+  if (!raw) return emptyQueue();
+  try {
+    return migrateQueue(JSON.parse(raw));
+  } catch {
+    await AsyncStorage.setItem(`${QUEUE_KEY}.corrupt.${Date.now()}`, raw);
+    return emptyQueue();
+  }
+}
 export const loadMeta = () => readJson<TrackingMeta>(META_KEY, defaultMeta());
 
 export async function saveQueue(q: QueueState) {
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-  publish({ queueLength: q.items.length, dropped: q.dropped });
+  publish({ queueLength: q.items.length, dropped: q.dropped, failedReadings: q.failed.length });
 }
 
 export async function saveMeta(m: TrackingMeta) {
@@ -98,9 +118,15 @@ export interface TrackingSnapshot {
   meta: TrackingMeta;
   updatesRunning: boolean | null;
   flushing: boolean;
+  failedReadings: number;
+  /** Check-ins and shift ends saved on the phone. */
+  events: OutboxEvent[];
+  syncing: boolean;
+  /** Why saved items cannot go yet, when the employee or an administrator has to act. */
+  syncBlocked: string | null;
 }
 
-let snapshot: TrackingSnapshot = { loaded: false, queueLength: 0, dropped: 0, meta: defaultMeta(), updatesRunning: null, flushing: false };
+let snapshot: TrackingSnapshot = { loaded: false, queueLength: 0, dropped: 0, meta: defaultMeta(), updatesRunning: null, flushing: false, failedReadings: 0, events: [], syncing: false, syncBlocked: null };
 const listeners = new Set<() => void>();
 
 export function publish(patch: Partial<TrackingSnapshot>) {
@@ -118,12 +144,10 @@ export function subscribe(l: () => void) {
 /** Reload the snapshot from storage (e.g. after the headless task ran in another JS context). */
 export async function reloadSnapshot() {
   const [q, m] = await Promise.all([loadQueue(), loadMeta()]);
-  publish({ loaded: true, queueLength: q.items.length, dropped: q.dropped, meta: m });
+  publish({ loaded: true, queueLength: q.items.length, dropped: q.dropped, failedReadings: q.failed.length, meta: m });
 }
 
-export async function clearQueueAndMeta(stopped: TrackingMeta['stopped']) {
-  await withLock(async () => {
-    await saveQueue(emptyQueue());
-    await saveMeta({ ...defaultMeta(), stopped });
-  });
+/** Ends collection on this phone. The queue is left alone: only the server's answer removes a reading. */
+export async function clearMeta(stopped: TrackingMeta['stopped']) {
+  await withLock(() => saveMeta({ ...defaultMeta(), stopped }));
 }
