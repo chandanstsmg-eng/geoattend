@@ -2,6 +2,29 @@
 
 For the person testing GeoAttend on real phones. **No real phone has run this version yet.** Offline, background tracking and battery behaviour are not proven until this plan has been completed and signed. Automated tests prove the sync rules; they cannot prove what a phone maker's battery manager does.
 
+## Status by brand
+
+Mobile reliability is **not verified**. Each brand stays pending until a real phone has passed.
+
+| Brand | GPS | Camera | Permissions | Background | Battery optimisation | Offline attendance | Sync |
+|---|---|---|---|---|---|---|---|
+| Xiaomi / Redmi | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
+| Oppo | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
+| Vivo | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
+| Samsung | Pending | Pending | Pending | Pending | Pending | Pending | Pending |
+
+## Checklist
+
+One pass per phone. Each line points to the detailed steps below.
+
+- [ ] **GPS:** arrival detected inside the geofence, stays locked outside, fake GPS refused (C1, C3, C6, E6)
+- [ ] **Camera:** permission denied and allowed, photo usable in low light, face match and mismatch (B6, G1–G3)
+- [ ] **Permissions:** while using, all the time, approximate, revoked mid-shift, GPS off (B1–B5, B7)
+- [ ] **Background execution:** screen off 60 minutes, swiped away, restart, force-stop (E1, E2, E5, E7)
+- [ ] **Battery optimisation:** battery saver, overnight, brand steps before and after, 8-hour use (E3, E4, section F)
+- [ ] **Offline attendance:** airplane mode check-in, restart, Wi-Fi without internet, offline shift end, shown as pending to the manager (D1, D3–D7, D9, D11, D15)
+- [ ] **Synchronization:** sends by itself, nothing doubled, expired sign-in, other user, manager approves or rejects (D2, D8, D10, D12–D14, G4, G5)
+
 Record every result in the sheet at the end. A step that was not run is "not tested", never "pass".
 
 ## What you need
@@ -61,7 +84,7 @@ For each, first check what is on the phone (History › Saved on this phone), th
 | # | Do | Pass when |
 |---|---|---|
 | D1 | Start a shift, then airplane mode. Walk in. Press "Check in offline" | Says "Saved on this phone", **never** "recorded". Dashboard shows nothing yet |
-| D2 | Turn the connection back on | Sends by itself. Dashboard shows one record at the capture time, flagged offline. Phone shows "Sent" |
+| D2 | Turn the connection back on | Sends by itself. Dashboard shows one record at the capture time, as "Pending verification", in Approvals. Phone shows "Sent" and History shows "Waiting for manager check" |
 | D3 | Airplane mode, check in, then force-stop the app, reopen, connect | Saved item survives and sends once |
 | D4 | Airplane mode, check in, restart the phone, connect | Same |
 | D5 | Signal drops while "Submitting" | Saved for later, not lost, not doubled |

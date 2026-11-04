@@ -18,7 +18,7 @@ export default function SuccessScreen() {
           <Text style={st.time}>Taken at: {fmtTimeSec(p.capturedAt)}</Text>
           <Muted center>Not recorded yet</Muted>
         </View>
-        <Banner tone="warning" title="No connection" message="Your photo and location are saved. They are sent by themselves when the connection returns, and the server then decides whether the check-in is accepted." />
+        <Banner tone="warning" title="No connection" message="Your photo and location are saved. They are sent by themselves when the connection returns. The server checks them, then your manager reviews the record." />
         <Body>Do not uninstall the app or clear its data until it has been sent. You can see where it stands in History.</Body>
         <Button title="Go to live shift" onPress={() => router.replace('/shift')} />
         <Button title="See history" variant="secondary" onPress={() => router.replace('/history')} />

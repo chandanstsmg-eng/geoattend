@@ -700,8 +700,17 @@ export async function endSession(sessionId: string, actorUser: { id: string; rol
     if (!s) throw notFound('Session');
     if (actorUser.role === 'EMPLOYEE' && s.employee_id !== actorUser.id) throw forbidden();
     const at = clientEndedAt ? await offlineEndTime(db, s, clientEndedAt) : null;
-    const logEnd = (before: unknown) =>
-      audit({ actor: { id: actorUser.id, role: actorUser.role as 'EMPLOYEE', orgId: s.org_id }, action: 'session.end_offline', resourceType: 'tracking_session', resourceId: s.id, before: { endedAt: before }, after: { endedAt: at, sentAt: sessionNow(s) } }, db);
+    const logEnd = async (before: unknown) => {
+      // The worked time now rests on the phone's word, so the record waits for a person. The device's own time is kept as sent.
+      await q(
+        `UPDATE attendance_records SET risk_flags = array_append(risk_flags, 'OFFLINE_END'), updated_at = now(),
+           verification_status = CASE WHEN verification_status = 'VERIFIED' THEN 'PENDING_VERIFICATION' ELSE verification_status END
+         WHERE session_id = $1 AND verification_status <> 'VOIDED' AND NOT 'OFFLINE_END' = ANY(risk_flags)`,
+        [s.id],
+        db,
+      );
+      await audit({ actor: { id: actorUser.id, role: actorUser.role as 'EMPLOYEE', orgId: s.org_id }, action: 'session.end_offline', resourceType: 'tracking_session', resourceId: s.id, before: { endedAt: before }, after: { endedAt: at, deviceTime: clientEndedAt, sentAt: sessionNow(s) } }, db);
+    };
     if (s.ended_at) {
       // The window closed first. The time the employee really ended replaces the automatic one.
       if (at && s.authorization_status === 'EXPIRED' && at < new Date(s.ended_at)) {

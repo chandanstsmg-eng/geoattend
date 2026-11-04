@@ -13,8 +13,8 @@ import { colors, font, space, type Tone } from '../../../lib/theme';
 
 const hm = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`);
 
-const STATUS_TONE: Record<string, Tone> = { VERIFIED: 'success', MANUAL_APPROVED: 'success', CORRECTED: 'info', DISPUTED: 'warning', VOIDED: 'danger' };
-const STATUS_LABEL: Record<string, string> = { VERIFIED: 'Verified', MANUAL_APPROVED: 'Approved by manager', CORRECTED: 'Corrected', DISPUTED: 'Disputed', VOIDED: 'Not counted' };
+const STATUS_TONE: Record<string, Tone> = { VERIFIED: 'success', MANUAL_APPROVED: 'success', CORRECTED: 'info', DISPUTED: 'warning', VOIDED: 'danger', PENDING_VERIFICATION: 'warning' };
+const STATUS_LABEL: Record<string, string> = { VERIFIED: 'Verified', MANUAL_APPROVED: 'Approved by manager', CORRECTED: 'Corrected', DISPUTED: 'Disputed', VOIDED: 'Not counted', PENDING_VERIFICATION: 'Waiting for manager check' };
 
 /** Overtime after the shift and where its approval stands (only approved overtime is paid). */
 function OvertimeBadge({ a }: { a: AttendanceHistoryItem }) {
@@ -88,7 +88,7 @@ export default function HistoryScreen() {
             </View>
           ) : null}
           {a.risk_flags?.includes('OFFLINE_CAPTURE') ? <Muted>Saved on your phone without a connection and sent later.</Muted> : null}
-          {a.verification_status === 'VOIDED' ? <Muted>{a.face_review === 'REJECTED' ? `The face check was rejected${a.face_review_note ? `: ${a.face_review_note}` : '.'} Speak to your manager if this is wrong.` : 'This record does not count. Speak to your manager if this is wrong.'}</Muted> : null}
+          {a.verification_status === 'VOIDED' ? <Muted>{a.face_review === 'REJECTED' ? `The face check was rejected${a.face_review_note ? `: ${a.face_review_note}` : '.'} Speak to your manager if this is wrong.` : a.rejection_note ? `Your manager did not accept this record: ${a.rejection_note}` : 'This record does not count. Speak to your manager if this is wrong.'}</Muted> : null}
           {a.verification_status === 'DISPUTED' || openDisputes.has(a.id) ? (
             <Muted>Dispute submitted — your administrator will review it.</Muted>
           ) : a.verification_status !== 'VOIDED' ? (

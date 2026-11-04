@@ -12,7 +12,7 @@ Not done. These passed builds and API tests only.
 | Corrections | Supervisor sends a correction; record unchanged; owner sees it in Approvals, applies or rejects it; history shows who asked and who decided | Yes |
 | Face review | Supervisor rejects with a reason; record not counted; owner overrides it from the record; audit shows both | Yes |
 | Voided records | Disappear from every attendance, hours, overtime and pay figure, and stay visible in records | Yes |
-| Offline records | "OFFLINE_CAPTURE" shows in the record's risk indicators | Yes |
+| Offline records | Shown as pending in Approvals with phone time and evidence; approve and reject work for a supervisor; owner can override a rejection | Yes |
 | Overtime | Overtime on a voided shift leaves the queue and totals | Yes |
 | Photos | Delete button hidden for supervisors, works for owners with a reason | Yes |
 | Retention | Settings shows the hold; the checkbox is disabled; "Run retention now" reports photos kept | No |

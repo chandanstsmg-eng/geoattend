@@ -310,6 +310,7 @@ export interface AttendanceHistoryItem {
   face_review?: string | null;
   face_review_note?: string | null;
   risk_flags?: string[] | null;
+  rejection_note?: string | null;
   id: string;
   shift_date: string;
   recorded_at: string;

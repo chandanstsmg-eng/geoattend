@@ -50,7 +50,7 @@ export function SavedOnPhone() {
               <Text style={st.what}>{`${WHAT[e.kind]} · ${e.shiftName}`}</Text>
               <Badge label={label} tone={tone} />
             </View>
-            <Muted>{`${fmtDateTime(e.capturedAt)}${e.status === 'SYNCED' ? ', confirmed by the server' : ''}`}</Muted>
+            <Muted>{`${fmtDateTime(e.capturedAt)}${e.status === 'SYNCED' ? ', received by the server' : ''}`}</Muted>
             {e.status === 'PENDING' && e.lastError ? <Muted>{`Last try: ${e.lastError}`}</Muted> : null}
             {e.status === 'FAILED' ? (
               <>

@@ -241,7 +241,7 @@ mount(facesRouter, '/api/v1/faces', 'faces', [
   route({
     method: 'post',
     path: '/reviews/:id/override',
-    summary: 'Owner overrides a rejected face check: the attendance counts again (reason required, audited)',
+    summary: 'Owner overrides a rejected face check or offline record: the attendance counts again (reason required, audited)',
     access: 'admin',
     ownerOnly: true,
     params: idParams,

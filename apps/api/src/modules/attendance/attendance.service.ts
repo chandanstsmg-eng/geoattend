@@ -209,7 +209,7 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
       `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key, photo_id,
          evidence_latitude, evidence_longitude, evidence_accuracy_m, evidence_distance_m, evidence_client_time, radius_m_at_record,
          is_late, late_by_minutes, verification_status, risk_flags, device_meta, is_simulated, challenge, recorded_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'VERIFIED',$16,$17,$18,$19,COALESCE($20::timestamptz, now()))
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$21,$16,$17,$18,$19,COALESCE($20::timestamptz, now()))
        ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING
        RETURNING *`,
       [
@@ -233,6 +233,8 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
         s.is_simulated,
         challengeFor(s.id).en,
         offline ? arrivedAt : null,
+        // The server did not see this happen, so it is never recorded as verified. A person decides.
+        offline ? 'PENDING_VERIFICATION' : 'VERIFIED',
       ],
       db,
     );
@@ -472,6 +474,9 @@ async function applyCorrection(db: Queryable, outbox: Outbox, approver: AuthUser
   if (!before) throw notFound('Attendance record');
   if (before.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'A voided record cannot be changed. Its history stays in the audit log.');
   await assertPayrollMonthOpen(approver.orgId, before.shift_date, db);
+  if (before.verification_status === 'PENDING_VERIFICATION' && c.verificationStatus === 'VERIFIED') {
+    throw conflict('NEEDS_VERIFICATION', 'This record was sent late from the phone. Decide it in Approvals.');
+  }
   // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
   let isLate = c.isLate ?? null;
   let lateBy = c.lateByMinutes ?? null;
@@ -574,27 +579,63 @@ async function decideCorrection(db: Queryable, outbox: Outbox, admin: AuthUser, 
 }
 
 /**
- * The owner overrides a rejected face check: the record counts again, as CORRECTED. The rejection,
- * its reason and the whole record before and after stay in review history and the audit log.
+ * A supervisor or owner decides a record the phone sent late. Approving counts it as approved by that
+ * person, never as verified by the server. Rejecting voids it with a reason, and an owner can override that.
+ * The evidence, the device's own time and the whole record before and after stay.
  */
-export async function overrideFaceRejection(owner: AuthUser, attendanceId: string, reason: string, req?: any) {
+export async function verifyOfflineRecord(reviewer: AuthUser, attendanceId: string, decision: 'APPROVE' | 'REJECT', note: string, req?: any) {
   const outbox = new Outbox();
   const updated = await tx(async (db) => {
     const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
     if (!before) throw notFound('Attendance record');
-    if (before.verification_status !== 'VOIDED' || before.face_review !== 'REJECTED') throw conflict('NOT_FACE_REJECTED', 'Only attendance voided by a rejected face check can be overridden.');
+    if (before.verification_status !== 'PENDING_VERIFICATION') throw conflict('NOT_PENDING', 'This record is not waiting for verification.');
+    await assertPayrollMonthOpen(reviewer.orgId, before.shift_date, db);
+    const after = await one(
+      decision === 'APPROVE'
+        ? `UPDATE attendance_records SET verification_status = 'MANUAL_APPROVED', approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $1 RETURNING *`
+        : `UPDATE attendance_records SET verification_status = 'VOIDED', risk_flags = array_append(risk_flags, 'VERIFICATION_REJECTED'), updated_at = now() WHERE id = $1 AND $2::uuid IS NOT NULL RETURNING *`,
+      [attendanceId, reviewer.id],
+      db,
+    );
+    await q(
+      `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, status, before_data, after_data, requested_by, resolved_by, resolved_at, resolution_note, is_simulated)
+       VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, 'APPLIED', $5, $6, $7, $7, now(), $8, $9)`,
+      [before.employee_id, before.session_id, attendanceId, `Offline record ${decision === 'APPROVE' ? 'approved' : 'rejected'}: ${note}`, JSON.stringify(before), JSON.stringify(after), reviewer.id, note, before.is_simulated],
+      db,
+    );
+    await audit({ actor: reviewer, action: decision === 'APPROVE' ? 'attendance.verify' : 'attendance.verify_reject', resourceType: 'attendance_record', resourceId: attendanceId, before, after, reason: note, req }, db);
+    outbox.push({ type: 'attendance.recorded', attendanceId, employeeId: before.employee_id });
+    return after;
+  });
+  outbox.flush();
+  return updated;
+}
+
+/**
+ * The owner overrides a rejected face check or a rejected offline record: the record counts again, as CORRECTED. The rejection,
+ * its reason and the whole record before and after stay in review history and the audit log.
+ */
+export async function overrideFaceRejection(owner: AuthUser, attendanceId: string, reason: string, req?: any) {
+  const overridable = (r: any) => r.verification_status === 'VOIDED' && (r.face_review === 'REJECTED' || (r.risk_flags ?? []).includes('VERIFICATION_REJECTED'));
+  const outbox = new Outbox();
+  const updated = await tx(async (db) => {
+    const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
+    if (!before) throw notFound('Attendance record');
+    if (!overridable(before)) throw conflict('NOT_FACE_REJECTED', 'Only attendance voided by a rejected face check or a rejected offline record can be overridden.');
     await assertPayrollMonthOpen(owner.orgId, before.shift_date, db);
     // Lasts for this transaction only; the database refuses every other way of lifting a void.
     await q(`SELECT set_config('geoattend.face_override', 'on', true)`, [], db);
     const after = await one(
-      `UPDATE attendance_records SET verification_status = 'CORRECTED', face_review = 'APPROVED', face_reviewed_by = $2, face_reviewed_at = now(), face_review_note = $3, updated_at = now() WHERE id = $1 RETURNING *`,
+      `UPDATE attendance_records SET verification_status = 'CORRECTED', face_review = CASE WHEN face_review = 'REJECTED' THEN 'APPROVED' ELSE face_review END,
+         face_reviewed_by = CASE WHEN face_review = 'REJECTED' THEN $2 ELSE face_reviewed_by END, face_reviewed_at = CASE WHEN face_review = 'REJECTED' THEN now() ELSE face_reviewed_at END,
+         face_review_note = CASE WHEN face_review = 'REJECTED' THEN $3 ELSE face_review_note END, approved_by = $2, approved_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
       [attendanceId, owner.id, `Owner override: ${reason}`],
       db,
     );
     await q(
       `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, status, before_data, after_data, requested_by, resolved_by, resolved_at, is_simulated)
        VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, 'APPLIED', $5, $6, $7, $7, now(), $8)`,
-      [before.employee_id, before.session_id, attendanceId, `Face rejection overridden: ${reason}`, JSON.stringify(before), JSON.stringify(after), owner.id, before.is_simulated],
+      [before.employee_id, before.session_id, attendanceId, `Rejection overridden: ${reason}`, JSON.stringify(before), JSON.stringify(after), owner.id, before.is_simulated],
       db,
     );
     await audit({ actor: owner, action: 'face_review.override', resourceType: 'attendance_record', resourceId: attendanceId, before, after, reason, req }, db);

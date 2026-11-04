@@ -248,6 +248,141 @@ describe('location readings that arrive after the session closed', () => {
   });
 });
 
+describe('a record sent late waits for a person', () => {
+  const decide = (who: typeof owner, id: string, body: object) => who.agent.post(`/api/v1/attendance/${id}/verification`).set('X-CSRF-Token', who.csrf).send(body);
+  async function late() {
+    const a = await onShift();
+    const at = ago(100);
+    await send(a, at);
+    return { ...a, at, id: (await record(a.sessionId)).id as string };
+  }
+
+  it('is never recorded as verified, and keeps what the phone sent', async () => {
+    const a = await late();
+    const r = await record(a.sessionId);
+    expect(r.verification_status).toBe('PENDING_VERIFICATION');
+    expect(new Date(r.evidence_client_time).toISOString()).toBe(new Date(a.at).toISOString());
+    expect(r).toMatchObject({ evidence_latitude: WP.lat, evidence_longitude: WP.lng, evidence_accuracy_m: 8 });
+    expect(r.device_meta.receivedAt).toBeTruthy();
+    expect(r.photo_id).toBeTruthy();
+  });
+
+  it('keeps the device time as sent, even when the arrival was held to the session start', async () => {
+    const a = await onShift(60, 180);
+    const claimed = ago(61);
+    await send(a, claimed);
+    const r = await record(a.sessionId);
+    expect(new Date(r.evidence_client_time).toISOString()).toBe(new Date(claimed).toISOString());
+    expect(new Date(r.recorded_at).getTime()).toBeGreaterThan(new Date(r.evidence_client_time).getTime());
+  });
+
+  it('shows in the supervisor\'s approvals with its evidence, and counts provisionally', async () => {
+    const a = await late();
+    const list = (await sup.agent.get('/api/v1/approvals').expect(200)).body;
+    const v = list.verifications.find((x: any) => x.id === a.id);
+    expect(v.risk_flags).toContain('OFFLINE_CAPTURE');
+    expect(v.received_at).toBeTruthy();
+    expect(list.counts.verifications).toBeGreaterThanOrEqual(1);
+    expect((await sup.agent.get('/api/v1/attendance?status=PENDING_VERIFICATION').expect(200)).body.items.some((x: any) => x.id === a.id)).toBe(true);
+    expect(await q(`SELECT 1 FROM attendance_work WHERE attendance_id = $1`, [a.id])).toHaveLength(1);
+  });
+
+  it('a supervisor approves it: approved by a person, not verified by the server', async () => {
+    const a = await late();
+    await decide(sup, a.id, { decision: 'APPROVE' }).expect(400);
+    await decide(sup, a.id, { decision: 'APPROVE', note: 'Gate register agrees' }).expect(200);
+    const r = await record(a.sessionId);
+    expect(r.verification_status).toBe('MANUAL_APPROVED');
+    expect(r.approved_by).toBeTruthy();
+    expect(r.risk_flags).toContain('OFFLINE_CAPTURE');
+    expect(await q(`SELECT 1 FROM audit_logs WHERE action = 'attendance.verify' AND resource_id = $1`, [a.id])).toHaveLength(1);
+    expect((await one(`SELECT before_data FROM review_requests WHERE attendance_id = $1`, [a.id])).before_data.verification_status).toBe('PENDING_VERIFICATION');
+    expect((await decide(sup, a.id, { decision: 'APPROVE', note: 'Twice' }).expect(409)).body.error.code).toBe('NOT_PENDING');
+  });
+
+  it('a supervisor rejects it with a reason: it stops counting, the evidence stays, the employee sees why', async () => {
+    const a = await late();
+    await decide(sup, a.id, { decision: 'REJECT', note: 'Was not on site' }).expect(200);
+    const r = await record(a.sessionId);
+    expect(r.verification_status).toBe('VOIDED');
+    expect(r.risk_flags).toContain('VERIFICATION_REJECTED');
+    expect((await one(`SELECT status FROM attendance_photos WHERE id = $1`, [r.photo_id])).status).toBe('ATTACHED');
+    expect(await q(`SELECT 1 FROM attendance_work WHERE attendance_id = $1`, [a.id])).toHaveLength(0);
+    const mine = (await request(app).get('/api/v1/me/attendance').set(auth(a.token)).expect(200)).body.attendance;
+    expect(mine[0].rejection_note).toBe('Was not on site');
+  });
+
+  it('only an owner can bring a rejected one back, and it is never verified', async () => {
+    const a = await late();
+    await decide(sup, a.id, { decision: 'REJECT', note: 'Was not on site' }).expect(200);
+    const override = (who: typeof owner) => who.agent.post(`/api/v1/faces/reviews/${a.id}/override`).set('X-CSRF-Token', who.csrf).send({ reason: 'Register shows they were here' });
+    await override(sup).expect(403);
+    await override(owner).expect(200);
+    expect((await record(a.sessionId)).verification_status).toBe('CORRECTED');
+  });
+
+  it('nothing turns it into verified: not a correction, not a supervisor, not the database rule', async () => {
+    const a = await late();
+    expect((await owner.agent.post(`/api/v1/attendance/${a.id}/corrections`).set('X-CSRF-Token', owner.csrf).send({ reason: 'Just mark it fine', verificationStatus: 'VERIFIED' }).expect(409)).body.error.code).toBe('NEEDS_VERIFICATION');
+    await owner.agent.post(`/api/v1/attendance/${a.id}/corrections`).set('X-CSRF-Token', owner.csrf).send({ reason: 'Bus strike that morning', isLate: false }).expect(200);
+    expect((await record(a.sessionId)).verification_status).toBe('PENDING_VERIFICATION');
+  });
+
+  it('a supervisor of another site cannot decide it', async () => {
+    const a = await late();
+    const other = await one(`INSERT INTO workplaces (name, latitude, longitude, radius_m, timezone, absence_threshold_minutes, org_id) VALUES ('Other', 1, 1, 100, 'UTC', 5, $1) RETURNING id`, [DEFAULT_ORG_ID]);
+    const s2 = await one(`INSERT INTO users (email, password_hash, role, full_name, org_id) SELECT $1, password_hash, 'ADMIN', 'Elsewhere', org_id FROM users WHERE id = $2 RETURNING id, email`, [`sup-${crypto.randomUUID()}@test.local`, base.adminId]);
+    await q(`INSERT INTO administrator_profiles (user_id, access, site_ids) VALUES ($1,'SUPERVISOR',$2)`, [s2.id, [other.id]]);
+    await decide(await adminAgent(app, s2.email), a.id, { decision: 'APPROVE', note: 'Not my site' }).expect(404);
+  });
+
+  it('a shift end sent late puts a verified record back in front of a person, keeping the device time', async () => {
+    const a = await onShift(300, 300);
+    await q(`UPDATE tracking_sessions SET state = 'ATTENDANCE_READY' WHERE id = $1`, [a.sessionId]);
+    const r = await one(
+      `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key, radius_m_at_record, verification_status) VALUES ($1,$2,$3,$4,$5,$6,30,'VERIFIED') RETURNING id`,
+      [a.emp.id, base.workplaceId, shiftId, a.sessionId, a.date, crypto.randomUUID()],
+    );
+    const sentTime = ago(60);
+    await request(app).post(`/api/v1/tracking/sessions/${a.sessionId}/end`).set(auth(a.token)).send({ endedAt: sentTime }).expect(200);
+    await request(app).post(`/api/v1/tracking/sessions/${a.sessionId}/end`).set(auth(a.token)).send({ endedAt: sentTime }).expect(200);
+    const after = await one(`SELECT verification_status, risk_flags FROM attendance_records WHERE id = $1`, [r.id]);
+    expect(after.verification_status).toBe('PENDING_VERIFICATION');
+    expect(after.risk_flags.filter((f: string) => f === 'OFFLINE_END')).toHaveLength(1);
+    expect((await one(`SELECT after_data FROM audit_logs WHERE action = 'session.end_offline' AND resource_id = $1`, [a.sessionId])).after_data.deviceTime).toBe(sentTime);
+  });
+});
+
+describe('moving an employee to another shift', () => {
+  it('applies from its effective date and leaves past attendance alone', async () => {
+    const a = await onShift(60 * 24 * 3, 60 * 24 * 3);
+    const day = DateTime.utc().minus({ days: 3 }).toISODate()!;
+    await q(`INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key, radius_m_at_record, verification_status, recorded_at, is_late, late_by_minutes) VALUES ($1,$2,$3,$4,$5,$6,30,'VERIFIED',$7,true,5)`, [a.emp.id, base.workplaceId, shiftId, a.sessionId, a.date, crypto.randomUUID(), ago(60 * 24 * 3 - 5)]);
+    const old = await record(a.sessionId);
+    await q(`UPDATE tracking_sessions SET ended_at = $2, state = 'SHIFT_COMPLETED', authorization_status = 'ENDED' WHERE id = $1`, [a.sessionId, ago(60 * 24 * 3 - 480)]);
+    const work = await one(`SELECT worked_minutes, scheduled_minutes FROM attendance_work WHERE attendance_id = $1`, [old.id]);
+    const month = day.slice(0, 7);
+    const row = async () => (await owner.agent.get(`/api/v1/reports/monthly?month=${month}`).expect(200)).body.rows.find((x: any) => x.employee_id === a.emp.id);
+    const before = await row();
+
+    const night = await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1,$2,'22:00','06:00','UTC',$3,5) RETURNING id`, [base.workplaceId, `Night ${crypto.randomUUID().slice(0, 6)}`, [1, 2, 3, 4, 5, 6, 7]]);
+    const tomorrow = DateTime.utc().plus({ days: 1 }).toISODate()!;
+    await q(`UPDATE employee_shift_assignments SET effective_to = $2 WHERE employee_id = $1`, [a.emp.id, DateTime.utc().toISODate()]);
+    await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [a.emp.id, night.id, tomorrow]);
+
+    const after = await record(a.sessionId);
+    expect(after.shift_id).toBe(old.shift_id);
+    expect(after.recorded_at).toEqual(old.recorded_at);
+    expect(after.is_late).toBe(old.is_late);
+    expect(after.late_by_minutes).toBe(old.late_by_minutes);
+    expect(await one(`SELECT worked_minutes, scheduled_minutes FROM attendance_work WHERE attendance_id = $1`, [old.id])).toEqual(work);
+    expect(await row()).toEqual(before);
+    const roster = (d: string) => q(`SELECT shift_id FROM employee_shift_assignments WHERE employee_id = $1 AND effective_from <= $2::date AND (effective_to IS NULL OR effective_to >= $2::date)`, [a.emp.id, d]);
+    expect((await roster(DateTime.utc().toISODate()!))[0].shift_id).toBe(shiftId);
+    expect((await roster(tomorrow))[0].shift_id).toBe(night.id);
+  });
+});
+
 describe('a rejected face check', () => {
   async function rejected() {
     const a = await onShift();
@@ -282,7 +417,7 @@ describe('a rejected face check', () => {
     expect(r.face_review_note).toContain('Checked in person');
     expect(await q(`SELECT 1 FROM attendance_work WHERE attendance_id = $1`, [a.id])).toHaveLength(1);
     expect((await roster(a)).present).toBe(1);
-    const history = await one(`SELECT before_data, resolved_by FROM review_requests WHERE attendance_id = $1 AND reason LIKE 'Face rejection overridden%'`, [a.id]);
+    const history = await one(`SELECT before_data, resolved_by FROM review_requests WHERE attendance_id = $1 AND reason LIKE 'Rejection overridden%'`, [a.id]);
     expect(history.before_data).toMatchObject({ verification_status: 'VOIDED', face_review: 'REJECTED', face_review_note: 'Not the same person' });
     expect(history.resolved_by).toBe(base.adminId);
     expect(await q(`SELECT 1 FROM audit_logs WHERE action = 'face_review.override' AND resource_id = $1`, [a.id])).toHaveLength(1);

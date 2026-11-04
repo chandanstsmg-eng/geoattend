@@ -44,6 +44,7 @@ Rollback: [migrations/023_rollback.sql](migrations/023_rollback.sql). **Not appl
 
 | Object | Change | Existing rows |
 |---|---|---|
-| `attendance_void_is_final()` | Also allows the restore when the record's face check was rejected and the owner's override set `geoattend.face_override` for that transaction | Unchanged |
+| `attendance_records` | `verification_status` also allows `PENDING_VERIFICATION` | Unchanged |
+| `attendance_void_is_final()` | Also allows the restore when a face check or offline record was rejected and the owner's override set `geoattend.face_override` for that transaction | Unchanged |
 
-Every other void stays final. The override is the only code that sets the value, and it records the whole record before and after in review history and the audit log. Rolling back removes the exception; records already restored stay restored.
+Every other void stays final. The override is the only code that sets the value, and it records the whole record before and after in review history and the audit log. Rolling back removes the exception and refuses to run while any record is waiting for verification; records already restored stay restored.

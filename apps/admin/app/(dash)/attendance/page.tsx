@@ -70,7 +70,7 @@ function FaceCheck({ record: r }: { record: any }) {
           </>
         )}
       </dl>
-      {isOwner && r.face_review === 'REJECTED' && r.verification_status === 'VOIDED' && (
+      {isOwner && (r.face_review === 'REJECTED' || r.risk_flags?.includes('VERIFICATION_REJECTED')) && r.verification_status === 'VOIDED' && (
         <form className="space-y-2 rounded-md bg-gray-50 p-3" onSubmit={(e) => { e.preventDefault(); override.mutate(); }}>
           <Field label="Override this rejection (reason required, audited)"><Textarea required minLength={5} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></Field>
           <InlineError error={override.error} />
@@ -183,7 +183,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
         <EmployeeSelect value={f.employeeId} onChange={set('employeeId')} />
         <Select aria-label="Verification status" value={f.status} onChange={(e) => set('status')(e.target.value)} className="w-auto">
           <option value="">Any status</option>
-          {['VERIFIED', 'MANUAL_APPROVED', 'CORRECTED', 'DISPUTED', 'VOIDED'].map((s) => (
+          {['VERIFIED', 'PENDING_VERIFICATION', 'MANUAL_APPROVED', 'CORRECTED', 'DISPUTED', 'VOIDED'].map((s) => (
             <option key={s} value={s}>{s.replace('_', ' ').toLowerCase()}</option>
           ))}
         </Select>
