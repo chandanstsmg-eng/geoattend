@@ -1,0 +1,189 @@
+@import 'tailwindcss';
+
+/*
+ * DhishaAI brand tokens.
+ *   navy-800 #083E5A  brand navy: identity, headings, selected navigation, primary chart series.
+ *   accent-500 #EE7600 brand orange: the identity mark and the chart's second series.
+ *   accent-600 #BA5700 the orange used behind white text (primary buttons): #EE7600 with white
+ *     text is only 2.9:1, this is 4.7:1 (WCAG AA).
+ *   primary-*  the navy-blue family for links, focus rings, tabs and selection.
+ * The gray scale is the brand's slate: gray-200 #DCE5ED = borders, gray-500 #66788A = secondary
+ * text (4.5:1 on white), gray-900 #172B3A = primary text.
+ * Colour has one job each: orange = the primary action; navy = headings, selection and the main
+ * chart series; amber = watch; red = critical or a breach; teal = positive or resolved.
+ */
+@theme {
+  --color-navy-950: #04212f;
+  --color-navy-900: #062f45;
+  --color-navy-800: #083e5a;
+  --color-navy-700: #0b4f72;
+  --color-navy-600: #14618a;
+  --color-navy-200: #c3d6e1;
+  --color-navy-100: #dde9f0;
+  --color-navy-50: #eef4f8;
+  --color-primary-800: #083e5a;
+  --color-primary-700: #0b4f72;
+  --color-primary-600: #0e5a80;
+  --color-primary-500: #1668a0;
+  --color-primary-200: #bcd4e3;
+  --color-primary-100: #dde9f1;
+  --color-primary-50: #eef5f9;
+  --color-accent-50: #fff5eb;
+  --color-accent-100: #ffe6cc;
+  --color-accent-200: #fdca94;
+  --color-accent-500: #ee7600;
+  --color-accent-600: #ba5700;
+  --color-accent-700: #994700;
+  --color-gray-50: #f8fafc;
+  --color-gray-100: #f1f5f9;
+  --color-gray-200: #dce5ed;
+  --color-gray-300: #cbd5e1;
+  --color-gray-400: #94a3b8;
+  --color-gray-500: #66788a;
+  --color-gray-600: #4e5d71;
+  --color-gray-700: #36475a;
+  --color-gray-800: #243546;
+  --color-gray-900: #172b3a;
+  --color-gray-950: #0d1c27;
+  --color-canvas: #f4f7fa;
+  /* Type scale: caption 11, xs 12, body-sm 13, sm 14 (body), title 15 (panel titles), page title 22. */
+  --text-caption: 0.6875rem;
+  --text-caption--line-height: 1rem;
+  --text-body-sm: 0.8125rem;
+  --text-body-sm--line-height: 1.25rem;
+  --text-title: 0.9375rem;
+  --text-title--line-height: 1.5rem;
+  --shadow-card: 0 1px 2px rgb(8 62 90 / 0.04), 0 1px 3px rgb(8 62 90 / 0.04);
+  /* Wide enough for a full data table plus a 22rem side column (overview). */
+  --breakpoint-wide: 85rem;
+  /* The platform UI font (Segoe UI, SF Pro, Roboto): nothing is downloaded, and it renders
+     the same for every visitor instead of depending on whether Inter happens to be installed. */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Devanagari', 'Nirmala UI', sans-serif;
+}
+
+/* <Input>/<Select> move a caller's width to `sm:` at runtime (components/ui.tsx withSize), so
+   Tailwind cannot see these classes in the source. Add a width here before using it on a control. */
+@source inline("sm:w-{auto,20,24,28,32,40,48,56,64,72,80}");
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Visible focus for keyboard users everywhere */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-primary-600);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* Clickable table rows: draw the ring inside the row so the scroll box does not clip it. */
+tr[tabindex]:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
+}
+/* Fields show focus by border colour plus a soft ring rather than the offset outline. */
+:where(input:not([type='checkbox'], [type='radio']), select, textarea):focus-visible {
+  outline: none;
+  border-color: var(--color-primary-600);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary-600) 18%, transparent);
+}
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--color-primary-600);
+}
+
+/* Grid/flex children default to min-width:auto, so a wide table or form inside one
+   would stretch the page past the screen on phones; let them shrink and scroll inside. */
+.grid > *,
+.flex-1 {
+  min-width: 0;
+}
+
+/* Phones: <Table> rows become labelled cards (labels are set from the headers by <Table>). */
+@media (max-width: 639.98px) {
+  .rtable {
+    min-width: 0;
+  }
+  .rtable thead {
+    display: none;
+  }
+  .rtable,
+  .rtable tbody,
+  .rtable tr,
+  .rtable td {
+    display: block;
+    width: 100%;
+  }
+  .rtable tr {
+    position: relative;
+    border-bottom: 1px solid var(--color-gray-200);
+    padding: 0.5rem 0;
+  }
+  /* A row's ⋯ menu sits in the card's top-right corner instead of taking a line of its own. */
+  .rtable td.row-actions {
+    position: absolute;
+    top: 0.375rem;
+    right: 0.5rem;
+    width: auto;
+    padding: 0;
+  }
+  .rtable td {
+    display: flow-root; /* grows to fit a label that wraps onto two lines */
+    max-width: none;
+    border: 0;
+    padding: 0.25rem 1rem 0.25rem 7.75rem;
+    text-align: left; /* number columns are right-aligned on wide screens; in a card, label and value read left to right */
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .rtable td::before {
+    content: attr(data-label);
+    float: left;
+    margin-left: -6.75rem;
+    padding-top: 0.1rem;
+    width: 6.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-gray-500);
+  }
+  /* cells without a column title (action buttons, full-width rows) use the whole width */
+  .rtable td[data-label=''],
+  .rtable td:not([data-label]) {
+    padding-left: 1rem;
+  }
+  .rtable td[data-label='']::before,
+  .rtable td:not([data-label])::before {
+    content: none;
+  }
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Motion: short, and only where it explains what happened (something opened or arrived). */
+@keyframes ga-fade { from { opacity: 0; } }
+@keyframes ga-pop { from { opacity: 0; transform: translate(-50%, calc(-50% + 6px)); } }
+@keyframes ga-slide { from { transform: translateX(24px); opacity: 0; } }
+@keyframes ga-toast { from { opacity: 0; transform: translateY(6px); } }
+.ga-fade { animation: ga-fade 120ms ease-out; }
+.ga-pop { animation: ga-pop 140ms ease-out; }
+.ga-slide { animation: ga-slide 160ms ease-out; }
+.ga-toast { animation: ga-toast 140ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

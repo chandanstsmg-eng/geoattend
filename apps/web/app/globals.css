@@ -1,0 +1,81 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-navy-950: #04212f;
+  --color-navy-900: #062f45;
+  --color-navy-800: #083e5a;
+  --color-navy-700: #0b4f72;
+  --color-navy-600: #14618a;
+  --color-navy-100: #dde9f0;
+  --color-navy-50: #eef4f8;
+  --color-accent-700: #994700;
+  --color-accent-600: #ba5700;
+  --color-accent-500: #ee7600;
+  --color-accent-100: #ffe6cc;
+  --color-accent-50: #fff5eb;
+  /* Devanagari falls back to the platform's Hindi font (Nirmala UI on Windows, Noto on Android). */
+  /* Platform UI font (nothing downloaded, so the strict CSP stays as it is). */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Devanagari', 'Nirmala UI', 'Mangal', sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 4.5rem; /* keeps anchored headings clear of the sticky header */
+}
+
+body {
+  background: #f4f7fa;
+  color: #1f2937;
+}
+
+:where(a, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent-600);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Hindi glyphs sit taller; give headings a little more line height. */
+:lang(hi) h1,
+:lang(hi) h2,
+:lang(hi) h3 {
+  line-height: 1.35;
+}
+
+details > summary {
+  list-style: none;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@keyframes ping-soft {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+.ping-soft {
+  animation: ping-soft 2.4s ease-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}

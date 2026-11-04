@@ -1,0 +1,38 @@
+node_modules/
+.next/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local runtime data: database cluster, uploaded photos, logs, backups
+data/
+apps/api/data/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.key
+*.keystore
+*.jks
+*.dump
+google-services.json
+GoogleService-Info.plist
+service-account*.json
+
+# Expo / React Native
+apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
+apps/mobile/node_modules/
+apps/mobile/dist/
+*.apk
+*.aab
+
+.DS_Store
+Thumbs.db

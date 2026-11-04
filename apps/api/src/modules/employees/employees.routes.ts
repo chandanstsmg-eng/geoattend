@@ -1,0 +1,389 @@
+import crypto from 'node:crypto';
+import { Router, type Request } from 'express';
+import { z } from 'zod';
+import { one, q, tx, type Queryable } from '../../db/pool.js';
+import { badRequest, conflict, HttpError, notFound } from '../../lib/errors.js';
+import { idParams, isoDate, mount, route } from '../../lib/http.js';
+import { hashPassword, passwordPolicyError } from '../../lib/password.js';
+import { revokeAllForUser, type AuthUser } from '../../lib/auth.js';
+import { assertInOrg, siteFilter } from '../../lib/tenancy.js';
+import { audit } from '../../lib/audit.js';
+import { endSession } from '../tracking/tracking.service.js';
+import { addRosterEntry, rosterEntryBody } from '../roster/roster.js';
+
+const SELECT_EMPLOYEE = `
+  SELECT u.id, u.email, u.full_name, u.is_active, u.is_demo, u.last_login_at, u.created_at,
+         ep.employee_code, ep.phone, ep.department, ep.designation,
+         wa.workplace_id, w.name AS workplace_name, ep.supervisor_id, su.full_name AS supervisor_name,
+         (SELECT json_agg(json_build_object('assignmentId', esa.id, 'shiftId', sh.id, 'name', sh.name, 'startTime', sh.start_time, 'endTime', sh.end_time,
+                                            'daysOfWeek', sh.days_of_week, 'effectiveFrom', esa.effective_from, 'effectiveTo', esa.effective_to,
+                                            'workplaceId', sw.id, 'workplaceName', sw.name, 'managerId', esa.manager_id, 'managerName', mu.full_name, 'notes', esa.notes)
+                          ORDER BY esa.effective_from, sh.start_time)
+            FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id JOIN workplaces sw ON sw.id = sh.workplace_id
+            LEFT JOIN users mu ON mu.id = esa.manager_id
+            WHERE esa.employee_id = u.id AND (esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE)) AS shifts,
+         (SELECT json_build_object('id', s.id, 'state', s.state) FROM tracking_sessions s WHERE s.employee_id = u.id AND s.ended_at IS NULL LIMIT 1) AS open_session
+  FROM users u
+  JOIN employee_profiles ep ON ep.user_id = u.id
+  LEFT JOIN users su ON su.id = ep.supervisor_id
+  LEFT JOIN workplace_assignments wa ON wa.employee_id = u.id AND wa.effective_to IS NULL
+  LEFT JOIN workplaces w ON w.id = wa.workplace_id`;
+
+/** A worker's supervisor must be an active supervisor of the company who manages the worker's home workplace. */
+export async function assertSupervisorFor(db: Queryable, supervisorId: string, orgId: string, workplaceId: string | null) {
+  if (!workplaceId) throw badRequest('NO_WORKPLACE', 'Give the employee a home workplace before choosing their supervisor.');
+  const s = await one(
+    `SELECT 1 FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id
+     WHERE u.id = $1 AND u.org_id = $2 AND u.role = 'ADMIN' AND u.is_active AND ap.access = 'SUPERVISOR' AND $3::uuid = ANY(ap.site_ids)`,
+    [supervisorId, orgId, workplaceId],
+    db,
+  );
+  if (!s) throw badRequest('BAD_SUPERVISOR', 'Choose a supervisor who manages this employee’s workplace.');
+}
+
+/** Drops supervisor links that no longer hold (the supervisor lost the site, or the worker moved). Returns how many. */
+export async function unlinkStaleSupervisors(db: Queryable, orgId: string) {
+  const r = await q(
+    `UPDATE employee_profiles ep SET supervisor_id = NULL
+     FROM users u
+     WHERE u.id = ep.user_id AND u.org_id = $1 AND ep.supervisor_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM users s JOIN administrator_profiles ap ON ap.user_id = s.id
+         JOIN workplace_assignments wa ON wa.employee_id = ep.user_id AND wa.effective_to IS NULL
+         WHERE s.id = ep.supervisor_id AND s.is_active AND ap.access = 'SUPERVISOR' AND wa.workplace_id = ANY(ap.site_ids))
+     RETURNING ep.user_id`,
+    [orgId],
+    db,
+  );
+  return r.length;
+}
+
+const employeeBody = z.object({
+  fullName: z.string().trim().min(1).max(200),
+  email: z.email().max(200),
+  employeeCode: z.string().trim().min(1).max(40),
+  phone: z.string().trim().max(40).nullable().optional(),
+  department: z.string().trim().max(100).nullable().optional(),
+  designation: z.string().trim().max(100).nullable().optional(),
+});
+
+async function loadEmployee(id: string) {
+  const e = await one(`${SELECT_EMPLOYEE} WHERE u.id = $1 AND u.role = 'EMPLOYEE'`, [id]);
+  if (!e) throw notFound('Employee');
+  return e;
+}
+
+function tempPassword() {
+  // 14 chars, guaranteed letters + digits.
+  return `${crypto.randomBytes(6).toString('base64url').replace(/[^A-Za-z]/g, 'x')}${crypto.randomInt(10000000, 99999999)}`;
+}
+
+/** Creates one employee account (and optional workplace / shift assignment) inside `db`. */
+async function createEmployee(
+  db: Queryable,
+  body: z.infer<typeof employeeBody> & { password?: string; workplaceId?: string; shiftId?: string },
+  actor: AuthUser,
+  req: Request,
+  action = 'employee.create',
+) {
+  const password = body.password || tempPassword();
+  const policy = passwordPolicyError(password);
+  if (policy) throw badRequest('WEAK_PASSWORD', policy);
+  if (await one('SELECT 1 FROM users WHERE lower(email) = lower($1)', [body.email], db)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
+  if (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND org_id = $2', [body.employeeCode, actor.orgId], db)) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
+  if (body.workplaceId) await assertInOrg('workplace', body.workplaceId, actor.orgId);
+  const u = await one(
+    `INSERT INTO users (email, password_hash, role, full_name, must_change_password, org_id) VALUES ($1,$2,'EMPLOYEE',$3,$4,$5) RETURNING id`,
+    [body.email, await hashPassword(password), body.fullName, !body.password, actor.orgId],
+    db,
+  );
+  await q(`INSERT INTO employee_profiles (user_id, employee_code, phone, department, designation) VALUES ($1,$2,$3,$4,$5)`, [u.id, body.employeeCode, body.phone ?? null, body.department ?? null, body.designation ?? null], db);
+  if (body.workplaceId) await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by) VALUES ($1,$2,$3)`, [u.id, body.workplaceId, actor.id], db);
+  if (body.shiftId) await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, created_by) VALUES ($1,$2,$3)`, [u.id, body.shiftId, actor.id], db);
+  await audit({ actor, action, resourceType: 'user', resourceId: u.id, after: { ...body, password: undefined }, req }, db);
+  return { id: u.id as string, temporaryPassword: body.password ? undefined : password };
+}
+
+export const employeesRouter = Router();
+mount(employeesRouter, '/api/v1/employees', 'employees', [
+  route({
+    method: 'get',
+    path: '/',
+    summary: 'List employees',
+    access: 'admin',
+    query: z.object({
+      search: z.string().max(100).optional(),
+      workplaceId: z.uuid().optional(),
+      /** A supervisor's id, or "none" for workers nobody supervises yet. */
+      supervisorId: z.union([z.uuid(), z.literal('none')]).optional(),
+      status: z.enum(['active', 'inactive', 'all']).default('active'),
+    }),
+    handler: async ({ query, user }) =>
+      q(
+        `${SELECT_EMPLOYEE}
+         WHERE u.role = 'EMPLOYEE' AND u.org_id = $4 AND ${siteFilter('wa.workplace_id', '$5')}
+           AND ($1::text IS NULL OR u.full_name ILIKE '%' || $1 || '%' OR u.email ILIKE '%' || $1 || '%' OR ep.employee_code ILIKE '%' || $1 || '%')
+           AND ($2::uuid IS NULL OR wa.workplace_id = $2)
+           AND ($3 = 'all' OR ($3 = 'active') = u.is_active)
+           AND ($6::text IS NULL OR ($6 = 'none' AND ep.supervisor_id IS NULL) OR ep.supervisor_id::text = $6)
+         ORDER BY u.full_name`,
+        [query.search?.trim() || null, query.workplaceId ?? null, query.status, user.orgId, user.sites, query.supervisorId ?? null],
+      ),
+  }),
+  route({
+    method: 'post',
+    path: '/',
+    summary: 'Create an employee (returns a one-time temporary password)',
+    access: 'admin',
+    ownerOnly: true,
+    body: employeeBody.extend({ password: z.string().max(200).optional(), workplaceId: z.uuid().optional() }),
+    handler: async ({ body, user, req, res }) => {
+      const created = await tx((db) => createEmployee(db, body, user, req));
+      res.status(201);
+      return { employee: await loadEmployee(created.id), temporaryPassword: created.temporaryPassword };
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/import',
+    summary: 'Bulk-create employees (each row succeeds or fails on its own; temporary passwords are returned once)',
+    access: 'admin',
+    ownerOnly: true,
+    body: z.object({
+      rows: z.array(z.object({ fullName: z.string(), email: z.string(), employeeCode: z.string(), phone: z.string().optional(), department: z.string().optional(), designation: z.string().optional() })).min(1).max(500),
+      workplaceId: z.uuid().optional(),
+      shiftId: z.uuid().optional(),
+    }),
+    handler: async ({ body, user, req }) => {
+      if (body.workplaceId) await assertInOrg('workplace', body.workplaceId, user.orgId);
+      if (body.shiftId) {
+        const sh = await one('SELECT workplace_id FROM shifts WHERE id = $1', [body.shiftId]);
+        if (!sh) throw notFound('Shift');
+        if (sh.workplace_id !== body.workplaceId) throw badRequest('WRONG_WORKPLACE', 'Choose the workplace that the shift belongs to.');
+      }
+      const results = [];
+      for (const [i, raw] of body.rows.entries()) {
+        const blank = (v?: string) => (v?.trim() ? v.trim() : null);
+        const parsed = employeeBody.safeParse({ ...raw, phone: blank(raw.phone), department: blank(raw.department), designation: blank(raw.designation) });
+        if (!parsed.success) {
+          const fields = Object.keys(z.flattenError(parsed.error).fieldErrors);
+          results.push({ row: i + 1, email: raw.email, ok: false, error: `Check ${fields.join(', ') || 'this row'}` });
+          continue;
+        }
+        try {
+          const c = await tx((db) => createEmployee(db, { ...parsed.data, workplaceId: body.workplaceId, shiftId: body.shiftId }, user, req, 'employee.import'));
+          results.push({ row: i + 1, id: c.id, fullName: parsed.data.fullName, email: parsed.data.email, employeeCode: parsed.data.employeeCode, ok: true, temporaryPassword: c.temporaryPassword });
+        } catch (err) {
+          results.push({ row: i + 1, email: raw.email, ok: false, error: err instanceof HttpError ? err.message : 'Could not create this employee.' });
+        }
+      }
+      return { created: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results };
+    },
+  }),
+  route({
+    method: 'get',
+    path: '/:id',
+    summary: 'Employee details',
+    access: 'admin',
+    params: idParams,
+    scope: 'employee',
+    handler: async ({ params }) => loadEmployee(params.id),
+  }),
+  route({
+    method: 'patch',
+    path: '/:id',
+    summary: 'Update employee profile',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    body: employeeBody.partial(),
+    handler: async ({ params, body, user, req }) => {
+      const before = await loadEmployee(params.id);
+      await tx(async (db) => {
+        if (body.email && (await one('SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2', [body.email, params.id], db))) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
+        if (body.employeeCode && (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND user_id <> $2 AND org_id = $3', [body.employeeCode, params.id, user.orgId], db))) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
+        await q(`UPDATE users SET full_name = COALESCE($2, full_name), email = COALESCE($3, email), updated_at = now() WHERE id = $1`, [params.id, body.fullName ?? null, body.email ?? null], db);
+        await q(
+          `UPDATE employee_profiles SET employee_code = COALESCE($2, employee_code),
+             phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,
+             department = CASE WHEN $5::boolean THEN $6 ELSE department END,
+             designation = CASE WHEN $7::boolean THEN $8 ELSE designation END
+           WHERE user_id = $1`,
+          [params.id, body.employeeCode ?? null, 'phone' in body, body.phone ?? null, 'department' in body, body.department ?? null, 'designation' in body, body.designation ?? null],
+          db,
+        );
+      });
+      const after = await loadEmployee(params.id);
+      await audit({ actor: user, action: 'employee.update', resourceType: 'user', resourceId: params.id, before, after, req });
+      return after;
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/deactivate',
+    summary: 'Deactivate (ends any open session, revokes sign-ins; history kept)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    body: z.object({ reason: z.string().trim().min(3).max(500) }),
+    handler: async ({ params, body, user, req }) => {
+      const e = await loadEmployee(params.id);
+      if (e.open_session) await endSession(e.open_session.id, user, 'ADMIN', `employee deactivated: ${body.reason}`);
+      await q('UPDATE users SET is_active = false, updated_at = now() WHERE id = $1', [params.id]);
+      await revokeAllForUser(params.id);
+      await audit({ actor: user, action: 'employee.deactivate', resourceType: 'user', resourceId: params.id, reason: body.reason, req });
+      return loadEmployee(params.id);
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/reactivate',
+    summary: 'Reactivate employee',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    handler: async ({ params, user, req }) => {
+      await loadEmployee(params.id);
+      await q('UPDATE users SET is_active = true, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1', [params.id]);
+      await audit({ actor: user, action: 'employee.reactivate', resourceType: 'user', resourceId: params.id, req });
+      return loadEmployee(params.id);
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/reset-password',
+    summary: 'Issue a new temporary password (revokes existing sign-ins)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    handler: async ({ params, user, req }) => {
+      await loadEmployee(params.id);
+      const pw = tempPassword();
+      await q('UPDATE users SET password_hash = $2, must_change_password = true, failed_login_count = 0, locked_until = NULL WHERE id = $1', [params.id, await hashPassword(pw)]);
+      await revokeAllForUser(params.id);
+      await audit({ actor: user, action: 'employee.reset_password', resourceType: 'user', resourceId: params.id, req });
+      return { temporaryPassword: pw };
+    },
+  }),
+  route({
+    method: 'put',
+    path: '/:id/workplace',
+    summary: 'Set the employee’s home workplace (roster entries at other workplaces are kept)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    body: z.object({ workplaceId: z.uuid().nullable() }),
+    handler: async ({ params, body, user, req }) => {
+      const before = await loadEmployee(params.id);
+      if (before.open_session && before.workplace_id !== body.workplaceId) throw conflict('SESSION_OPEN', 'End the employee’s open shift session before changing the workplace.');
+      await tx(async (db) => {
+        if (body.workplaceId) await assertInOrg('workplace', body.workplaceId, user.orgId);
+        // Assignments that started today are removed (never effective); older ones end yesterday. The audit log keeps the history.
+        await q(`DELETE FROM workplace_assignments WHERE employee_id = $1 AND effective_to IS NULL AND effective_from >= CURRENT_DATE`, [params.id], db);
+        await q(`UPDATE workplace_assignments SET effective_to = CURRENT_DATE - 1 WHERE employee_id = $1 AND effective_to IS NULL`, [params.id], db);
+        if (body.workplaceId) {
+          await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by) VALUES ($1,$2,$3)`, [params.id, body.workplaceId, user.id], db);
+        }
+        // A supervisor who does not manage the new workplace stops being this worker's supervisor.
+        await unlinkStaleSupervisors(db, user.orgId);
+      });
+      const after = await loadEmployee(params.id);
+      await audit({ actor: user, action: 'employee.assign_workplace', resourceType: 'user', resourceId: params.id, before: { workplaceId: before.workplace_id }, after: { workplaceId: body.workplaceId }, req });
+      return after;
+    },
+  }),
+  route({
+    method: 'put',
+    path: '/:id/supervisor',
+    summary: 'Set the supervisor the worker reports to (a supervisor of their home workplace), or none',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    body: z.object({ supervisorId: z.uuid().nullable() }),
+    handler: async ({ params, body, user, req }) => {
+      const before = await loadEmployee(params.id);
+      await tx(async (db) => {
+        if (body.supervisorId) await assertSupervisorFor(db, body.supervisorId, user.orgId, before.workplace_id);
+        await q('UPDATE employee_profiles SET supervisor_id = $2 WHERE user_id = $1', [params.id, body.supervisorId], db);
+      });
+      const after = await loadEmployee(params.id);
+      await audit({ actor: user, action: 'employee.assign_supervisor', resourceType: 'user', resourceId: params.id, before: { supervisorId: before.supervisor_id }, after: { supervisorId: after.supervisor_id }, req });
+      return after;
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/shifts',
+    summary: 'Add a roster entry: shift (any workplace), manager, dates and what to work on (supervisors: their workplaces only)',
+    access: 'admin',
+    params: idParams,
+    scope: 'employee',
+    body: rosterEntryBody,
+    handler: async ({ params, body, user, req }) => {
+      await loadEmployee(params.id);
+      const row = await tx((db) => addRosterEntry(db, params.id, body, user));
+      await audit({ actor: user, action: 'employee.assign_shift', resourceType: 'user', resourceId: params.id, after: { assignmentId: row.id, ...body }, req });
+      return loadEmployee(params.id);
+    },
+  }),
+  route({
+    method: 'delete',
+    path: '/:id/shifts/:assignmentId',
+    summary: 'End a roster entry (history kept; supervisors: entries at their workplaces only)',
+    access: 'admin',
+    params: z.object({ id: z.uuid(), assignmentId: z.uuid() }),
+    scope: 'employee',
+    handler: async ({ params, user, req }) => {
+      const r = await tx(async (db) => {
+        const a = await one(
+          `SELECT esa.*, sh.workplace_id FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id
+           WHERE esa.id = $1 AND esa.employee_id = $2 AND (esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE) FOR UPDATE OF esa`,
+          [params.assignmentId, params.id],
+          db,
+        );
+        if (!a || (user.sites && !user.sites.includes(a.workplace_id))) throw notFound('Shift assignment');
+        if (await one('SELECT 1 FROM tracking_sessions WHERE employee_id = $1 AND shift_id = $2 AND ended_at IS NULL', [params.id, a.shift_id], db)) {
+          throw conflict('SESSION_OPEN', 'End the open session for this shift first.');
+        }
+        // Entries not yet started (or never used) are removed; older ones end yesterday (history and audit log kept).
+        const used = await one(
+          'SELECT 1 FROM tracking_sessions WHERE employee_id = $1 AND shift_id = $2 AND shift_date >= $3 AND ($4::date IS NULL OR shift_date <= $4) LIMIT 1',
+          [params.id, a.shift_id, a.effective_from, a.effective_to],
+          db,
+        );
+        const started = (await one('SELECT $1::date < CURRENT_DATE AS v', [a.effective_from], db)).v;
+        if (!used || !started) {
+          await q('DELETE FROM employee_shift_assignments WHERE id = $1', [a.id], db);
+        } else {
+          await q('UPDATE employee_shift_assignments SET effective_to = GREATEST(effective_from, CURRENT_DATE - 1) WHERE id = $1', [a.id], db);
+        }
+        return a;
+      });
+      await audit({ actor: user, action: 'employee.unassign_shift', resourceType: 'user', resourceId: params.id, before: { assignmentId: r.id, shiftId: r.shift_id }, req });
+      return loadEmployee(params.id);
+    },
+  }),
+  route({
+    method: 'get',
+    path: '/:id/location-history',
+    summary: 'Location history in a time range (access is audited)',
+    access: 'admin',
+    params: idParams,
+    scope: 'employee',
+    query: z.object({ from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }) }),
+    handler: async ({ params, query, user, req }) => {
+      await audit({ actor: user, action: 'location_history.view', resourceType: 'user', resourceId: params.id, after: query, req });
+      return q(
+        `SELECT lu.id, lu.session_id, lu.latitude, lu.longitude, lu.accuracy_m, lu.client_time, lu.received_at, lu.distance_m, lu.classification, lu.source, lu.is_mocked, lu.is_simulated
+         FROM location_updates lu WHERE lu.employee_id = $1 AND lu.client_time BETWEEN $2 AND $3 ORDER BY lu.client_time LIMIT 5000`,
+        [params.id, query.from, query.to],
+      );
+    },
+  }),
+]);

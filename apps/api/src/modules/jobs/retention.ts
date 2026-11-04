@@ -1,0 +1,67 @@
+/**
+ * Data retention. Raw location history and attendance photos are deleted after
+ * each company's configured periods; attendance records themselves (times, status,
+ * evidence summary) are kept for payroll/legal record keeping.
+ * Each run is summarised in that company's audit log.
+ */
+import { q } from '../../db/pool.js';
+import { audit } from '../../lib/audit.js';
+import type { AuthUser } from '../../lib/auth.js';
+import { deleteObject } from '../../lib/storage.js';
+import { logger } from '../../lib/logger.js';
+import { getSettings } from '../settings/settings.service.js';
+
+/** Runs retention for one company, or for every company when `orgId` is omitted. */
+export async function runRetention(actor: AuthUser | null = null, orgId?: string, now = new Date()) {
+  const orgs = orgId ? [orgId] : (await q<{ id: string }>('SELECT id FROM organizations')).map((o) => o.id);
+  let last: Awaited<ReturnType<typeof runForOrg>> | null = null;
+  for (const id of orgs) last = await runForOrg(id, actor, now);
+  // Platform-wide housekeeping: expired refresh tokens.
+  if (!orgId) await q(`DELETE FROM refresh_tokens WHERE expires_at < $1::timestamptz - interval '7 days'`, [now]);
+  return last;
+}
+
+async function runForOrg(orgId: string, actor: AuthUser | null, now: Date) {
+  const { retention } = await getSettings(orgId);
+  const inOrg = `employee_id IN (SELECT id FROM users WHERE org_id = $3)`;
+
+  // 1. Raw location history (only of closed sessions — never cut a live session's trail).
+  const loc = await q(
+    `DELETE FROM location_updates lu USING tracking_sessions s
+     WHERE lu.session_id = s.id AND s.ended_at IS NOT NULL AND lu.received_at < $1::timestamptz - make_interval(days => $2) AND lu.${inOrg}
+     RETURNING lu.id`,
+    [now, retention.locationDays, orgId],
+  );
+  await q(`DELETE FROM geofence_events WHERE event_time < $1::timestamptz - make_interval(days => $2) AND ${inOrg}`, [now, retention.locationDays, orgId]);
+  await q(`DELETE FROM permission_status_events WHERE received_at < $1::timestamptz - make_interval(days => $2) AND ${inOrg}`, [now, retention.locationDays, orgId]);
+
+  // 2. Photos: attached ones past retention, and abandoned uploads after a day.
+  const photos = await q(
+    `SELECT id, object_key FROM attendance_photos
+     WHERE deleted_at IS NULL AND employee_id IN (SELECT id FROM users WHERE org_id = $2)
+       AND id NOT IN (SELECT photo_id FROM employee_faces) -- reference photos for the face check are kept
+       AND (
+       (status = 'ATTACHED' AND retention_until IS NOT NULL AND retention_until < $1)
+       OR (status IN ('PENDING_UPLOAD', 'UPLOADED', 'EXPIRED') AND created_at < $1::timestamptz - interval '1 day'))`,
+    [now, orgId],
+  );
+  let photosDeleted = 0;
+  for (const p of photos) {
+    try {
+      await deleteObject(p.object_key);
+      await q(`UPDATE attendance_photos SET status = 'DELETED', deleted_at = now(), deleted_reason = 'retention policy' WHERE id = $1`, [p.id]);
+      photosDeleted++;
+    } catch (err) {
+      logger.warn({ err, photoId: p.id }, 'retention: photo delete failed; will retry next run');
+    }
+  }
+
+  // 3. Old notifications.
+  const notes = await q(`DELETE FROM notifications WHERE created_at < $1::timestamptz - make_interval(days => $2) AND org_id = $3 RETURNING id`, [now, retention.notificationDays, orgId]);
+
+  const summary = { locationUpdatesDeleted: loc.length, photosDeleted, notificationsDeleted: notes.length, policy: retention };
+  if (actor || loc.length || photosDeleted || notes.length) {
+    await audit({ actor, orgId, action: 'retention.run', resourceType: 'retention', after: summary });
+  }
+  return summary;
+}

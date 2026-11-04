@@ -1,0 +1,486 @@
+/**
+ * Attendance submission.
+ *
+ *  1. POST /attendance/intents  — allowed only in ATTENDANCE_READY. Reserves a
+ *     private object key, returns a short-lived signed upload URL and moves the
+ *     session to ATTENDANCE_SUBMISSION_PENDING.
+ *  2. The app PUTs the camera JPEG to that URL.
+ *  3. POST /attendance — the server re-validates everything independently:
+ *     session ownership and state, photo existence/type/size, and a fresh GPS
+ *     evidence reading which is run through the same state machine as tracking
+ *     readings. Only then is the record inserted, with SERVER time.
+ *
+ * Exactly-once: the request carries an idempotency key (unique in the DB) and
+ * the table has UNIQUE (employee_id, shift_id, shift_date). A replay with the
+ * same key returns the original record; a different key for the same shift is
+ * reported as a suspected duplicate submission and rejected.
+ */
+import type pg from 'pg';
+import { classifyReading, distanceMeters } from '@geoattend/shared';
+import { one, q, tx, type Queryable } from '../../db/pool.js';
+import { HttpError, conflict, forbidden, notFound } from '../../lib/errors.js';
+import { createUploadUrl, inspectObject, newObjectKey, type PhotoType } from '../../lib/storage.js';
+import { config } from '../../config.js';
+import { audit } from '../../lib/audit.js';
+import type { AuthUser } from '../../lib/auth.js';
+import { getSettings } from '../settings/settings.service.js';
+import { notify } from '../notifications/notify.js';
+import { Outbox } from '../notifications/live-hub.js';
+import { engineRules, ingestLocked, lockSession, sessionNow, transition, type Actor, type ReadingInput } from '../tracking/tracking.service.js';
+import { challengeFor } from '../faces/faces.js';
+
+export interface IntentInput {
+  sessionId: string;
+  idempotencyKey: string;
+  contentType: PhotoType;
+  sizeBytes: number;
+}
+
+export async function createIntent(employeeId: string, input: IntentInput, origin: string, actor: Actor = 'EMPLOYEE') {
+  if (input.sizeBytes > config.storage.maxPhotoBytes) {
+    throw new HttpError(413, 'PHOTO_TOO_LARGE', `Photo must be at most ${Math.round(config.storage.maxPhotoBytes / 1024 / 1024)} MB.`);
+  }
+  const outbox = new Outbox();
+  const photo = await tx(async (db) => {
+    const s = await lockSession(db, input.sessionId);
+    if (!s) throw notFound('Session');
+    if (s.employee_id !== employeeId) throw forbidden();
+    if (s.has_attendance) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded for this shift.');
+    if (s.state !== 'ATTENDANCE_READY' && s.state !== 'ATTENDANCE_SUBMISSION_PENDING') {
+      throw conflict('ATTENDANCE_LOCKED', 'Attendance is not available yet. Reach the workplace area and wait for verification.', { state: s.state });
+    }
+    // A retake replaces any earlier unused upload slot.
+    await q(`UPDATE attendance_photos SET status = 'EXPIRED' WHERE session_id = $1 AND status IN ('PENDING_UPLOAD', 'UPLOADED')`, [s.id], db);
+    const key = newObjectKey(employeeId, input.contentType);
+    const photo = await one(
+      `INSERT INTO attendance_photos (employee_id, session_id, object_key, content_type, declared_bytes, idempotency_key, upload_expires_at, is_simulated)
+       VALUES ($1,$2,$3,$4,$5,$6, now() + make_interval(secs => $7), $8) RETURNING *`,
+      [employeeId, s.id, key, input.contentType, input.sizeBytes, input.idempotencyKey, config.storage.uploadUrlTtlSec, s.is_simulated],
+      db,
+    );
+    await transition(db, outbox, s, 'ATTENDANCE_SUBMISSION_PENDING', 'attendance photo capture started', actor, actor === 'EMPLOYEE' ? employeeId : null);
+    return photo;
+  });
+  outbox.flush();
+  const upload = await createUploadUrl(photo.object_key, input.contentType, input.sizeBytes, origin);
+  return { photoId: photo.id as string, upload };
+}
+
+export interface SubmitInput {
+  sessionId: string;
+  photoId: string;
+  idempotencyKey: string;
+  evidence: Omit<ReadingInput, 'source'>;
+  device?: Record<string, unknown>;
+}
+
+type SubmitOutcome = { ok: true; record: any; replay: boolean } | { ok: false; error: HttpError };
+
+async function fail(db: pg.PoolClient, outbox: Outbox, s: any, code: string, message: string, details?: unknown): Promise<SubmitOutcome> {
+  await notify(db, outbox, {
+    type: 'ATTENDANCE_SUBMISSION_FAILED',
+    severity: 'WARNING',
+    body: `${s.employee_name}: attendance submission rejected — ${message}`,
+    employeeId: s.employee_id,
+    workplaceId: s.workplace_id,
+    sessionId: s.id,
+    data: { code, details },
+    dedupeKey: `submit-failed:${s.id}:${code}:${Math.floor(Date.now() / 600_000)}`,
+    simulated: s.is_simulated,
+  });
+  return { ok: false, error: new HttpError(422, code, message, details) };
+}
+
+export async function submitAttendance(employeeId: string, input: SubmitInput, actor: Actor = 'EMPLOYEE') {
+  // Idempotent replay: same key → same answer, no side effects.
+  const prior = await one('SELECT * FROM attendance_records WHERE idempotency_key = $1', [input.idempotencyKey]);
+  if (prior) {
+    if (prior.employee_id !== employeeId) throw forbidden();
+    return { record: prior, replay: true };
+  }
+
+  const outbox = new Outbox();
+  const outcome = await tx(async (db): Promise<SubmitOutcome> => {
+    const s = await lockSession(db, input.sessionId);
+    if (!s) throw notFound('Session');
+    if (s.employee_id !== employeeId) throw forbidden();
+    if (s.ended_at) throw conflict('SESSION_CLOSED', 'This shift session has ended.');
+    const settings = await getSettings(s.org_id, db);
+    const now = sessionNow(s);
+
+    if (s.has_attendance) {
+      await notify(db, outbox, {
+        type: 'DUPLICATE_SUBMISSION',
+        severity: 'WARNING',
+        body: `${s.employee_name} submitted attendance again for ${s.shift_name} on ${s.shift_date}. The original record was kept.`,
+        employeeId,
+        workplaceId: s.workplace_id,
+        sessionId: s.id,
+        dedupeKey: `dup:${s.id}:${input.idempotencyKey}`,
+        simulated: s.is_simulated,
+      });
+      return { ok: false, error: conflict('DUPLICATE_SUBMISSION', 'Attendance is already recorded for this shift.') };
+    }
+
+    // Photo must be the one reserved for this session, uploaded and genuinely an image.
+    const photo = await one('SELECT * FROM attendance_photos WHERE id = $1 FOR UPDATE', [input.photoId], db);
+    if (!photo || photo.session_id !== s.id || photo.employee_id !== employeeId) throw notFound('Photo');
+    if (photo.status === 'EXPIRED' || photo.status === 'DELETED') {
+      return fail(db, outbox, s, 'PHOTO_EXPIRED', 'The photo upload slot expired or was cancelled. Capture the photo again.');
+    }
+    const obj = await inspectObject(photo.object_key);
+    if (!obj) return fail(db, outbox, s, 'PHOTO_MISSING', 'The photo was not uploaded. Please retry.');
+    if (obj.sizeBytes > config.storage.maxPhotoBytes || obj.sizeBytes === 0) return fail(db, outbox, s, 'PHOTO_INVALID', 'The photo size is not acceptable.');
+    if (obj.type !== photo.content_type) return fail(db, outbox, s, 'PHOTO_INVALID', 'The uploaded file is not a valid camera image.');
+
+    // Evidence reading: fresh, plausible, and judged by the same rules as tracking.
+    const ev = input.evidence;
+    const evTime = new Date(ev.clientTime);
+    const ageSec = (now.getTime() - evTime.getTime()) / 1000;
+    if (!(ageSec <= settings.tracking.evidenceMaxAgeSec)) {
+      return fail(db, outbox, s, 'EVIDENCE_STALE', `The location fix is older than ${settings.tracking.evidenceMaxAgeSec} seconds. Get a fresh fix and retry.`);
+    }
+    // Fake GPS anywhere in this shift's trail counts, not only in the final fix (GPS-06).
+    const mockedTrail = !!(await one('SELECT 1 FROM location_updates WHERE session_id = $1 AND is_mocked LIMIT 1', [s.id], db));
+    if ((ev.isMocked || mockedTrail) && settings.tracking.mockLocationPolicy === 'BLOCK_ATTENDANCE') {
+      return fail(db, outbox, s, 'MOCK_LOCATION', 'This phone reported a fake-location (mock location) source during this shift. Turn it off and uninstall the app providing it, or request a manual review.');
+    }
+    // Rooted / jailbroken phones and emulators can fake location without the phone reporting it.
+    const dev = input.device ?? {};
+    const untrusted = [dev.isPhysicalDevice === false ? 'EMULATOR' : null, dev.isRooted === true ? 'ROOTED_DEVICE' : null].filter((f): f is string => !!f);
+    if (untrusted.length && settings.tracking.deviceIntegrityPolicy === 'BLOCK_ATTENDANCE' && actor !== 'SIMULATOR') {
+      return fail(
+        db,
+        outbox,
+        s,
+        'DEVICE_NOT_TRUSTED',
+        `Attendance cannot be marked from ${untrusted.includes('EMULATOR') ? 'an emulator' : 'a rooted or jailbroken phone'}: its location cannot be trusted. Use an unmodified phone, or request a manual review.`,
+        { flags: untrusted },
+      );
+    }
+    const ingest = await ingestLocked(db, outbox, s, [{ ...ev, source: actor === 'SIMULATOR' ? 'SIMULATOR' : 'SUBMISSION' }], actor, now);
+    const r0 = ingest.results[0];
+    if (r0?.status === 'REJECTED') return fail(db, outbox, s, 'EVIDENCE_INVALID', `The location evidence was rejected (${r0.reason}).`);
+
+    // The state machine may just have re-locked attendance (employee left before submitting).
+    if (s.state !== 'ATTENDANCE_SUBMISSION_PENDING' && s.state !== 'ATTENDANCE_READY') {
+      return fail(db, outbox, s, 'NOT_ELIGIBLE', 'You are no longer inside the workplace area. Attendance is locked again.', { state: s.state });
+    }
+    const distance = distanceMeters({ lat: s.wp_lat, lng: s.wp_lng }, { lat: ev.latitude, lng: ev.longitude });
+    const cls = classifyReading(distance, ev.accuracyM, engineRules(settings, Number(s.radius_m)), 'EXIT');
+    if (cls !== 'INSIDE') {
+      await transition(db, outbox, s, 'ATTENDANCE_READY', `submission evidence ${cls.toLowerCase()}`, actor);
+      return fail(
+        db,
+        outbox,
+        s,
+        cls === 'INSUFFICIENT_ACCURACY' ? 'GPS_ACCURACY_INSUFFICIENT' : 'EVIDENCE_NOT_INSIDE',
+        cls === 'INSUFFICIENT_ACCURACY'
+          ? `GPS accuracy (±${Math.round(ev.accuracyM)} m) is not sufficient to confirm your location. Retry in an open area.`
+          : `Your location could not be confirmed inside the workplace area (${Math.round(distance)} m, ±${Math.round(ev.accuracyM)} m). Retry.`,
+      );
+    }
+
+    const lateBy = Math.floor((now.getTime() - new Date(s.scheduled_start_at).getTime()) / 60000);
+    const isLate = lateBy > s.arrival_grace_minutes;
+    const flags: string[] = [];
+    if (s.is_simulated) flags.push('SIMULATED');
+    if (ev.isMocked || mockedTrail) flags.push('MOCK_LOCATION_REPORTED');
+    flags.push(...untrusted);
+    if (s.background_permission && s.background_permission !== 'granted') flags.push('BACKGROUND_LOCATION_UNAVAILABLE');
+
+    const record = await one(
+      `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key, photo_id,
+         evidence_latitude, evidence_longitude, evidence_accuracy_m, evidence_distance_m, evidence_client_time, radius_m_at_record,
+         is_late, late_by_minutes, verification_status, risk_flags, device_meta, is_simulated, challenge)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'VERIFIED',$16,$17,$18,$19)
+       ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING
+       RETURNING *`,
+      [
+        employeeId,
+        s.workplace_id,
+        s.shift_id,
+        s.id,
+        s.shift_date,
+        input.idempotencyKey,
+        photo.id,
+        ev.latitude,
+        ev.longitude,
+        ev.accuracyM,
+        distance,
+        evTime,
+        s.radius_m,
+        isLate,
+        isLate ? lateBy : 0,
+        flags,
+        JSON.stringify(input.device ?? {}),
+        s.is_simulated,
+        challengeFor(s.id).en,
+      ],
+      db,
+    );
+    if (!record) return { ok: false, error: conflict('DUPLICATE_SUBMISSION', 'Attendance is already recorded for this shift.') };
+
+    await q(
+      `UPDATE attendance_photos SET status = 'ATTACHED', uploaded_at = COALESCE(uploaded_at, now()), size_bytes = $2, sha256 = $3,
+              retention_until = now() + make_interval(days => $4) WHERE id = $1`,
+      [photo.id, obj.sizeBytes, obj.sha256, settings.retention.photoDays],
+      db,
+    );
+    s.has_attendance = true;
+    await q('UPDATE tracking_sessions SET candidate_since = NULL, candidate_count = 0 WHERE id = $1', [s.id], db);
+    await transition(db, outbox, s, 'PRESENT', 'attendance verified and recorded by server', actor, actor === 'EMPLOYEE' ? employeeId : null, {
+      metadata: { attendanceId: record.id, distanceM: Math.round(distance * 10) / 10, accuracyM: ev.accuracyM },
+    });
+    await notify(db, outbox, {
+      type: 'ATTENDANCE_MARKED',
+      severity: 'INFO',
+      body: `${s.employee_name} marked attendance at ${s.workplace_name} (${Math.round(distance)} m from centre, ±${Math.round(ev.accuracyM)} m).`,
+      employeeId,
+      workplaceId: s.workplace_id,
+      sessionId: s.id,
+      data: { attendanceId: record.id, riskFlags: flags },
+      dedupeKey: `marked:${record.id}`,
+      simulated: s.is_simulated,
+    });
+    if (isLate) {
+      await notify(db, outbox, {
+        type: 'LATE_ARRIVAL',
+        severity: 'WARNING',
+        body: `${s.employee_name} marked attendance ${lateBy} min after the start of ${s.shift_name} (grace ${s.arrival_grace_minutes} min).`,
+        employeeId,
+        workplaceId: s.workplace_id,
+        sessionId: s.id,
+        data: { attendanceId: record.id, lateByMinutes: lateBy },
+        dedupeKey: `late:${record.id}`,
+        simulated: s.is_simulated,
+      });
+    }
+    outbox.push({ type: 'attendance.recorded', attendanceId: record.id, employeeId });
+    return { ok: true, record, replay: false };
+  });
+  outbox.flush();
+  if (!outcome.ok) throw outcome.error;
+  return { record: outcome.record, replay: outcome.replay };
+}
+
+// ───────────────────────── reviews, disputes, corrections ─────────────────────────
+
+export async function requestManualReview(employeeId: string, sessionId: string, reason: string) {
+  const outbox = new Outbox();
+  const review = await tx(async (db) => {
+    const s = await lockSession(db, sessionId);
+    if (!s) throw notFound('Session');
+    if (s.employee_id !== employeeId) throw forbidden();
+    if (s.ended_at) throw conflict('SESSION_CLOSED', 'This shift session has ended.');
+    if (s.has_attendance) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded. Use a dispute instead.');
+    const open = await one(`SELECT id FROM review_requests WHERE session_id = $1 AND kind = 'MANUAL_REVIEW' AND status = 'OPEN'`, [sessionId], db);
+    if (open) throw conflict('REVIEW_ALREADY_OPEN', 'A manual review request is already open.');
+    const review = await one(
+      `INSERT INTO review_requests (kind, employee_id, session_id, reason, requested_by, before_data, is_simulated)
+       VALUES ('MANUAL_REVIEW', $1, $2, $3, $1, $4, $5) RETURNING *`,
+      [employeeId, sessionId, reason, JSON.stringify({ state: s.state, lastDistanceM: s.last_distance_m, lastAccuracyM: s.last_accuracy_m, lastClassification: s.last_classification }), s.is_simulated],
+      db,
+    );
+    await transition(db, outbox, s, 'MANUAL_REVIEW_REQUIRED', 'employee requested manual review', 'EMPLOYEE', employeeId, { resumeState: s.state });
+    await notify(db, outbox, {
+      type: 'MANUAL_REVIEW_REQUESTED',
+      severity: 'WARNING',
+      body: `${s.employee_name} requested a manual attendance review: "${reason.slice(0, 200)}"`,
+      employeeId,
+      workplaceId: s.workplace_id,
+      sessionId,
+      data: { reviewId: review.id, lastDistanceM: s.last_distance_m, lastAccuracyM: s.last_accuracy_m },
+      dedupeKey: `review:${review.id}`,
+      simulated: s.is_simulated,
+    });
+    return review;
+  });
+  outbox.flush();
+  return review;
+}
+
+export async function cancelManualReview(employeeId: string, sessionId: string) {
+  const outbox = new Outbox();
+  await tx(async (db) => {
+    const s = await lockSession(db, sessionId);
+    if (!s) throw notFound('Session');
+    if (s.employee_id !== employeeId) throw forbidden();
+    const r = await one(`UPDATE review_requests SET status = 'CANCELLED', resolved_at = now() WHERE session_id = $1 AND kind = 'MANUAL_REVIEW' AND status = 'OPEN' RETURNING id`, [sessionId], db);
+    if (!r) throw notFound('Open review request');
+    if (s.state === 'MANUAL_REVIEW_REQUIRED') {
+      await transition(db, outbox, s, 'TRACKING_ACTIVE', 'employee cancelled manual review', 'EMPLOYEE', employeeId);
+    }
+  });
+  outbox.flush();
+}
+
+export async function reportIssue(employeeId: string, input: { sessionId?: string | null; kind: 'TECHNICAL_ISSUE' | 'DISPUTE'; attendanceId?: string | null; reason: string }) {
+  const outbox = new Outbox();
+  const row = await tx(async (db) => {
+    if (input.sessionId) {
+      const s = await one('SELECT employee_id FROM tracking_sessions WHERE id = $1', [input.sessionId], db);
+      if (!s || s.employee_id !== employeeId) throw forbidden();
+    }
+    let attendance: any = null;
+    if (input.attendanceId) {
+      attendance = await one('SELECT * FROM attendance_records WHERE id = $1', [input.attendanceId], db);
+      if (!attendance || attendance.employee_id !== employeeId) throw forbidden();
+    }
+    if (input.kind === 'DISPUTE' && !attendance) throw new HttpError(400, 'ATTENDANCE_REQUIRED', 'A dispute must reference an attendance record.');
+    const emp = await one('SELECT full_name, is_demo FROM users WHERE id = $1', [employeeId], db);
+    const row = await one(
+      `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, requested_by, before_data, is_simulated)
+       VALUES ($1,$2,$3,$4,$5,$2,$6,$7) RETURNING *`,
+      [input.kind, employeeId, input.sessionId ?? null, input.attendanceId ?? null, input.reason, attendance ? JSON.stringify(attendance) : null, emp.is_demo],
+      db,
+    );
+    if (attendance && input.kind === 'DISPUTE') {
+      await q(`UPDATE attendance_records SET verification_status = 'DISPUTED', updated_at = now() WHERE id = $1`, [attendance.id], db);
+    }
+    await notify(db, outbox, {
+      type: input.kind === 'DISPUTE' ? 'MANUAL_REVIEW_REQUESTED' : 'TECHNICAL_ISSUE_REPORTED',
+      severity: 'WARNING',
+      body: `${emp.full_name} ${input.kind === 'DISPUTE' ? 'disputed an attendance record' : 'reported a technical issue'}: "${input.reason.slice(0, 200)}"`,
+      employeeId,
+      sessionId: input.sessionId ?? null,
+      data: { reviewId: row.id, kind: input.kind },
+      dedupeKey: `issue:${row.id}`,
+      simulated: emp.is_demo,
+    });
+    return row;
+  });
+  outbox.flush();
+  return row;
+}
+
+/** Admin decision on a manual review / dispute / technical issue. */
+export async function resolveReview(admin: AuthUser, reviewId: string, decision: 'APPROVE' | 'REJECT' | 'ACKNOWLEDGE', note: string, req?: any) {
+  const outbox = new Outbox();
+  const result = await tx(async (db) => {
+    const r = await one('SELECT * FROM review_requests WHERE id = $1 FOR UPDATE', [reviewId], db);
+    if (!r) throw notFound('Review request');
+    if (r.status !== 'OPEN') throw conflict('REVIEW_CLOSED', 'This request has already been resolved.');
+    let attendanceId: string | null = r.attendance_id;
+
+    if (r.kind === 'MANUAL_REVIEW') {
+      if (decision === 'ACKNOWLEDGE') throw new HttpError(400, 'BAD_DECISION', 'Approve or reject a manual review.');
+      const s = r.session_id ? await lockSession(db, r.session_id) : null;
+      if (decision === 'APPROVE') {
+        if (!s) throw conflict('SESSION_REQUIRED', 'The related session no longer exists.');
+        if (s.has_attendance) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded for this shift.');
+        const lateBy = Math.floor((Date.now() - new Date(s.scheduled_start_at).getTime()) / 60000);
+        const rec = await one(
+          `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key,
+             evidence_latitude, evidence_longitude, evidence_accuracy_m, evidence_distance_m, evidence_client_time, radius_m_at_record,
+             is_late, late_by_minutes, verification_status, risk_flags, is_simulated)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'MANUAL_APPROVED','{MANUAL_REVIEW}',$15)
+           ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING RETURNING id`,
+          [s.employee_id, s.workplace_id, s.shift_id, s.id, s.shift_date, `review:${r.id}`, s.last_latitude, s.last_longitude, s.last_accuracy_m, s.last_distance_m, s.last_location_client_at, s.radius_m, lateBy > s.arrival_grace_minutes, Math.max(0, lateBy > s.arrival_grace_minutes ? lateBy : 0), s.is_simulated],
+          db,
+        );
+        if (!rec) throw conflict('ALREADY_RECORDED', 'Attendance is already recorded for this shift.');
+        attendanceId = rec.id;
+        s.has_attendance = true;
+        if (!s.ended_at) await transition(db, outbox, s, 'PRESENT', 'manual review approved by administrator', 'ADMIN', admin.id);
+        outbox.push({ type: 'attendance.recorded', attendanceId: rec.id, employeeId: s.employee_id });
+      } else if (s && !s.ended_at && s.state === 'MANUAL_REVIEW_REQUIRED') {
+        const back = s.resume_state && s.resume_state !== 'ATTENDANCE_SUBMISSION_PENDING' && s.resume_state !== 'ARRIVAL_CANDIDATE' ? s.resume_state : 'TRACKING_ACTIVE';
+        await transition(db, outbox, s, back, 'manual review rejected by administrator', 'ADMIN', admin.id);
+      }
+    } else if (r.kind === 'DISPUTE' && r.attendance_id) {
+      // Rejecting a dispute restores the previous status; approving requires a correction (separate call).
+      const prevStatus = r.before_data?.verification_status ?? 'VERIFIED';
+      if (decision !== 'APPROVE') await q(`UPDATE attendance_records SET verification_status = $2, updated_at = now() WHERE id = $1`, [r.attendance_id, prevStatus], db);
+    }
+
+    const status = decision === 'APPROVE' ? 'APPROVED' : decision === 'REJECT' ? 'REJECTED' : 'ACKNOWLEDGED';
+    await q(`UPDATE review_requests SET status = $2, resolved_by = $3, resolved_at = now(), resolution_note = $4, attendance_id = COALESCE(attendance_id, $5) WHERE id = $1`, [reviewId, status, admin.id, note, attendanceId], db);
+    await audit({ actor: admin, action: `review.${decision.toLowerCase()}`, resourceType: 'review_request', resourceId: reviewId, before: { status: r.status }, after: { status, attendanceId }, reason: note, req }, db);
+    return { status, attendanceId };
+  });
+  outbox.flush();
+  return result;
+}
+
+export interface CorrectionInput {
+  reason: string;
+  verificationStatus?: 'VERIFIED' | 'MANUAL_APPROVED' | 'CORRECTED' | 'DISPUTED' | 'VOIDED';
+  recordedAt?: string;
+  isLate?: boolean;
+  lateByMinutes?: number;
+}
+
+/** Admin correction: mandatory reason, before/after captured in review history and the audit log. */
+export async function correctAttendance(admin: AuthUser, attendanceId: string, c: CorrectionInput, req?: any) {
+  const outbox = new Outbox();
+  const updated = await tx(async (db) => {
+    const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
+    if (!before) throw notFound('Attendance record');
+    const after = await one(
+      `UPDATE attendance_records SET
+         verification_status = COALESCE($2, CASE WHEN verification_status = 'VERIFIED' THEN 'CORRECTED' ELSE verification_status END),
+         recorded_at = COALESCE($3, recorded_at),
+         is_late = COALESCE($4, is_late),
+         late_by_minutes = COALESCE($5, late_by_minutes),
+         updated_at = now()
+       WHERE id = $1 RETURNING *`,
+      [attendanceId, c.verificationStatus ?? null, c.recordedAt ?? null, c.isLate ?? null, c.lateByMinutes ?? null],
+      db,
+    );
+    await q(
+      `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, status, before_data, after_data, requested_by, resolved_by, resolved_at, is_simulated)
+       VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, 'APPLIED', $5, $6, $7, $7, now(), $8)`,
+      [before.employee_id, before.session_id, attendanceId, c.reason, JSON.stringify(before), JSON.stringify(after), admin.id, before.is_simulated],
+      db,
+    );
+    // A corrected dispute is resolved by the correction.
+    await q(`UPDATE review_requests SET status = 'APPROVED', resolved_by = $2, resolved_at = now(), resolution_note = $3 WHERE attendance_id = $1 AND kind = 'DISPUTE' AND status = 'OPEN'`, [attendanceId, admin.id, `Corrected: ${c.reason}`], db);
+    await audit({ actor: admin, action: 'attendance.correct', resourceType: 'attendance_record', resourceId: attendanceId, before, after, reason: c.reason, req }, db);
+    outbox.push({ type: 'attendance.recorded', attendanceId, employeeId: before.employee_id });
+    return after;
+  });
+  outbox.flush();
+  return updated;
+}
+
+/** Admin-entered attendance when no device evidence exists (e.g. broken phone). Always MANUAL_APPROVED and audited. */
+export async function createManualAttendance(admin: AuthUser, input: { employeeId: string; shiftId: string; shiftDate: string; recordedAt: string; reason: string }, req?: any) {
+  return tx(async (db) => {
+    const shift = await one(
+      `SELECT sh.* FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id WHERE esa.employee_id = $1 AND esa.shift_id = $2
+       AND esa.effective_from <= $3::date AND (esa.effective_to IS NULL OR esa.effective_to >= $3::date)`,
+      [input.employeeId, input.shiftId, input.shiftDate],
+      db,
+    );
+    if (!shift) throw new HttpError(400, 'NOT_ASSIGNED', 'The employee was not assigned to this shift on that date.');
+    const wp = await one('SELECT * FROM workplaces WHERE id = $1', [shift.workplace_id], db);
+    const emp = await one('SELECT is_demo FROM users WHERE id = $1', [input.employeeId], db);
+    const rec = await one(
+      `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags, is_simulated)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'MANUAL_APPROVED','{ADMIN_ENTERED}',$8)
+       ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING RETURNING *`,
+      [input.employeeId, wp.id, shift.id, input.shiftDate, input.recordedAt, `manual:${crypto.randomUUID()}`, wp.radius_m, emp?.is_demo ?? false],
+      db,
+    );
+    if (!rec) throw conflict('ALREADY_RECORDED', 'An attendance record already exists for this employee, shift and date.');
+    await audit({ actor: admin, action: 'attendance.manual_create', resourceType: 'attendance_record', resourceId: rec.id, after: rec, reason: input.reason, req }, db);
+    return rec;
+  });
+}
+
+export async function expireStaleIntents(outbox: Outbox) {
+  const rows = await q(
+    `SELECT DISTINCT p.session_id FROM attendance_photos p JOIN tracking_sessions s ON s.id = p.session_id
+     WHERE p.status IN ('PENDING_UPLOAD', 'UPLOADED') AND p.upload_expires_at < now() - interval '5 minutes'
+       AND s.state = 'ATTENDANCE_SUBMISSION_PENDING' AND s.ended_at IS NULL`,
+  );
+  for (const r of rows) {
+    await tx(async (c) => {
+      const s = await lockSession(c, r.session_id);
+      if (!s || s.state !== 'ATTENDANCE_SUBMISSION_PENDING') return;
+      await q(`UPDATE attendance_photos SET status = 'EXPIRED' WHERE session_id = $1 AND status IN ('PENDING_UPLOAD', 'UPLOADED')`, [s.id], c);
+      await transition(c, outbox, s, 'ATTENDANCE_READY', 'attendance submission not completed in time', 'SYSTEM');
+    });
+  }
+}

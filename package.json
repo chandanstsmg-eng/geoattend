@@ -1,0 +1,46 @@
+{
+  "name": "geoattend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GeoAttend — GPS-based employee attendance, geofencing and shift-scoped workforce tracking.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "workspaces": [
+    "packages/shared",
+    "apps/api",
+    "apps/admin",
+    "apps/web"
+  ],
+  "allowScripts": {
+    "@embedded-postgres/windows-x64": true,
+    "@embedded-postgres/linux-x64": true,
+    "@embedded-postgres/linux-arm64": true,
+    "@embedded-postgres/darwin-arm64": true,
+    "@embedded-postgres/darwin-x64": true,
+    "esbuild": true,
+    "sharp": true,
+    "unrs-resolver": true,
+    "@tailwindcss/oxide": true
+  },
+  "scripts": {
+    "setup": "npm run setup -w @geoattend/api",
+    "dev": "concurrently -k -n api,admin,web -c blue,magenta,green \"npm run dev -w @geoattend/api\" \"npm run dev -w @geoattend/admin\" \"npm run dev -w @geoattend/web\"",
+    "build": "npm run build -w @geoattend/admin && npm run build -w @geoattend/web",
+    "start": "concurrently -k -n api,admin,web -c blue,magenta,green \"npm run start -w @geoattend/api\" \"npm run start -w @geoattend/admin\" \"npm run start -w @geoattend/web\"",
+    "db:migrate": "npm run db:migrate -w @geoattend/api",
+    "db:seed": "npm run db:seed -w @geoattend/api",
+    "demo:seed": "npm run demo:seed -w @geoattend/api",
+    "demo:verify": "npm run demo:verify -w @geoattend/api",
+    "db:stop": "npm run db:stop -w @geoattend/api",
+    "set-logins": "npm run set-logins -w @geoattend/api",
+    "db:backup": "npm run db:backup -w @geoattend/api",
+    "db:restore": "npm run db:restore -w @geoattend/api",
+    "test": "npm run test -w @geoattend/shared && npm run test -w @geoattend/api",
+    "typecheck": "npm run typecheck -w @geoattend/shared && npm run typecheck -w @geoattend/api && npm run typecheck -w @geoattend/admin && npm run typecheck -w @geoattend/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

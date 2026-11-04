@@ -1,0 +1,153 @@
+/**
+ * Authentication.
+ *  - Access tokens: short-lived HS256 JWTs.
+ *  - Refresh tokens: random 256-bit values stored only as SHA-256 hashes,
+ *    rotated on every use; re-use of a rotated token revokes its whole family.
+ *  - Web dashboard: tokens in httpOnly SameSite=Strict cookies + a double-submit
+ *    CSRF token for state-changing requests.
+ *  - Mobile app: Authorization: Bearer header (no cookies, so no CSRF surface).
+ */
+import crypto from 'node:crypto';
+import type { NextFunction, Request, Response } from 'express';
+import { SignJWT, jwtVerify } from 'jose';
+import { config } from '../config.js';
+import { one, q } from '../db/pool.js';
+import { HttpError, forbidden, unauthorized } from './errors.js';
+
+export type Role = 'ADMIN' | 'EMPLOYEE';
+export interface AuthUser {
+  id: string;
+  role: Role;
+  email: string;
+  fullName: string;
+  isDemo: boolean;
+  /** The company this user belongs to; every admin query is limited to it. */
+  orgId: string;
+  /** Administrators only: OWNER sees the whole company, SUPERVISOR only `sites`. */
+  access?: 'OWNER' | 'SUPERVISOR';
+  /** Workplaces a supervisor may see; null = all of the company (owners, employees). */
+  sites: string[] | null;
+  via: 'cookie' | 'bearer';
+}
+
+export const ACCESS_COOKIE = 'ga_at';
+export const REFRESH_COOKIE = 'ga_rt';
+export const CSRF_COOKIE = 'ga_csrf';
+
+const secret = () => new TextEncoder().encode(config.jwtSecret);
+const sha256 = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
+
+export async function signAccessToken(user: { id: string; role: Role }) {
+  return new SignJWT({ role: user.role })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(user.id)
+    .setIssuedAt()
+    .setIssuer('geoattend')
+    .setAudience('geoattend')
+    .setExpirationTime(`${config.accessTokenTtlSec}s`)
+    .sign(secret());
+}
+
+export async function issueRefreshToken(userId: string, client: 'web' | 'mobile', deviceId: string | null, familyId?: string) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const row = await one<{ id: string }>(
+    `INSERT INTO refresh_tokens (user_id, token_hash, family_id, client, device_id, expires_at)
+     VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6)) RETURNING id`,
+    [userId, sha256(token), familyId ?? crypto.randomUUID(), client, deviceId, config.refreshTokenTtlDays],
+  );
+  return { token, id: row!.id };
+}
+
+/** Rotates a refresh token. Detects re-use of an already rotated token. */
+export async function rotateRefreshToken(token: string) {
+  const row = await one(
+    `SELECT rt.*, u.role, u.is_active FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id WHERE rt.token_hash = $1`,
+    [sha256(token)],
+  );
+  if (!row) throw unauthorized('Session expired. Please sign in again.');
+  if (row.revoked_at) {
+    // A rotated token was presented again: assume theft, kill the family.
+    await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id]);
+    throw unauthorized('Session expired. Please sign in again.');
+  }
+  if (new Date(row.expires_at) < new Date() || !row.is_active) throw unauthorized('Session expired. Please sign in again.');
+  const next = await issueRefreshToken(row.user_id, row.client, row.device_id, row.family_id);
+  await q('UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2 WHERE id = $1', [row.id, next.id]);
+  const accessToken = await signAccessToken({ id: row.user_id, role: row.role });
+  return { userId: row.user_id as string, role: row.role as Role, client: row.client as 'web' | 'mobile', accessToken, refreshToken: next.token };
+}
+
+export async function revokeRefreshToken(token: string) {
+  const row = await one('SELECT family_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
+  if (row) await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id]);
+}
+
+export async function revokeAllForUser(userId: string) {
+  await q('UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
+}
+
+export function setWebCookies(res: Response, accessToken: string, refreshToken: string) {
+  const base = { httpOnly: true, secure: config.cookieSecure, sameSite: 'strict' as const, path: '/' };
+  res.cookie(ACCESS_COOKIE, accessToken, { ...base, maxAge: config.accessTokenTtlSec * 1000 });
+  res.cookie(REFRESH_COOKIE, refreshToken, { ...base, path: '/api/v1/auth', maxAge: config.refreshTokenTtlDays * 86400_000 });
+  const csrf = crypto.randomBytes(24).toString('base64url');
+  res.cookie(CSRF_COOKIE, csrf, { httpOnly: false, secure: config.cookieSecure, sameSite: 'strict', path: '/' });
+  return csrf;
+}
+
+export function clearWebCookies(res: Response) {
+  res.clearCookie(ACCESS_COOKIE, { path: '/' });
+  res.clearCookie(REFRESH_COOKIE, { path: '/api/v1/auth' });
+  res.clearCookie(CSRF_COOKIE, { path: '/' });
+}
+
+async function resolveUser(req: Request): Promise<AuthUser | null> {
+  const header = req.headers.authorization;
+  let token: string | undefined;
+  let via: AuthUser['via'] = 'bearer';
+  if (header?.startsWith('Bearer ')) token = header.slice(7);
+  else if (req.cookies?.[ACCESS_COOKIE]) {
+    token = req.cookies[ACCESS_COOKIE];
+    via = 'cookie';
+  }
+  if (!token) return null;
+  let sub: string;
+  try {
+    const { payload } = await jwtVerify(token, secret(), { issuer: 'geoattend', audience: 'geoattend' });
+    sub = payload.sub as string;
+  } catch {
+    throw new HttpError(401, 'TOKEN_EXPIRED', 'Access token expired or invalid');
+  }
+  // Re-read the user so deactivation and role changes take effect immediately.
+  const u = await one(
+    `SELECT u.id, u.role, u.email, u.full_name, u.is_active, u.is_demo, u.org_id, ap.access, ap.site_ids
+     FROM users u LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
+    [sub],
+  );
+  if (!u || !u.is_active) throw unauthorized('Account is inactive');
+  const access = u.role === 'ADMIN' ? (u.access ?? 'OWNER') : undefined;
+  return { id: u.id, role: u.role, email: u.email, fullName: u.full_name, isDemo: u.is_demo, orgId: u.org_id, access, sites: access === 'SUPERVISOR' ? (u.site_ids ?? []) : null, via };
+}
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+export function requireAuth(role?: Role) {
+  return async (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      const user = await resolveUser(req);
+      if (!user) throw unauthorized();
+      if (user.via === 'cookie' && !SAFE_METHODS.has(req.method)) {
+        const header = req.headers['x-csrf-token'];
+        const cookie = req.cookies?.[CSRF_COOKIE];
+        if (!cookie || typeof header !== 'string' || header.length !== cookie.length || !crypto.timingSafeEqual(Buffer.from(header), Buffer.from(cookie))) {
+          throw new HttpError(403, 'CSRF_FAILED', 'Missing or invalid CSRF token');
+        }
+      }
+      if (role && user.role !== role) throw forbidden();
+      (req as any).user = user;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
