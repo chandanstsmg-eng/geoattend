@@ -2,10 +2,12 @@
  * One approved phone per employee.
  *
  * At mobile sign-in (after the password is verified) `checkDeviceAtLogin` decides:
- *  - first phone for this employee            → approved automatically
  *  - the employee's approved phone            → allowed
- *  - a different phone                        → PENDING; admins are asked to approve it
+ *  - any other phone, including their first   → PENDING; an owner or supervisor approves it
  *  - a phone approved for another employee    → refused (shared phone / buddy punching)
+ * No phone is ever approved without a person deciding. `assertApprovedDevice` repeats the check on
+ * attendance actions, against the phone named in the access token, so a phone removed mid-shift stops
+ * working at once. Every status change is kept in device_status_history (a database trigger).
  * Settings › workforce.deviceBinding: ENFORCE refuses, ALERT only notifies, OFF skips the check.
  * Demo accounts are exempt so one test phone can sign in as several demo employees.
  */
@@ -56,15 +58,12 @@ export async function checkDeviceAtLogin(u: { id: string; full_name: string; is_
       if (enforce) throw new HttpError(403, 'DEVICE_REVOKED', 'This phone has been removed from your account. Ask your administrator.');
       return;
     }
-    const hasApproved = await one(`SELECT 1 FROM device_registrations WHERE user_id = $1 AND status = 'APPROVED' LIMIT 1`, [u.id]);
-    const status = hasApproved ? 'PENDING' : 'APPROVED';
     const reg = await one(
-      `INSERT INTO device_registrations (user_id, device_id, platform, model_hint, status) VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO device_registrations (user_id, device_id, platform, model_hint, status) VALUES ($1,$2,$3,$4,'PENDING')
        ON CONFLICT (user_id, device_id) DO UPDATE SET last_seen_at = now(), platform = EXCLUDED.platform, model_hint = COALESCE(EXCLUDED.model_hint, device_registrations.model_hint)
        RETURNING id, status`,
-      [u.id, deviceId, platform, model ?? null, status],
+      [u.id, deviceId, platform, model ?? null],
     );
-    if (reg.status === 'APPROVED') return; // first phone
     await notify(getPool(), outbox, {
       type: 'NEW_DEVICE',
       severity: 'WARNING',
@@ -77,6 +76,15 @@ export async function checkDeviceAtLogin(u: { id: string; full_name: string; is_
   } finally {
     outbox.flush();
   }
+}
+
+/** On attendance actions: the phone in the access token must still be approved. */
+export async function assertApprovedDevice(user: { id: string; orgId: string; isDemo: boolean; deviceId?: string | null }) {
+  const { workforce } = await getSettings(user.orgId);
+  if (workforce.deviceBinding !== 'ENFORCE' || user.isDemo) return;
+  if (!user.deviceId) throw new HttpError(403, 'DEVICE_REQUIRED', 'Sign in again to continue.');
+  const d = await one('SELECT status FROM device_registrations WHERE user_id = $1 AND device_id = $2', [user.id, user.deviceId]);
+  if (d?.status !== 'APPROVED') throw new HttpError(403, 'DEVICE_NOT_APPROVED', 'This phone is not approved for your account. Ask your administrator.');
 }
 
 const SELECT = `
@@ -130,6 +138,16 @@ mount(devicesRouter, '/api/v1/devices', 'devices', [
     scope: 'device',
     body: z.object({ note: z.string().trim().max(500).optional() }),
     handler: async ({ params, body, user, req }) => decide(params.id, 'APPROVED', body.note, user, req),
+  }),
+  route({
+    method: 'get',
+    path: '/:id/history',
+    summary: 'Every status change of a phone, oldest first',
+    access: 'admin',
+    params: idParams,
+    scope: 'device',
+    handler: async ({ params }) =>
+      q(`SELECT h.id, h.from_status, h.to_status, h.note, h.created_at, u.full_name AS changed_by_name FROM device_status_history h LEFT JOIN users u ON u.id = h.changed_by WHERE h.device_id = $1 ORDER BY h.id`, [params.id]),
   }),
   route({
     method: 'post',

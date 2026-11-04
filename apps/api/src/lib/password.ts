@@ -3,10 +3,21 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, len: number, opts: crypto.ScryptOptions) => Promise<Buffer>;
-const N = 16384;
+// OWASP's scrypt option N=2^15, r=8, p=3 (32 MB). Tests hash hundreds of passwords, so they use less.
+const light = process.env.NODE_ENV === 'test';
+const N = light ? 1024 : 32768;
 const R = 8;
-const P = 1;
+const P = light ? 1 : 3;
 const LEN = 64;
+
+/** Compared against when the account does not exist, so the answer takes as long as a real check. */
+export const DUMMY_HASH = `scrypt$${N}$${R}$${P}$AAAAAAAAAAAAAAAAAAAAAA==$${'A'.repeat(86)}==`;
+
+/** Hashes made with weaker settings are replaced at the next successful sign-in. */
+export const needsRehash = (stored: string) => {
+  const [, n, r, p] = stored.split('$');
+  return Number(n) !== N || Number(r) !== R || Number(p) !== P;
+};
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(16);

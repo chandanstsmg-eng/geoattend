@@ -11,6 +11,7 @@ import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
 import { assertInOrg, employeeSite, siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl, createUploadUrl, inspectObject, newObjectKey, requestOrigin } from '../../lib/storage.js';
+import { confirmUpload } from '../attendance/photo-upload.js';
 import { config } from '../../config.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
@@ -79,7 +80,7 @@ mount(tasksRouter, '/api/v1/tasks', 'tasks', [
         if (t.requires_photo && !body.photoId) throw badRequest('PHOTO_REQUIRED', 'This task needs a photo.');
         if (body.photoId) {
           const p = await one(`SELECT * FROM task_photos WHERE id = $1 AND task_id = $2 AND employee_id = $3`, [body.photoId, t.id, user.id], db);
-          if (!p || p.status !== 'UPLOADED') throw badRequest('PHOTO_MISSING', 'The photo was not uploaded. Try again.');
+          if (!p || !(await confirmUpload('task_photos', p, db))) throw badRequest('PHOTO_MISSING', 'The photo was not uploaded. Try again.');
           const info = await inspectObject(p.object_key);
           if (!info || info.type !== p.content_type) throw badRequest('PHOTO_INVALID', 'The photo could not be read. Please take it again.');
           await q(`UPDATE task_photos SET status = 'ATTACHED' WHERE id = $1`, [p.id], db);

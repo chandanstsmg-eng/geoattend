@@ -178,7 +178,7 @@ describe('bulk employee import', () => {
 describe('one phone per employee', () => {
   const login = (email: string, deviceId: string) => request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD, client: 'mobile', deviceId, platform: 'android', model: 'Test phone' });
 
-  it('approves the first phone, holds a new one for approval, and blocks shared phones', async () => {
+  it('holds every new phone for approval and blocks shared phones', async () => {
     await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'ENFORCE' }, null);
     try {
       const a = await createEmployee({ workplaceId: base.workplaceId });
@@ -186,16 +186,18 @@ describe('one phone per employee', () => {
       const phoneA = `phone-a-${crypto.randomUUID()}`;
       const phoneB = `phone-b-${crypto.randomUUID()}`;
 
-      await login(a.email, phoneA).expect(200); // first phone: approved automatically
+      const { agent, csrf } = await adminAgent(app);
+      expect((await login(a.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_PENDING'); // even the first phone
+      const first = (await agent.get('/api/v1/approvals').expect(200)).body.devices.find((d: any) => d.user_id === a.id);
+      await agent.post(`/api/v1/devices/${first.id}/approve`).set('X-CSRF-Token', csrf).send({}).expect(200);
       await login(a.email, phoneA).expect(200);
       expect((await login(a.email, phoneB).expect(403)).body.error.code).toBe('DEVICE_PENDING');
-      expect(await q(`SELECT 1 FROM notifications WHERE type = 'NEW_DEVICE' AND employee_id = $1`, [a.id])).toHaveLength(1);
+      expect(await q(`SELECT 1 FROM notifications WHERE type = 'NEW_DEVICE' AND employee_id = $1`, [a.id])).toHaveLength(2);
 
       // B tries A's phone: refused and flagged.
       expect((await login(b.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_IN_USE');
       expect(await q(`SELECT 1 FROM notifications WHERE type = 'SHARED_DEVICE' AND employee_id = $1`, [b.id])).toHaveLength(1);
 
-      const { agent, csrf } = await adminAgent(app);
       const inbox = (await agent.get('/api/v1/approvals').expect(200)).body;
       const pending = inbox.devices.find((d: any) => d.user_id === a.id);
       expect(pending.current_phone.platform).toBe('android');
@@ -206,8 +208,8 @@ describe('one phone per employee', () => {
       await login(a.email, phoneB).expect(200);
       expect((await login(a.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_REVOKED');
 
-      // The old phone is now free for B (their first phone).
-      await login(b.email, phoneA).expect(200);
+      // The old phone is now free for B, once someone approves it for them.
+      expect((await login(b.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_PENDING');
     } finally {
       await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'OFF' }, null);
     }

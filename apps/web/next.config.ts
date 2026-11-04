@@ -7,6 +7,12 @@ import type { NextConfig } from 'next';
 dotenv.config({ path: path.resolve(process.cwd(), '../../.env'), quiet: true });
 
 const isDev = process.env.NODE_ENV !== 'production';
+// Canonical links, the sitemap and sign-in links are fixed at build time: a release must not fall back to localhost.
+if (process.env.GEOATTEND_RELEASE === 'true') {
+  for (const k of ['NEXT_PUBLIC_SITE_URL', 'NEXT_PUBLIC_DASHBOARD_URL']) {
+    if (!process.env[k]?.startsWith('https://')) throw new Error(`${k} must be an https:// address for a release build.`);
+  }
+}
 
 // The public site loads nothing from other origins.
 const csp = [

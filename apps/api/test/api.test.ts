@@ -104,6 +104,7 @@ describe('authentication & authorisation', () => {
     const emp = await createEmployee({ workplaceId: base.workplaceId });
     const login = await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: 'Test-password-123', client: 'mobile' }).expect(200);
     const r1 = await request(app).post('/api/v1/auth/refresh').send({ refreshToken: login.body.refreshToken }).expect(200);
+    await q(`UPDATE refresh_tokens SET revoked_at = now() - interval '5 minutes' WHERE user_id = $1 AND revoked_at IS NOT NULL`, [emp.id]); // past the retry grace
     await request(app).post('/api/v1/auth/refresh').send({ refreshToken: login.body.refreshToken }).expect(401); // re-use
     await request(app).post('/api/v1/auth/refresh').send({ refreshToken: r1.body.refreshToken }).expect(401); // family revoked
   });

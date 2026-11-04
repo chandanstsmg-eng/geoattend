@@ -6,7 +6,13 @@ import type { NextConfig } from 'next';
 // One .env at the repository root serves the API and the dashboard.
 dotenv.config({ path: path.resolve(process.cwd(), '../../.env'), quiet: true });
 
+// Rewrites and the content security policy are fixed at build time, so a release build must be told
+// its real addresses; it stops here rather than ship with a localhost default.
+const release = process.env.GEOATTEND_RELEASE === 'true';
+if (release && !process.env.API_INTERNAL_URL) throw new Error('API_INTERNAL_URL is required for a release build.');
+if (release && !process.env.PHOTO_ORIGIN?.startsWith('https://')) throw new Error('PHOTO_ORIGIN (the https:// origin of the photo bucket) is required for a release build.');
 const apiUrl = process.env.API_INTERNAL_URL || 'http://localhost:4400';
+const photoOrigin = process.env.PHOTO_ORIGIN ?? '';
 const isDev = process.env.NODE_ENV !== 'production';
 
 const google = 'https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com https://*.google.com';
@@ -14,7 +20,7 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline' ${isDev ? "'unsafe-eval'" : ''} ${google}`,
   `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
-  `img-src 'self' data: blob: ${google}`,
+  `img-src 'self' data: blob: ${google} ${photoOrigin}`,
   `font-src 'self' data: https://fonts.gstatic.com`,
   `connect-src 'self' ${google}${isDev ? ' ws: http://localhost:*' : ''}`,
   "worker-src 'self' blob:",

@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { one, q, tx } from '../../db/pool.js';
 import { config, sampleData } from '../../config.js';
 import { HttpError, badRequest, unauthorized } from '../../lib/errors.js';
 import { mount, route } from '../../lib/http.js';
-import { hashPassword, passwordPolicyError, verifyPassword } from '../../lib/password.js';
+import { DUMMY_HASH, hashPassword, needsRehash, passwordPolicyError, verifyPassword } from '../../lib/password.js';
 import { audit } from '../../lib/audit.js';
 import { checkDeviceAtLogin } from '../devices/devices.routes.js';
 import { getSettings } from '../settings/settings.service.js';
@@ -20,12 +20,30 @@ import {
   signAccessToken,
 } from '../../lib/auth.js';
 
+const tooMany = { error: { code: 'RATE_LIMITED', message: 'Too many sign-in attempts. Try again in a few minutes.' } };
+// Per account and address, so one person's mistakes (or a shared office network) do not block everyone.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60_000,
   limit: config.isTest ? 1000 : 20,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  message: { error: { code: 'RATE_LIMITED', message: 'Too many sign-in attempts. Try again in a few minutes.' } },
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip ?? '')}|${String(req.body?.email ?? '').toLowerCase()}`,
+  message: tooMany,
+});
+// Per address across all accounts, against guessing one common password over many accounts.
+const loginAddressLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: config.isTest ? 1000 : 200,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: tooMany,
+});
+const passwordLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: config.isTest ? 1000 : 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts. Try again in a few minutes.' } },
 });
 
 const signupLimiter = rateLimit({
@@ -50,7 +68,7 @@ mount(authRouter, '/api/v1/auth', 'auth', [
     path: '/login',
     summary: 'Sign in (web: sets httpOnly cookies; mobile: returns tokens)',
     access: 'public',
-    pre: [loginLimiter],
+    pre: [loginAddressLimiter, loginLimiter],
     body: z.object({
       email: z.email().max(200),
       password: z.string().min(1).max(200),
@@ -63,26 +81,33 @@ mount(authRouter, '/api/v1/auth', 'auth', [
       const u = await one('SELECT * FROM users WHERE lower(email) = lower($1)', [body.email]);
       const generic = unauthorized('Incorrect email or password.');
       if (!u) {
-        await verifyPassword(body.password, 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$' + 'A'.repeat(86) + '==').catch(() => false); // equalise timing
+        await verifyPassword(body.password, DUMMY_HASH).catch(() => false); // equalise timing
         throw generic;
       }
-      if (u.locked_until && new Date(u.locked_until) > new Date()) throw new HttpError(423, 'ACCOUNT_LOCKED', 'Too many failed attempts. Try again later.');
+      const locked = !!u.locked_until && new Date(u.locked_until) > new Date();
       if (!(await verifyPassword(body.password, u.password_hash))) {
-        await q(
-          `UPDATE users SET failed_login_count = failed_login_count + 1,
-             locked_until = CASE WHEN failed_login_count + 1 >= $2 THEN now() + make_interval(mins => $3) ELSE locked_until END
-           WHERE id = $1`,
-          [u.id, LOCK_AFTER, LOCK_MINUTES],
-        );
-        throw generic;
+        // While locked nothing counts, so the lock cannot be stretched. Once it expires the count starts again.
+        if (!locked) {
+          const r = await one(
+            `UPDATE users SET failed_login_count = CASE WHEN locked_until IS NOT NULL THEN 1 ELSE failed_login_count + 1 END,
+               locked_until = CASE WHEN locked_until IS NULL AND failed_login_count + 1 >= $2 THEN now() + make_interval(mins => $3) END
+             WHERE id = $1 RETURNING locked_until`,
+            [u.id, LOCK_AFTER, LOCK_MINUTES],
+          );
+          await audit({ actor: null, orgId: u.org_id, action: r?.locked_until ? 'auth.locked' : 'auth.login_failed', resourceType: 'user', resourceId: u.id, req });
+        }
+        throw generic; // the same answer locked or not, so it does not confirm the account
       }
+      // Only someone who knows the password learns that the account is locked.
+      if (locked) throw new HttpError(423, 'ACCOUNT_LOCKED', 'Too many failed attempts. Try again later.');
       if (!u.is_active) throw unauthorized('This account is deactivated.');
       if (body.client === 'web' && u.role !== 'ADMIN') throw new HttpError(403, 'WRONG_APP', 'Employees sign in with the GeoAttend mobile app.');
       if (body.client === 'mobile' && u.role !== 'EMPLOYEE') throw new HttpError(403, 'WRONG_APP', 'Administrators sign in to the web dashboard.');
       if (body.client === 'mobile') await checkDeviceAtLogin(u, body.deviceId, body.platform ?? 'unknown', body.model);
       await q('UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1', [u.id]);
+      if (needsRehash(u.password_hash)) await q('UPDATE users SET password_hash = $2 WHERE id = $1', [u.id, await hashPassword(body.password)]);
 
-      const accessToken = await signAccessToken(u);
+      const accessToken = await signAccessToken(u, body.client === 'mobile' ? body.deviceId : null);
       const refresh = await issueRefreshToken(u.id, body.client, body.deviceId ?? null);
       await audit({ actor: { id: u.id, role: u.role, orgId: u.org_id }, action: 'auth.login', resourceType: 'user', resourceId: u.id, after: { client: body.client }, req });
       if (body.client === 'web') {
@@ -117,7 +142,8 @@ mount(authRouter, '/api/v1/auth', 'auth', [
     body: z.object({ refreshToken: z.string().max(200).optional() }),
     handler: async ({ body, req, res }) => {
       const token = body.refreshToken ?? req.cookies?.[REFRESH_COOKIE];
-      if (token) await revokeRefreshToken(token);
+      const userId = token ? await revokeRefreshToken(token) : null;
+      if (userId) await audit({ actor: null, action: 'auth.logout', resourceType: 'user', resourceId: userId, orgId: (await one('SELECT org_id FROM users WHERE id = $1', [userId]))?.org_id, req });
       clearWebCookies(res);
       return { ok: true };
     },
@@ -181,6 +207,7 @@ mount(authRouter, '/api/v1/auth', 'auth', [
     path: '/change-password',
     summary: 'Change own password (revokes other sessions)',
     access: 'authenticated',
+    pre: [passwordLimiter],
     body: z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().max(200) }),
     handler: async ({ body, user, req }) => {
       const u = await one('SELECT password_hash FROM users WHERE id = $1', [user.id]);

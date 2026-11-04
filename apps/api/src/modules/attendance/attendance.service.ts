@@ -345,11 +345,16 @@ export async function reportIssue(employeeId: string, input: { sessionId?: strin
     }
     let attendance: any = null;
     if (input.attendanceId) {
-      attendance = await one('SELECT * FROM attendance_records WHERE id = $1', [input.attendanceId], db);
+      attendance = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [input.attendanceId], db);
       if (!attendance || attendance.employee_id !== employeeId) throw forbidden();
     }
     if (input.kind === 'DISPUTE' && !attendance) throw new HttpError(400, 'ATTENDANCE_REQUIRED', 'A dispute must reference an attendance record.');
-    const emp = await one('SELECT full_name, is_demo FROM users WHERE id = $1', [employeeId], db);
+    if (input.kind === 'DISPUTE') {
+      // A voided record is final: a dispute must not lift it back into reports.
+      if (attendance.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'This attendance record was voided and cannot be disputed. Speak to your administrator.');
+      if (await one(`SELECT 1 FROM review_requests WHERE attendance_id = $1 AND kind = 'DISPUTE' AND status = 'OPEN'`, [attendance.id], db)) throw conflict('DISPUTE_OPEN', 'A dispute for this record is already open.');
+    }
+    const emp = await one('SELECT full_name, is_demo, org_id FROM users WHERE id = $1', [employeeId], db);
     const row = await one(
       `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, requested_by, before_data, is_simulated)
        VALUES ($1,$2,$3,$4,$5,$2,$6,$7) RETURNING *`,
@@ -358,6 +363,7 @@ export async function reportIssue(employeeId: string, input: { sessionId?: strin
     );
     if (attendance && input.kind === 'DISPUTE') {
       await q(`UPDATE attendance_records SET verification_status = 'DISPUTED', updated_at = now() WHERE id = $1`, [attendance.id], db);
+      await audit({ actor: { id: employeeId, role: 'EMPLOYEE', orgId: emp.org_id }, action: 'attendance.dispute', resourceType: 'attendance_record', resourceId: attendance.id, before: { status: attendance.verification_status }, after: { status: 'DISPUTED' }, reason: input.reason }, db);
     }
     await notify(db, outbox, {
       type: input.kind === 'DISPUTE' ? 'MANUAL_REVIEW_REQUESTED' : 'TECHNICAL_ISSUE_REPORTED',
@@ -418,7 +424,7 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
     } else if (r.kind === 'DISPUTE' && r.attendance_id) {
       // Rejecting a dispute restores the previous status; approving requires a correction (separate call).
       const prevStatus = r.before_data?.verification_status ?? 'VERIFIED';
-      if (decision !== 'APPROVE') await q(`UPDATE attendance_records SET verification_status = $2, updated_at = now() WHERE id = $1`, [r.attendance_id, prevStatus], db);
+      if (decision !== 'APPROVE') await q(`UPDATE attendance_records SET verification_status = $2, updated_at = now() WHERE id = $1 AND verification_status = 'DISPUTED'`, [r.attendance_id, prevStatus], db);
     }
 
     const status = decision === 'APPROVE' ? 'APPROVED' : decision === 'REJECT' ? 'REJECTED' : 'ACKNOWLEDGED';
@@ -444,6 +450,7 @@ export async function correctAttendance(admin: AuthUser, attendanceId: string, c
   const updated = await tx(async (db) => {
     const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
     if (!before) throw notFound('Attendance record');
+    if (before.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'A voided record cannot be changed. Its history stays in the audit log.');
     await assertPayrollMonthOpen(admin.orgId, before.shift_date, db);
     // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
     let isLate = c.isLate ?? null;

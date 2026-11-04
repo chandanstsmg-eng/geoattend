@@ -15,11 +15,10 @@
  * the score, which is why a person decides.
  */
 import crypto from 'node:crypto';
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getPool, one, q } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
-import { deleteObject, readLocalObject } from '../../lib/storage.js';
+import { deleteObject, readObject } from '../../lib/storage.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
 import { bestMatch, faceEngine } from './engine.js';
@@ -43,10 +42,7 @@ export function challengeFor(sessionId: string) {
 }
 
 export async function readPhoto(key: string): Promise<Buffer> {
-  if (config.storage.driver === 'local') return readLocalObject(key);
-  const s3 = new S3Client({ region: config.storage.s3Region, endpoint: config.storage.s3Endpoint || undefined, forcePathStyle: config.storage.s3ForcePathStyle });
-  const out = await s3.send(new GetObjectCommand({ Bucket: config.storage.s3Bucket, Key: key }));
-  return Buffer.from(await out.Body!.transformToByteArray());
+  return readObject(key);
 }
 
 /** Deletes a checked photo's file and marks the row, keeping the record of what happened. */

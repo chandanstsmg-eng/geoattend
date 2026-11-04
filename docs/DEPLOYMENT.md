@@ -9,7 +9,7 @@
 * Strong, unique `JWT_SECRET` and `STORAGE_SIGNING_KEY` (≥ 32 random characters) from a secret manager.
 * PostgreSQL 15+ (PostGIS recommended) with TLS (`?sslmode=require`), automated backups and point-in-time recovery.
 * A **private** S3-compatible bucket (block all public access) for photos; credentials limited to that bucket.
-* `CORS_ORIGINS` = the dashboard origin only. `TRUST_PROXY` = the number of proxy hops (e.g. `1`) so client IPs and `https` are detected correctly.
+* `CORS_ORIGINS` = the dashboard origin only. `TRUST_PROXY` = the number of proxy hops (e.g. `1`) so client IPs and `https` are detected correctly. The API refuses to start in production if any required setting is missing, a placeholder, or points at localhost.
 * Restrict database and object-storage ports to the private network.
 
 ## Topology options
@@ -52,7 +52,7 @@ See `.env.example` for every variable with comments. Key production values:
 3. The API issues pre-signed `PUT` URLs (5 min, content type and length signed) and pre-signed `GET` URLs (2 min). After upload the API re-reads the object's size and first bytes to confirm it is a real JPEG/PNG.
 4. Lifecycle rule (defence in depth): expire objects older than your photo retention + 30 days.
 
-The S3 driver is implemented with the AWS SDK v3 but was **not tested against a real bucket** here; the local driver is covered by the automated tests.
+Uploads, signed downloads, deletion, private access and outages are tested against a local SeaweedFS server (pps/api/test/s3-storage.test.ts, run with `S3_TEST_ENDPOINT`). **No cloud provider has been tested yet**; run that test against yours before launch.
 
 ## Mobile app builds
 

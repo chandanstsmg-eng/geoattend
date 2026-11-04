@@ -115,3 +115,14 @@ Not run: a production `next build`, and mobile changes were not part of this pas
 | Overtime | Company `overtimeMultiplier` (default 1) for new pay setups; no statutory rate assumed | same test file |
 
 Not done: PF, ESI, PT and TDS; `carryForward` is still not posted to the next month; payroll approval still computes outside its transaction. All three stay behind the switch.
+
+## Security and production blockers (4 Nov 2026)
+
+See [MIGRATIONS.md](MIGRATIONS.md) for 022. Regression tests: `security.test.ts`, `restore-target.test.ts`, `s3-storage.test.ts`.
+
+- A restore can only create a new database.
+- Voided records are final; one open dispute per record; disputes are audited.
+- No phone is approved without a person, including the first; status history is kept; attendance actions check the phone named in the access token.
+- `TRUST_PROXY` is parsed correctly; login limits are per address and account.
+- S3: uploads are confirmed against the bucket, signed links work, face checks use the configured credentials, outages answer 503. Tested on SeaweedFS, not on a cloud provider.
+- Production refuses to start with placeholder or missing settings, or with payroll on. Docker files are updated but have never been built.

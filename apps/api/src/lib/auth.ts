@@ -11,7 +11,8 @@ import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { SignJWT, jwtVerify } from 'jose';
 import { config } from '../config.js';
-import { one, q } from '../db/pool.js';
+import { one, q, tx } from '../db/pool.js';
+import { audit } from './audit.js';
 import { HttpError, forbidden, unauthorized } from './errors.js';
 
 export type Role = 'ADMIN' | 'EMPLOYEE';
@@ -28,6 +29,9 @@ export interface AuthUser {
   /** Workplaces a supervisor may see; null = all of the company (owners, employees). */
   sites: string[] | null;
   via: 'cookie' | 'bearer';
+  /** The phone this sign-in belongs to, from the token, so a client cannot claim another one. */
+  deviceId?: string | null;
+  mustChangePassword?: boolean;
 }
 
 export const ACCESS_COOKIE = 'ga_at';
@@ -37,8 +41,8 @@ export const CSRF_COOKIE = 'ga_csrf';
 const secret = () => new TextEncoder().encode(config.jwtSecret);
 const sha256 = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
 
-export async function signAccessToken(user: { id: string; role: Role }) {
-  return new SignJWT({ role: user.role })
+export async function signAccessToken(user: { id: string; role: Role }, deviceId?: string | null) {
+  return new SignJWT({ role: user.role, ...(deviceId ? { did: deviceId } : {}) })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(user.id)
     .setIssuedAt()
@@ -58,28 +62,51 @@ export async function issueRefreshToken(userId: string, client: 'web' | 'mobile'
   return { token, id: row!.id };
 }
 
-/** Rotates a refresh token. Detects re-use of an already rotated token. */
+/** A rotated token presented again this soon is a retry after a lost response, not theft. */
+const REFRESH_GRACE_MS = 60_000;
+
+/**
+ * Rotates a refresh token under a row lock, so two simultaneous uses cannot both succeed unnoticed.
+ * Re-use of a rotated token revokes its family, except a retry inside the grace period: a phone on a
+ * poor network that never received the answer must not be signed out mid-shift.
+ */
 export async function rotateRefreshToken(token: string) {
-  const row = await one(
-    `SELECT rt.*, u.role, u.is_active FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id WHERE rt.token_hash = $1`,
-    [sha256(token)],
-  );
-  if (!row) throw unauthorized('Session expired. Please sign in again.');
-  if (row.revoked_at) {
-    // A rotated token was presented again: assume theft, kill the family.
-    await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id]);
-    throw unauthorized('Session expired. Please sign in again.');
-  }
-  if (new Date(row.expires_at) < new Date() || !row.is_active) throw unauthorized('Session expired. Please sign in again.');
-  const next = await issueRefreshToken(row.user_id, row.client, row.device_id, row.family_id);
-  await q('UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2 WHERE id = $1', [row.id, next.id]);
-  const accessToken = await signAccessToken({ id: row.user_id, role: row.role });
-  return { userId: row.user_id as string, role: row.role as Role, client: row.client as 'web' | 'mobile', accessToken, refreshToken: next.token };
+  const outcome = await tx(async (db) => {
+    const row = await one(
+      `SELECT rt.*, u.role, u.is_active, u.org_id FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id WHERE rt.token_hash = $1 FOR UPDATE OF rt`,
+      [sha256(token)],
+      db,
+    );
+    if (!row) return { failed: true as const };
+    if (row.revoked_at) {
+      const retry = row.replaced_by && Date.now() - new Date(row.revoked_at).getTime() < REFRESH_GRACE_MS;
+      if (!retry) {
+        // A rotated token was presented again: assume theft, kill the family.
+        await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id], db);
+        if (row.replaced_by) await audit({ actor: { id: row.user_id, role: row.role, orgId: row.org_id }, action: 'auth.refresh_reuse', resourceType: 'user', resourceId: row.user_id, after: { client: row.client } }, db);
+        return { failed: true as const };
+      }
+    }
+    if (new Date(row.expires_at) < new Date() || !row.is_active) return { failed: true as const };
+    const fresh = crypto.randomBytes(32).toString('base64url');
+    const next = await one<{ id: string }>(
+      `INSERT INTO refresh_tokens (user_id, token_hash, family_id, client, device_id, expires_at) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6)) RETURNING id`,
+      [row.user_id, sha256(fresh), row.family_id, row.client, row.device_id, config.refreshTokenTtlDays],
+      db,
+    );
+    if (!row.revoked_at) await q('UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2 WHERE id = $1', [row.id, next!.id], db);
+    return { failed: false as const, row, refreshToken: fresh };
+  });
+  if (outcome.failed) throw unauthorized('Session expired. Please sign in again.');
+  const { row, refreshToken } = outcome;
+  const accessToken = await signAccessToken({ id: row.user_id, role: row.role }, row.device_id);
+  return { userId: row.user_id as string, role: row.role as Role, client: row.client as 'web' | 'mobile', accessToken, refreshToken };
 }
 
 export async function revokeRefreshToken(token: string) {
-  const row = await one('SELECT family_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
+  const row = await one('SELECT family_id, user_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
   if (row) await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id]);
+  return (row?.user_id as string | undefined) ?? null;
 }
 
 export async function revokeAllForUser(userId: string) {
@@ -112,22 +139,27 @@ async function resolveUser(req: Request): Promise<AuthUser | null> {
   }
   if (!token) return null;
   let sub: string;
+  let deviceId: string | null = null;
   try {
     const { payload } = await jwtVerify(token, secret(), { issuer: 'geoattend', audience: 'geoattend' });
     sub = payload.sub as string;
+    deviceId = typeof payload.did === 'string' ? payload.did : null;
   } catch {
     throw new HttpError(401, 'TOKEN_EXPIRED', 'Access token expired or invalid');
   }
   // Re-read the user so deactivation and role changes take effect immediately.
   const u = await one(
-    `SELECT u.id, u.role, u.email, u.full_name, u.is_active, u.is_demo, u.org_id, ap.access, ap.site_ids
+    `SELECT u.id, u.role, u.email, u.full_name, u.is_active, u.is_demo, u.org_id, u.must_change_password, ap.access, ap.site_ids
      FROM users u LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
     [sub],
   );
   if (!u || !u.is_active) throw unauthorized('Account is inactive');
   const access = u.role === 'ADMIN' ? (u.access ?? 'OWNER') : undefined;
-  return { id: u.id, role: u.role, email: u.email, fullName: u.full_name, isDemo: u.is_demo, orgId: u.org_id, access, sites: access === 'SUPERVISOR' ? (u.site_ids ?? []) : null, via };
+  return { id: u.id, role: u.role, email: u.email, fullName: u.full_name, isDemo: u.is_demo, orgId: u.org_id, access, sites: access === 'SUPERVISOR' ? (u.site_ids ?? []) : null, via, deviceId, mustChangePassword: u.must_change_password };
 }
+
+/** What someone on a temporary password may still do: read, sign in and out, change it, register their phone. */
+const allowedOnTemporaryPassword = (url: string) => url.startsWith('/api/v1/auth/') || url.startsWith('/api/v1/me/devices');
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -142,6 +174,9 @@ export function requireAuth(role?: Role) {
         if (!cookie || typeof header !== 'string' || header.length !== cookie.length || !crypto.timingSafeEqual(Buffer.from(header), Buffer.from(cookie))) {
           throw new HttpError(403, 'CSRF_FAILED', 'Missing or invalid CSRF token');
         }
+      }
+      if (user.mustChangePassword && !SAFE_METHODS.has(req.method) && !allowedOnTemporaryPassword(req.originalUrl)) {
+        throw new HttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Change your temporary password first (Account › Change password).');
       }
       if (role && user.role !== role) throw forbidden();
       (req as any).user = user;

@@ -72,6 +72,8 @@ export async function mobileLogin(app: Express, email: string) {
 }
 
 export async function adminAgent(app: Express, email = 'admin@test.local') {
+  // Accounts created through the API start on a temporary password; these tests are about something else.
+  await q('UPDATE users SET must_change_password = false WHERE lower(email) = lower($1)', [email]);
   const agent = request.agent(app);
   const res = await agent.post('/api/v1/auth/login').send({ email, password: PASSWORD, client: 'web' }).expect(200);
   return { agent, csrf: res.body.csrfToken as string };

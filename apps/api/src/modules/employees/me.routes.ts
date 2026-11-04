@@ -13,6 +13,7 @@ import { workFlags } from '../reports/reports.routes.js';
 import { computeMonth } from '../payroll/payroll.routes.js';
 import { assertPayrollEnabled } from '../payroll/guard.js';
 import { config } from '../../config.js';
+import { audit } from '../../lib/audit.js';
 
 export const meRouter = Router();
 mount(meRouter, '/api/v1/me', 'me', [
@@ -217,13 +218,16 @@ mount(meRouter, '/api/v1/me', 'me', [
       pushToken: z.string().max(300).nullable().optional(),
     }),
     handler: async ({ user, body }) => {
-      await q(
-        `INSERT INTO device_registrations (user_id, device_id, platform, os_version, model, app_version, push_token)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+      // Details only: a new row is PENDING until an owner or supervisor approves it.
+      const reg = await one(
+        `INSERT INTO device_registrations (user_id, device_id, platform, os_version, model, app_version, push_token, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'PENDING')
          ON CONFLICT (user_id, device_id) DO UPDATE SET platform = EXCLUDED.platform, os_version = EXCLUDED.os_version, model = EXCLUDED.model,
-           app_version = EXCLUDED.app_version, push_token = COALESCE(EXCLUDED.push_token, device_registrations.push_token), last_seen_at = now()`,
+           app_version = EXCLUDED.app_version, push_token = COALESCE(EXCLUDED.push_token, device_registrations.push_token), last_seen_at = now()
+         RETURNING id, (xmax = 0) AS created`,
         [user.id, body.deviceId, body.platform, body.osVersion ?? null, body.model ?? null, body.appVersion ?? null, body.pushToken ?? null],
       );
+      if (reg?.created) await audit({ actor: user, action: 'device.register', resourceType: 'device', resourceId: reg.id, after: { platform: body.platform, model: body.model } });
       return { ok: true };
     },
   }),

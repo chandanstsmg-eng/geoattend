@@ -64,13 +64,25 @@ async function main() {
     logger.info(`${signal} received — shutting down`);
     stopSweeper();
     stopSample();
-    server.close();
-    server.closeAllConnections();
+    // Let requests in flight finish; live streams and stuck clients are cut after 10 seconds.
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeIdleConnections();
+      setTimeout(() => {
+        server.closeAllConnections();
+        resolve();
+      }, 10_000).unref();
+    });
     await closePool();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('unhandledRejection', (err) => logger.error({ err }, 'unhandled rejection'));
+  process.on('uncaughtException', (err) => {
+    logger.fatal({ err }, 'uncaught exception');
+    process.exit(1);
+  });
 }
 
 main().catch((err) => {

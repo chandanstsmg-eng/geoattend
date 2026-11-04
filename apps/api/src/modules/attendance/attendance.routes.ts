@@ -1,4 +1,4 @@
-import express, { Router } from 'express';
+import express, { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { one, q } from '../../db/pool.js';
 import { config } from '../../config.js';
@@ -8,6 +8,7 @@ import { audit } from '../../lib/audit.js';
 import { assertInOrg, employeeSite, siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl, deleteObject, detectImageType, readLocalObject, requestOrigin, verifyToken, writeLocalObject } from '../../lib/storage.js';
 import { readingSchema } from '../tracking/tracking.routes.js';
+import { assertApprovedDevice } from '../devices/devices.routes.js';
 import { correctAttendance, createIntent, createManualAttendance, resolveReview, submitAttendance } from './attendance.service.js';
 
 export const attendanceRouter = Router();
@@ -24,6 +25,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       sizeBytes: z.number().int().positive(),
     }),
     handler: async ({ user, body, req, res }) => {
+      await assertApprovedDevice(user);
       res.status(201);
       return createIntent(user.id, body, requestOrigin(req));
     },
@@ -41,6 +43,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       device: z.record(z.string(), z.union([z.string().max(200), z.number(), z.boolean(), z.null()])).optional(),
     }),
     handler: async ({ user, body, res }) => {
+      await assertApprovedDevice(user);
       const { record, replay } = await submitAttendance(user.id, body);
       res.status(replay ? 200 : 201);
       return { attendance: { id: record.id, recordedAt: record.recorded_at, verificationStatus: record.verification_status, isLate: record.is_late, lateByMinutes: record.late_by_minutes }, replay };
@@ -264,9 +267,18 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
 
 // ── local storage driver endpoints (token-authorised, no session needed) ──
 export const storageRouter = Router();
-storageRouter.put('/upload', express.raw({ type: ['image/jpeg', 'image/png'], limit: config.storage.maxPhotoBytes }), async (req, res, next) => {
+// The token is checked first, so nobody without an upload slot can make the server read a body.
+const uploadSlot: RequestHandler = (req, _res, next) => {
   try {
     if (config.storage.driver !== 'local') throw new HttpError(404, 'NOT_FOUND', 'Not found');
+    verifyToken(String(req.query.token ?? ''), 'put');
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+storageRouter.put('/upload', uploadSlot, express.raw({ type: ['image/jpeg', 'image/png'], limit: config.storage.maxPhotoBytes }), async (req, res, next) => {
+  try {
     const t = verifyToken(String(req.query.token ?? ''), 'put');
     const ct = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
     if (ct !== t.ct) throw new HttpError(415, 'WRONG_TYPE', 'Content type does not match the upload slot.');

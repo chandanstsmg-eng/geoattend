@@ -15,6 +15,7 @@ import { idParams, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
 import { siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl, createUploadUrl, inspectObject, newObjectKey, requestOrigin } from '../../lib/storage.js';
+import { confirmUpload } from '../attendance/photo-upload.js';
 import { correctAttendance } from '../attendance/attendance.service.js';
 import { MODEL_NAME, faceEngine } from './engine.js';
 import { readPhoto } from './faces.js';
@@ -82,7 +83,7 @@ mount(facesRouter, '/api/v1/faces', 'faces', [
       const rows = await q(`SELECT * FROM attendance_photos WHERE id = ANY($1::uuid[]) AND employee_id = $2 AND purpose = 'ENROLLMENT'`, [[...byPose.values()], user.id]);
       const photos = POSES.map((pose) => ({ pose, row: rows.find((r) => r.id === byPose.get(pose)) }));
       for (const p of photos) {
-        if (!p.row || p.row.status !== 'UPLOADED') throw new HttpError(422, 'PHOTO_MISSING', `The photo ${POSE_TEXT[p.pose]} was not uploaded. Take it again.`, { pose: p.pose });
+        if (!p.row || !(await confirmUpload('attendance_photos', p.row))) throw new HttpError(422, 'PHOTO_MISSING', `The photo ${POSE_TEXT[p.pose]} was not uploaded. Take it again.`, { pose: p.pose });
         const obj = await inspectObject(p.row.object_key);
         if (!obj || obj.type !== 'image/jpeg') throw new HttpError(422, 'PHOTO_INVALID', `The photo ${POSE_TEXT[p.pose]} could not be read. Take it again.`, { pose: p.pose });
       }

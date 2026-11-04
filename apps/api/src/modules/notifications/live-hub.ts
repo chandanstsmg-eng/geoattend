@@ -14,13 +14,33 @@ export type LiveEvent =
   | { type: 'attendance.recorded'; attendanceId: string; employeeId: string }
   | { type: 'workplace.updated'; workplaceId: string };
 
-const clients = new Map<Response, { orgId: string; sites: string[] | null }>();
+const clients = new Map<Response, { orgId: string; sites: string[] | null; userId: string | null }>();
 let seq = 0;
+const MAX_STREAMS_PER_USER = 5;
 
-export function addClient(res: Response, orgId: string, sites: string[] | null = null) {
-  clients.set(res, { orgId, sites });
+export function addClient(res: Response, orgId: string, sites: string[] | null = null, userId: string | null = null) {
+  if (userId) {
+    const mine = [...clients].filter(([, c]) => c.userId === userId);
+    if (mine.length >= MAX_STREAMS_PER_USER) mine[0]![0].end(); // the oldest gives way
+  }
+  clients.set(res, { orgId, sites, userId });
   res.on('close', () => clients.delete(res));
 }
+
+/** Streams outlive access tokens, so permission is checked again: anyone deactivated or moved loses theirs. */
+export async function recheckClients() {
+  for (const [res, c] of clients) {
+    if (!c.userId) continue;
+    const u = await one(
+      `SELECT u.is_active, u.org_id, ap.access, ap.site_ids FROM users u LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
+      [c.userId],
+    ).catch(() => undefined);
+    if (u === undefined) continue; // database unavailable: keep the stream and look again
+    const sites = u?.access === 'SUPERVISOR' ? (u.site_ids ?? []) : null;
+    if (!u || !u.is_active || u.org_id !== c.orgId || JSON.stringify(sites) !== JSON.stringify(c.sites)) res.end();
+  }
+}
+setInterval(() => void recheckClients(), 60_000).unref();
 
 export function broadcast(event: LiveEvent, orgId: string) {
   const id = ++seq;

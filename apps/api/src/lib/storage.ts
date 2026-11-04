@@ -18,6 +18,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectComm
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../config.js';
 import { HttpError } from './errors.js';
+import { logger } from './logger.js';
 
 export type PhotoType = 'image/jpeg' | 'image/png';
 
@@ -63,17 +64,38 @@ export function newObjectKey(employeeId: string, contentType: PhotoType) {
   return `attendance/${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${employeeId}/${crypto.randomUUID()}.${ext}`;
 }
 
+const newS3Client = (endpoint: string) =>
+  new S3Client({
+    region: config.storage.s3Region,
+    endpoint: endpoint || undefined,
+    forcePathStyle: config.storage.s3ForcePathStyle,
+    // By default the SDK signs a checksum of the (empty) body into pre-signed upload links, so every
+    // real upload would be refused. Photos are re-validated after upload instead.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
+    credentials: config.storage.s3AccessKeyId ? { accessKeyId: config.storage.s3AccessKeyId, secretAccessKey: config.storage.s3SecretAccessKey } : undefined,
+  });
+
 let s3: S3Client | null = null;
+let s3Signer: S3Client | null = null;
 function s3Client() {
-  if (!s3) {
-    s3 = new S3Client({
-      region: config.storage.s3Region,
-      endpoint: config.storage.s3Endpoint || undefined,
-      forcePathStyle: config.storage.s3ForcePathStyle,
-      credentials: config.storage.s3AccessKeyId ? { accessKeyId: config.storage.s3AccessKeyId, secretAccessKey: config.storage.s3SecretAccessKey } : undefined,
-    });
-  }
-  return s3;
+  return (s3 ??= newS3Client(config.storage.s3Endpoint));
+}
+/** Links go to phones and browsers, so they are signed for the public address of the bucket. */
+function s3LinkClient() {
+  return (s3Signer ??= newS3Client(config.storage.s3PublicEndpoint || config.storage.s3Endpoint));
+}
+/** For tests that change the settings. */
+export function resetStorageClients() {
+  s3 = null;
+  s3Signer = null;
+}
+
+const objectMissing = (err: any) => err?.name === 'NotFound' || err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404;
+/** Storage being down is not the same as a photo not being there, and must never read as success. */
+function storageFailed(err: unknown, action: string) {
+  logger.error({ err, action }, 'object storage failed');
+  return new HttpError(503, 'STORAGE_UNAVAILABLE', 'Photo storage is temporarily unavailable. Please try again.');
 }
 
 const localPath = (key: string) => {
@@ -96,7 +118,7 @@ export async function createUploadUrl(key: string, contentType: PhotoType, decla
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
   if (config.storage.driver === 's3') {
     const url = await getSignedUrl(
-      s3Client(),
+      s3LinkClient(),
       new PutObjectCommand({ Bucket: config.storage.s3Bucket, Key: key, ContentType: contentType, ContentLength: declaredBytes }),
       { expiresIn: ttl, signableHeaders: new Set(['content-type', 'content-length']) },
     );
@@ -110,7 +132,7 @@ export async function createUploadUrl(key: string, contentType: PhotoType, decla
 export async function createDownloadUrl(key: string) {
   const ttl = config.storage.downloadUrlTtlSec;
   if (config.storage.driver === 's3') {
-    return getSignedUrl(s3Client(), new GetObjectCommand({ Bucket: config.storage.s3Bucket, Key: key, ResponseCacheControl: 'private, no-store' }), { expiresIn: ttl });
+    return getSignedUrl(s3LinkClient(), new GetObjectCommand({ Bucket: config.storage.s3Bucket, Key: key, ResponseCacheControl: 'private, no-store' }), { expiresIn: ttl });
   }
   const token = signToken({ op: 'get', key, exp: Math.floor(Date.now() / 1000) + ttl });
   return `/api/v1/storage/object?token=${token}`;
@@ -128,7 +150,19 @@ export function readLocalObject(key: string) {
   return fs.promises.readFile(localPath(key));
 }
 
-/** Confirms an object exists and is a real image of the declared type and an acceptable size. */
+/** The whole object, from whichever driver is in use (the face check reads photos this way). */
+export async function readObject(key: string): Promise<Buffer> {
+  if (config.storage.driver !== 's3') return readLocalObject(key);
+  try {
+    const out = await s3Client().send(new GetObjectCommand({ Bucket: config.storage.s3Bucket, Key: key }));
+    return Buffer.from(await out.Body!.transformToByteArray());
+  } catch (err) {
+    if (objectMissing(err)) throw new HttpError(404, 'NOT_FOUND', 'Photo not found');
+    throw storageFailed(err, 'read');
+  }
+}
+
+/** Confirms an object exists and is a real image of the declared type and an acceptable size. Null only when it is not there. */
 export async function inspectObject(key: string): Promise<{ sizeBytes: number; type: PhotoType | null; sha256: string | null } | null> {
   if (config.storage.driver === 's3') {
     try {
@@ -136,8 +170,9 @@ export async function inspectObject(key: string): Promise<{ sizeBytes: number; t
       const part = await s3Client().send(new GetObjectCommand({ Bucket: config.storage.s3Bucket, Key: key, Range: 'bytes=0-15' }));
       const bytes = Buffer.from(await part.Body!.transformToByteArray());
       return { sizeBytes: head.ContentLength ?? 0, type: detectImageType(bytes), sha256: null };
-    } catch {
-      return null;
+    } catch (err) {
+      if (objectMissing(err)) return null;
+      throw storageFailed(err, 'inspect');
     }
   }
   try {
@@ -150,13 +185,18 @@ export async function inspectObject(key: string): Promise<{ sizeBytes: number; t
 
 export async function deleteObject(key: string) {
   if (config.storage.driver === 's3') {
-    await s3Client().send(new DeleteObjectCommand({ Bucket: config.storage.s3Bucket, Key: key }));
+    try {
+      await s3Client().send(new DeleteObjectCommand({ Bucket: config.storage.s3Bucket, Key: key }));
+    } catch (err) {
+      throw storageFailed(err, 'delete');
+    }
     return;
   }
   await fs.promises.rm(localPath(key), { force: true });
 }
 
 export function requestOrigin(req: { protocol: string; get(name: string): string | undefined }) {
+  if (config.isProduction) return config.publicApiUrl; // never built from a client-supplied Host header
   const host = req.get('host');
   return host ? `${req.protocol}://${host}` : config.publicApiUrl;
 }

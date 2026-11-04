@@ -87,6 +87,7 @@ beforeAll(async () => {
   const email = `sup-${crypto.randomUUID()}@w.test`;
   const added = (await owner.agent.post('/api/v1/team').set('X-CSRF-Token', owner.csrf).send({ fullName: 'Sam Supervisor', email, access: 'SUPERVISOR', siteIds: [siteB] }).expect(201)).body;
   const agent = request.agent(app);
+  await q('UPDATE users SET must_change_password = false WHERE email = $1', [email]); // the temporary-password rule has its own test
   const login = await agent.post('/api/v1/auth/login').send({ email, password: added.temporaryPassword, client: 'web' }).expect(200);
   sup = { agent, csrf: login.body.csrfToken, id: added.admin.id };
 });
