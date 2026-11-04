@@ -22,7 +22,9 @@ export async function testSettings(orgId: string) {
 
 /** A throw-away database on the embedded server, fully migrated. */
 export async function createTestDatabase() {
-  const name = `geoattend_test_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+  // ensureDatabase() ignores the requested name when DATABASE_URL is set, so tests would write to that database.
+  if (process.env.DATABASE_URL) throw new Error('Refusing to run tests with DATABASE_URL set: they must use a throw-away database.');
+  const name =`geoattend_test_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const pool = initPool(await ensureDatabase(name));
   await migrate(pool);
   invalidateSettings();

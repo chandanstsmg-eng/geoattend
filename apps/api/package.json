@@ -12,6 +12,7 @@
     "set-logins": "tsx scripts/set-logins.ts",
     "db:stop": "tsx scripts/db-stop.ts",
     "db:backup": "tsx scripts/backup.ts",
+    "db:schema-doc": "tsx scripts/schema-doc.ts",
     "db:restore": "tsx scripts/restore.ts",
     "openapi": "tsx scripts/openapi.ts",
     "test": "vitest run",
