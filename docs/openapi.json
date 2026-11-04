@@ -1711,7 +1711,7 @@
         "tags": [
           "reports"
         ],
-        "summary": "Monthly totals per employee (CSV, ready for payroll)",
+        "summary": "Monthly totals per employee (CSV)",
         "security": [
           {
             "bearer": []
@@ -2113,6 +2113,283 @@
         }
       }
     },
+    "/api/v1/insights/day": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "A day at a glance, what still needs a decision, and whether it is confirmed",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
+    "/api/v1/insights/day/close": {
+      "post": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Confirm a day's attendance (keeps a snapshot of the summary)",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "date"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
+    "/api/v1/insights/day/reopen": {
+      "post": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Undo a day confirmation (reason required)",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "date",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
+    "/api/v1/insights/unconfirmed": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Past days in a month that had shifts but were never confirmed",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
+    "/api/v1/insights/attention": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Employees with a repeating pattern in the last N days (late, no-shows, leaving early…)",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "type": "integer",
+              "minimum": 7,
+              "maximum": 90
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
     "/api/v1/payroll/pay/{id}": {
       "get": {
         "tags": [
@@ -2210,7 +2487,6 @@
                     "maximum": 10000000
                   },
                   "otMultiplier": {
-                    "default": 1,
                     "type": "number",
                     "minimum": 0,
                     "maximum": 5
@@ -2590,7 +2866,7 @@
         "tags": [
           "payroll"
         ],
-        "summary": "Unlock an approved month (payslips are discarded and recalculated; reason required)",
+        "summary": "Unlock an approved month: the run and its payslips stay as history (reason required)",
         "security": [
           {
             "bearer": []
@@ -2632,6 +2908,55 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
+    "/api/v1/payroll/{month}/history": {
+      "get": {
+        "tags": [
+          "payroll"
+        ],
+        "summary": "Every revision of a month, newest first, including superseded runs",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success"
@@ -3673,6 +3998,28 @@
                       }
                     ]
                   },
+                  "joinedOn": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "leftOn": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "password": {
                     "type": "string",
                     "maxLength": 200
@@ -3944,6 +4291,28 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "joinedOn": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "leftOn": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }
@@ -4012,6 +4381,10 @@
                     "type": "string",
                     "minLength": 3,
                     "maxLength": 500
+                  },
+                  "lastWorkingDay": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                   }
                 },
                 "required": [
@@ -5174,6 +5547,9 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "confirmLongShift": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -5290,6 +5666,9 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "confirmLongShift": {
+                    "type": "boolean"
                   },
                   "isActive": {
                     "type": "boolean"
@@ -7549,6 +7928,11 @@
                     "format": "date-time",
                     "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                   },
+                  "workedMinutes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1440
+                  },
                   "reason": {
                     "type": "string",
                     "minLength": 5,
@@ -7616,6 +8000,71 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          },
+          "403": {
+            "description": "Wrong role or not your resource"
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/photo-thumbnails": {
+      "post": {
+        "tags": [
+          "attendance"
+        ],
+        "summary": "Short-lived signed URLs for the photos of up to 50 attendance records on screen (one audit entry)",
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "cookie": []
+          }
+        ],
+        "x-access": "admin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    }
+                  }
+                },
+                "required": [
+                  "ids"
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success"
@@ -8957,283 +9406,6 @@
         ],
         "x-access": "admin",
         "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not signed in"
-          },
-          "403": {
-            "description": "Wrong role or not your resource"
-          }
-        }
-      }
-    },
-    "/api/v1/insights/day": {
-      "get": {
-        "tags": [
-          "insights"
-        ],
-        "summary": "A day at a glance, what still needs a decision, and whether it is confirmed",
-        "security": [
-          {
-            "bearer": []
-          },
-          {
-            "cookie": []
-          }
-        ],
-        "x-access": "admin",
-        "parameters": [
-          {
-            "name": "date",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not signed in"
-          },
-          "403": {
-            "description": "Wrong role or not your resource"
-          }
-        }
-      }
-    },
-    "/api/v1/insights/day/close": {
-      "post": {
-        "tags": [
-          "insights"
-        ],
-        "summary": "Confirm a day's attendance (keeps a snapshot of the summary)",
-        "security": [
-          {
-            "bearer": []
-          },
-          {
-            "cookie": []
-          }
-        ],
-        "x-access": "admin",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "properties": {
-                  "date": {
-                    "type": "string",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                  },
-                  "note": {
-                    "type": "string",
-                    "maxLength": 500
-                  }
-                },
-                "required": [
-                  "date"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not signed in"
-          },
-          "403": {
-            "description": "Wrong role or not your resource"
-          }
-        }
-      }
-    },
-    "/api/v1/insights/day/reopen": {
-      "post": {
-        "tags": [
-          "insights"
-        ],
-        "summary": "Undo a day confirmation (reason required)",
-        "security": [
-          {
-            "bearer": []
-          },
-          {
-            "cookie": []
-          }
-        ],
-        "x-access": "admin",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "properties": {
-                  "date": {
-                    "type": "string",
-                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                  },
-                  "reason": {
-                    "type": "string",
-                    "minLength": 3,
-                    "maxLength": 500
-                  }
-                },
-                "required": [
-                  "date",
-                  "reason"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not signed in"
-          },
-          "403": {
-            "description": "Wrong role or not your resource"
-          }
-        }
-      }
-    },
-    "/api/v1/insights/unconfirmed": {
-      "get": {
-        "tags": [
-          "insights"
-        ],
-        "summary": "Past days in a month that had shifts but were never confirmed",
-        "security": [
-          {
-            "bearer": []
-          },
-          {
-            "cookie": []
-          }
-        ],
-        "x-access": "admin",
-        "parameters": [
-          {
-            "name": "month",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not signed in"
-          },
-          "403": {
-            "description": "Wrong role or not your resource"
-          }
-        }
-      }
-    },
-    "/api/v1/insights/attention": {
-      "get": {
-        "tags": [
-          "insights"
-        ],
-        "summary": "Employees with a repeating pattern in the last N days (late, no-shows, leaving early…)",
-        "security": [
-          {
-            "bearer": []
-          },
-          {
-            "cookie": []
-          }
-        ],
-        "x-access": "admin",
-        "parameters": [
-          {
-            "name": "days",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "default": 30,
-              "type": "integer",
-              "minimum": 7,
-              "maximum": 90
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Success"
@@ -12707,11 +12879,34 @@
             }
           },
           {
+            "name": "employeeId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
             "name": "includeSimulated",
             "in": "query",
             "required": false,
             "schema": {
               "default": "true",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "compare",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": "false",
               "type": "string",
               "enum": [
                 "true",
