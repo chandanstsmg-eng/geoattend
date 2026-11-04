@@ -10,6 +10,17 @@ import { employeeSite, siteFilter } from '../../lib/tenancy.js';
 /** A notification belongs to its workplace, or to the employee's current workplace. */
 const notificationSites = (param: string) => siteFilter(`COALESCE(n.workplace_id, ${employeeSite('n.employee_id')})`, param);
 
+/** The server posts to this address, so it may only be a browser vendor's push service, never an internal host. */
+const PUSH_HOSTS = [/^fcm\.googleapis\.com$/, /^updates\.push\.services\.mozilla\.com$/, /(^|\.)push\.services\.mozilla\.com$/, /(^|\.)notify\.windows\.com$/, /^web\.push\.apple\.com$/];
+export function isPushService(endpoint: string) {
+  try {
+    const u = new URL(endpoint);
+    return u.protocol === 'https:' && !u.port && PUSH_HOSTS.some((h) => h.test(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 export const notificationsRouter = Router();
 mount(notificationsRouter, '/api/v1/notifications', 'notifications', [
   route({
@@ -101,7 +112,7 @@ mount(notificationsRouter, '/api/v1/notifications', 'notifications', [
         'X-Accel-Buffering': 'no',
       });
       res.write(`retry: 3000\nevent: hello\ndata: ${JSON.stringify({ serverTime: new Date() })}\n\n`);
-      addClient(res, user.orgId, user.sites);
+      addClient(res, user.orgId, user.sites, user.id);
       req.on('close', () => res.end());
     },
   }),
@@ -117,11 +128,11 @@ mount(notificationsRouter, '/api/v1/notifications', 'notifications', [
     path: '/web-push/subscriptions',
     summary: 'Register this browser for web push',
     access: 'admin',
-    body: z.object({ endpoint: z.url().max(1000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) }),
+    body: z.object({ endpoint: z.url().max(1000).refine(isPushService, 'Not a browser push service'), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) }),
     handler: async ({ body, user }) => {
       await q(
         `INSERT INTO web_push_subscriptions (user_id, endpoint, p256dh, auth) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
+         ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth WHERE web_push_subscriptions.user_id = EXCLUDED.user_id`,
         [user.id, body.endpoint, body.keys.p256dh, body.keys.auth],
       );
       return { ok: true };

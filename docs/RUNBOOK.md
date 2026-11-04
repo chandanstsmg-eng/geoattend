@@ -49,7 +49,7 @@ To restore one:
 
 **Production:** provider backups with point-in-time recovery, plus `pg_dump` as described in [DEPLOYMENT.md](DEPLOYMENT.md). This has not been set up or tested.
 
-Known defect: with `DATABASE_URL` set, `npm run db:restore` restores into the database that URL names, not the new name given. Do not use it against a real server until this is fixed (Phase C).
+`npm run db:restore -- <file> <new_name>` only ever creates a new database. It refuses the live database and any name that already exists, and with `NODE_ENV=production` it also needs `RESTORE_CONFIRM=<new_name>`. It needs `pg_restore`, which the embedded Windows package does not include.
 
 ## Photos and secrets
 

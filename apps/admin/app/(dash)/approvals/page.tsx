@@ -11,7 +11,7 @@ import { EmployeeDrawer } from '@/components/employee-drawer';
 
 type Reject = { title: string; description: string; run: (note: string) => Promise<unknown> };
 
-const KIND_LABEL: Record<string, string> = { MANUAL_REVIEW: 'GPS problem — asks to be marked present', DISPUTE: 'Disputes an attendance record', TECHNICAL_ISSUE: 'Reported a technical issue' };
+const KIND_LABEL: Record<string, string> = { ADMIN_CORRECTION: 'Supervisor correction', MANUAL_REVIEW: 'GPS problem — asks to be marked present', DISPUTE: 'Disputes an attendance record', TECHNICAL_ISSUE: 'Reported a technical issue' };
 
 function Item({ icon, who, onWho, meta, children, actions }: { icon: ReactNode; who: string; onWho: () => void; meta: ReactNode; children: ReactNode; actions: ReactNode }) {
   return (
@@ -132,7 +132,12 @@ export default function ApprovalsPage() {
                             <Button size="sm" variant="primary" loading={busy(`rv-${r.id}`)} onClick={() => go(`rv-${r.id}`, `/attendance/reviews/${r.id}/resolve`, { decision: 'APPROVE', note: 'Marked present from approvals' })}><Check className="h-4 w-4" aria-hidden /> Mark present</Button>
                             <Button size="sm" onClick={() => setRejecting({ title: 'Reject request', description: r.full_name, run: (note) => post(`/attendance/reviews/${r.id}/resolve`, { decision: 'REJECT', note }) })}><X className="h-4 w-4" aria-hidden /> Reject</Button>
                           </>
-                        ) : r.kind === 'DISPUTE' ? (
+                        ) : r.kind === 'ADMIN_CORRECTION' ? (
+                            <>
+                              <Button size="sm" variant="primary" loading={busy(`rv-${r.id}`)} onClick={() => go(`rv-${r.id}`, `/attendance/reviews/${r.id}/resolve`, { decision: 'APPROVE', note: 'Approved from approvals' })}><Check className="h-4 w-4" aria-hidden /> Apply correction</Button>
+                              <Button size="sm" onClick={() => setRejecting({ title: 'Reject correction', description: `${r.full_name}'s record stays as it is.`, run: (note) => post(`/attendance/reviews/${r.id}/resolve`, { decision: 'REJECT', note }) })}><X className="h-4 w-4" aria-hidden /> Reject</Button>
+                            </>
+                          ) : r.kind === 'DISPUTE' ? (
                           <>
                             <LinkButton href="/attendance?tab=reviews" size="sm" variant="primary">Correct record</LinkButton>
                             <Button size="sm" onClick={() => setRejecting({ title: 'Reject dispute', description: `${r.full_name} keeps the original record.`, run: (note) => post(`/attendance/reviews/${r.id}/resolve`, { decision: 'REJECT', note }) })}><X className="h-4 w-4" aria-hidden /> Reject</Button>

@@ -1,4 +1,4 @@
-import express, { Router } from 'express';
+import express, { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { one, q } from '../../db/pool.js';
 import { config } from '../../config.js';
@@ -8,7 +8,8 @@ import { audit } from '../../lib/audit.js';
 import { assertInOrg, employeeSite, siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl, deleteObject, detectImageType, readLocalObject, requestOrigin, verifyToken, writeLocalObject } from '../../lib/storage.js';
 import { readingSchema } from '../tracking/tracking.routes.js';
-import { correctAttendance, createIntent, createManualAttendance, resolveReview, submitAttendance } from './attendance.service.js';
+import { assertApprovedDevice } from '../devices/devices.routes.js';
+import { correctAttendance, requestCorrection, createIntent, createManualAttendance, resolveReview, submitAttendance } from './attendance.service.js';
 
 export const attendanceRouter = Router();
 mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
@@ -24,6 +25,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       sizeBytes: z.number().int().positive(),
     }),
     handler: async ({ user, body, req, res }) => {
+      await assertApprovedDevice(user);
       res.status(201);
       return createIntent(user.id, body, requestOrigin(req));
     },
@@ -41,6 +43,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       device: z.record(z.string(), z.union([z.string().max(200), z.number(), z.boolean(), z.null()])).optional(),
     }),
     handler: async ({ user, body, res }) => {
+      await assertApprovedDevice(user);
       const { record, replay } = await submitAttendance(user.id, body);
       res.status(replay ? 200 : 201);
       return { attendance: { id: record.id, recordedAt: record.recorded_at, verificationStatus: record.verification_status, isLate: record.is_late, lateByMinutes: record.late_by_minutes }, replay };
@@ -88,11 +91,11 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       const summary = await one(
         `SELECT count(*)::int AS total,
                 count(*) FILTER (WHERE ar.verification_status = 'VERIFIED')::int AS verified,
-                count(*) FILTER (WHERE ar.is_late)::int AS late,
-                count(*) FILTER (WHERE s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now()))::int AS missing_checkout,
-                count(*) FILTER (WHERE cardinality(array_remove(array_remove(COALESCE(ar.risk_flags, '{}'::text[]), 'SIMULATED'), 'BACKGROUND_LOCATION_UNAVAILABLE')) > 0)::int AS location_exceptions,
+                count(*) FILTER (WHERE ar.is_late AND ar.verification_status <> 'VOIDED')::int AS late,
+                count(*) FILTER (WHERE ar.verification_status <> 'VOIDED' AND (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())))::int AS missing_checkout,
+                count(*) FILTER (WHERE ar.verification_status <> 'VOIDED' AND cardinality(array_remove(array_remove(COALESCE(ar.risk_flags, '{}'::text[]), 'SIMULATED'), 'BACKGROUND_LOCATION_UNAVAILABLE')) > 0)::int AS location_exceptions,
                 count(*) FILTER (WHERE ar.verification_status = 'DISPUTED')::int AS disputed,
-                count(*) FILTER (WHERE ar.session_id IS NULL)::int AS manual
+                count(*) FILTER (WHERE ar.session_id IS NULL AND ar.verification_status <> 'VOIDED')::int AS manual
          FROM attendance_records ar LEFT JOIN tracking_sessions s ON s.id = ar.session_id WHERE ${where}`,
         params,
       );
@@ -107,7 +110,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
     query: z.object({ status: z.enum(['OPEN', 'APPROVED', 'REJECTED', 'CANCELLED', 'APPLIED', 'ACKNOWLEDGED']).optional(), kind: z.enum(['MANUAL_REVIEW', 'TECHNICAL_ISSUE', 'DISPUTE', 'ADMIN_CORRECTION']).optional(), attendanceId: z.uuid().optional() }),
     handler: async ({ query, user }) =>
       q(
-        `SELECT r.*, u.full_name, rb.full_name AS resolved_by_name FROM review_requests r JOIN users u ON u.id = r.employee_id LEFT JOIN users rb ON rb.id = r.resolved_by
+        `SELECT r.*, u.full_name, rq.full_name AS requested_by_name, rb.full_name AS resolved_by_name FROM review_requests r JOIN users u ON u.id = r.employee_id JOIN users rq ON rq.id = r.requested_by LEFT JOIN users rb ON rb.id = r.resolved_by
          WHERE u.org_id = $4 AND ${siteFilter(employeeSite('u.id'), '$5')} AND ($1::text IS NULL OR r.status = $1) AND ($2::text IS NULL OR r.kind = $2) AND ($3::uuid IS NULL OR r.attendance_id = $3)
          ORDER BY r.created_at DESC LIMIT 200`,
         [query.status ?? null, query.kind ?? null, query.attendanceId ?? null, user.orgId, user.sites],
@@ -151,7 +154,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
         [params.id],
       );
       if (!rec) throw notFound('Attendance record');
-      const history = await q(`SELECT r.*, a.full_name AS by_name FROM review_requests r LEFT JOIN users a ON a.id = COALESCE(r.resolved_by, r.requested_by) WHERE r.attendance_id = $1 ORDER BY r.created_at`, [params.id]);
+      const history = await q(`SELECT r.*, a.full_name AS by_name, rq.full_name AS requested_by_name, rs.full_name AS resolved_by_name FROM review_requests r LEFT JOIN users a ON a.id = COALESCE(r.resolved_by, r.requested_by) LEFT JOIN users rq ON rq.id = r.requested_by LEFT JOIN users rs ON rs.id = r.resolved_by WHERE r.attendance_id = $1 ORDER BY r.created_at`, [params.id]);
       return { record: rec, history };
     },
   }),
@@ -228,8 +231,9 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
   route({
     method: 'post',
     path: '/:id/photo/delete',
-    summary: 'Delete an attendance photo before its retention date (reason required, audited)',
+    summary: 'Delete an attendance photo before its retention date (company owner only, reason required, audited)',
     access: 'admin',
+    ownerOnly: true,
     params: idParams,
     scope: 'attendance',
     body: z.object({ reason: z.string().trim().min(5).max(500) }),
@@ -239,7 +243,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       if (p.status !== 'DELETED') {
         await deleteObject(p.object_key);
         await q(`UPDATE attendance_photos SET status = 'DELETED', deleted_at = now(), deleted_reason = $2 WHERE id = $1`, [p.id, body.reason]);
-        await audit({ actor: user, action: 'attendance_photo.delete', resourceType: 'attendance_photo', resourceId: p.id, reason: body.reason, req });
+        await audit({ actor: user, action: 'attendance_photo.delete', resourceType: 'attendance_photo', resourceId: p.id, before: { attendanceId: params.id, status: p.status, employeeId: p.employee_id }, reason: body.reason, req });
       }
       return { ok: true };
     },
@@ -247,7 +251,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
   route({
     method: 'post',
     path: '/:id/corrections',
-    summary: 'Correct an attendance record (mandatory reason, audited)',
+    summary: "Correct an attendance record (mandatory reason, audited). An owner's correction applies at once; a supervisor's waits for an owner (202).",
     access: 'admin',
     params: idParams,
     scope: 'attendance',
@@ -258,15 +262,28 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       isLate: z.boolean().optional(),
       lateByMinutes: z.number().int().min(0).max(1440).optional(),
     }),
-    handler: async ({ user, params, body, req }) => correctAttendance(user, params.id, body, req),
+    handler: async ({ user, params, body, req, res }) => {
+      if (user.access === 'OWNER') return correctAttendance(user, params.id, body, req);
+      res.status(202);
+      return requestCorrection(user, params.id, body, req);
+    },
   }),
 ]);
 
 // ── local storage driver endpoints (token-authorised, no session needed) ──
 export const storageRouter = Router();
-storageRouter.put('/upload', express.raw({ type: ['image/jpeg', 'image/png'], limit: config.storage.maxPhotoBytes }), async (req, res, next) => {
+// The token is checked first, so nobody without an upload slot can make the server read a body.
+const uploadSlot: RequestHandler = (req, _res, next) => {
   try {
     if (config.storage.driver !== 'local') throw new HttpError(404, 'NOT_FOUND', 'Not found');
+    verifyToken(String(req.query.token ?? ''), 'put');
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+storageRouter.put('/upload', uploadSlot, express.raw({ type: ['image/jpeg', 'image/png'], limit: config.storage.maxPhotoBytes }), async (req, res, next) => {
+  try {
     const t = verifyToken(String(req.query.token ?? ''), 'put');
     const ct = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
     if (ct !== t.ct) throw new HttpError(415, 'WRONG_TYPE', 'Content type does not match the upload slot.');

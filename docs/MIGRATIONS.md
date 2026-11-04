@@ -24,3 +24,16 @@ Limits:
 - `joined_on` is not filled for existing employees, so they are not prorated until someone enters the date.
 - Deactivation dates assume `Asia/Kolkata` for the backfill.
 - Rollback removes anything written to the new columns, and refuses to run once a month has been reopened. In that case restore the backup.
+
+## 022_device_history_and_final_voids
+
+Rollback: [migrations/022_rollback.sql](migrations/022_rollback.sql).
+
+| Table | Change | Existing rows |
+|---|---|---|
+| `device_registrations` | `status` now defaults to `PENDING` | Unchanged: approved phones stay approved |
+| `device_status_history` | New table, written by a trigger on every status change | One row per phone recording its current status |
+| `attendance_records` | Trigger refuses any change away from `VOIDED` | Unchanged |
+| `review_requests` | Unique index: one open dispute per record | Unchanged. The migration stops if a record has two open disputes |
+
+Limit: a mistaken void cannot be undone by anyone, including the owner.

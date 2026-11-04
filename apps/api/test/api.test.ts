@@ -104,6 +104,7 @@ describe('authentication & authorisation', () => {
     const emp = await createEmployee({ workplaceId: base.workplaceId });
     const login = await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: 'Test-password-123', client: 'mobile' }).expect(200);
     const r1 = await request(app).post('/api/v1/auth/refresh').send({ refreshToken: login.body.refreshToken }).expect(200);
+    await q(`UPDATE refresh_tokens SET revoked_at = now() - interval '5 minutes' WHERE user_id = $1 AND revoked_at IS NOT NULL`, [emp.id]); // past the retry grace
     await request(app).post('/api/v1/auth/refresh').send({ refreshToken: login.body.refreshToken }).expect(401); // re-use
     await request(app).post('/api/v1/auth/refresh').send({ refreshToken: r1.body.refreshToken }).expect(401); // family revoked
   });
@@ -799,8 +800,11 @@ describe('admin workflows', () => {
     const live = await onShift();
     await live.send(reading(50, 5, live.clock(0)));
     await q(`UPDATE location_updates SET received_at = now() - interval '400 days' WHERE session_id = $1`, [live.sessionId]);
+    config.photoAutoDeleteEnabled = true; // deletion is on hold by default: corrections-and-photos.test.ts
+    await saveSettingsSection(DEFAULT_ORG_ID, 'retention', { ...(await getSettings(DEFAULT_ORG_ID)).retention, photoAutoDelete: true }, null);
     invalidateSettings();
     const summary = await runRetention(null, DEFAULT_ORG_ID);
+    config.photoAutoDeleteEnabled = false;
     expect(summary!.photosDeleted).toBeGreaterThanOrEqual(1);
     expect((await one('SELECT count(*)::int AS n FROM location_updates WHERE session_id = $1', [ctx.sessionId])).n).toBe(0);
     expect((await one('SELECT count(*)::int AS n FROM location_updates WHERE session_id = $1', [live.sessionId])).n).toBe(1); // open session untouched

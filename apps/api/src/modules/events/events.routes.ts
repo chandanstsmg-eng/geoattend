@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { audit } from '../../lib/audit.js';
 import { z } from 'zod';
 import { one, q } from '../../db/pool.js';
 import { isoDate, mount, paging, route } from '../../lib/http.js';
@@ -19,14 +20,16 @@ mount(geofenceEventsRouter, '/api/v1/geofence-events', 'geofence-events', [
       eventType: z.string().max(40).optional(),
       ...paging,
     }),
-    handler: async ({ query, user }) =>
-      q(
+    handler: async ({ query, user, req }) => {
+      await audit({ actor: user, action: 'location.view', resourceType: 'geofence_events', after: { employeeId: query.employeeId ?? null, from: query.from ?? null, to: query.to ?? null }, req });
+      return q(
         `SELECT g.*, u.full_name, w.name AS workplace_name FROM geofence_events g JOIN users u ON u.id = g.employee_id JOIN workplaces w ON w.id = g.workplace_id
          WHERE u.org_id = $8 AND ${siteFilter('g.workplace_id', '$9')} AND ($1::date IS NULL OR g.event_time >= $1::date) AND ($2::date IS NULL OR g.event_time < $2::date + 1)
            AND ($3::uuid IS NULL OR g.employee_id = $3) AND ($4::uuid IS NULL OR g.workplace_id = $4) AND ($5::text IS NULL OR g.event_type = $5)
          ORDER BY g.event_time DESC LIMIT $6 OFFSET $7`,
         [query.from ?? null, query.to ?? null, query.employeeId ?? null, query.workplaceId ?? null, query.eventType ?? null, query.limit, query.offset, user.orgId, user.sites],
-      ),
+      );
+    },
   }),
 ]);
 

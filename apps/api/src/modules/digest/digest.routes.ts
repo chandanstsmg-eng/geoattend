@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { HttpError } from '../../lib/errors.js';
 import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
 import { config } from '../../config.js';
@@ -31,6 +32,10 @@ mount(digestRouter, '/api/v1/digest', 'digest', [
     access: 'admin',
     ownerOnly: true,
     handler: async ({ user, req }) => {
+      // Sends real messages to configured numbers, so a loop must not turn it into a relay.
+      if (await one(`SELECT 1 FROM audit_logs WHERE org_id = $1 AND action = 'digest.test' AND created_at > now() - interval '5 minutes' LIMIT 1`, [user.orgId])) {
+        throw new HttpError(429, 'RATE_LIMITED', 'A test summary was sent a moment ago. Try again in five minutes.');
+      }
       const tz = (await one(`SELECT timezone FROM workplaces WHERE org_id = $1 ORDER BY is_active DESC, created_at LIMIT 1`, [user.orgId]))?.timezone ?? 'UTC';
       const local = DateTime.now().setZone(tz);
       const d = await composeDigest(user.orgId, local.toISODate()!, `${local.toFormat('ccc d LLL, HH:mm')} (test)`);

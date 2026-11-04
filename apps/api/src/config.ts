@@ -26,6 +26,15 @@ const bool = (name: string, fallback = false) => {
 };
 
 const nodeEnv = str('NODE_ENV', 'development');
+/** Express "trust proxy": a hop count, false, or a list of proxy addresses / ranges. */
+export function parseTrustProxy(value: string): boolean | number | string[] {
+  const v = value.trim();
+  if (v === '' || v === 'false') return false;
+  if (v === 'true') return true;
+  if (/^\d+$/.test(v)) return Number(v);
+  return v.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 export const DATA_DIR = path.resolve(REPO_ROOT, str('DATA_DIR', 'data'));
 
 export const config = {
@@ -38,7 +47,7 @@ export const config = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
-  trustProxy: str('TRUST_PROXY', 'loopback'),
+  trustProxy: parseTrustProxy(str('TRUST_PROXY', 'loopback')),
 
   externalDatabaseUrl: str('DATABASE_URL'),
   pgPort: int('PG_PORT', 54340),
@@ -54,6 +63,8 @@ export const config = {
   demoPassword: str('DEMO_PASSWORD'),
   /** Off until payroll rules are confirmed by a qualified person; see modules/payroll/guard.ts. */
   payrollEnabled: bool('PAYROLL_ENABLED', false),
+  /** Off until the retention rules have had legal review: nothing deletes employee photos automatically. */
+  photoAutoDeleteEnabled: bool('PHOTO_AUTO_DELETE_ENABLED', false),
 
   storage: {
     driver: str('STORAGE_DRIVER', 'local') as 'local' | 's3',
@@ -62,6 +73,8 @@ export const config = {
     s3Bucket: str('S3_BUCKET'),
     s3Region: str('S3_REGION', 'us-east-1'),
     s3Endpoint: str('S3_ENDPOINT'),
+    /** The address phones and browsers reach the bucket on, when the API uses a private one. */
+    s3PublicEndpoint: str('S3_PUBLIC_ENDPOINT'),
     s3AccessKeyId: str('S3_ACCESS_KEY_ID'),
     s3SecretAccessKey: str('S3_SECRET_ACCESS_KEY'),
     s3ForcePathStyle: bool('S3_FORCE_PATH_STYLE', false),
@@ -116,6 +129,51 @@ export const config = {
  */
 export const sampleData = config.demoMode && !config.isProduction && !config.externalDatabaseUrl && config.dbName.endsWith('_demo');
 
+const PLACEHOLDER = /change[-_]?me|replace[-_]?me|your[-_]|example|placeholder|^secret|^password/i;
+const isPublicHttps = (url: string) => {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && !['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(u.hostname) && !u.hostname.endsWith('.example.com') && u.hostname !== 'example.com';
+  } catch {
+    return false;
+  }
+};
+
+/** Everything wrong with a production environment, as readable lines. Takes the raw variables so each rule can be tested. */
+export function productionConfigErrors(env: Record<string, string | undefined>) {
+  const e: string[] = [];
+  const get = (k: string) => (env[k] ?? '').trim();
+  for (const k of ['JWT_SECRET', 'STORAGE_SIGNING_KEY']) {
+    if (get(k).length < 32) e.push(`${k} must be at least 32 characters.`);
+    else if (PLACEHOLDER.test(get(k))) e.push(`${k} is still a placeholder value.`);
+  }
+  if (get('JWT_SECRET') && get('JWT_SECRET') === get('STORAGE_SIGNING_KEY')) e.push('JWT_SECRET and STORAGE_SIGNING_KEY must be different.');
+  if (!get('DATABASE_URL')) e.push('DATABASE_URL is required: the built-in database is for development only.');
+  else if (PLACEHOLDER.test(get('DATABASE_URL'))) e.push('DATABASE_URL still contains a placeholder value.');
+  if (!isPublicHttps(get('PUBLIC_API_URL'))) e.push('PUBLIC_API_URL must be the public https:// address of the API.');
+  if (!isPublicHttps(get('DASHBOARD_URL'))) e.push('DASHBOARD_URL must be the public https:// address of the dashboard.');
+  const origins = get('CORS_ORIGINS').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!origins.length || !origins.every(isPublicHttps)) e.push('CORS_ORIGINS must list the public https:// dashboard origins.');
+  const proxy = get('TRUST_PROXY');
+  if (!proxy) e.push('TRUST_PROXY is required: the number of proxies in front of the API, or their addresses.');
+  else if (proxy === 'true') e.push('TRUST_PROXY=true trusts any client-supplied address. Use the proxy count or addresses.');
+  if (get('NODE_ENV') === 'production' && !bool2(env.COOKIE_SECURE, true)) e.push('COOKIE_SECURE must be true in production (serve over HTTPS).');
+  if (bool2(env.DEMO_MODE, false)) e.push('DEMO_MODE must not be enabled when NODE_ENV=production.');
+  if (bool2(env.PAYROLL_ENABLED, false)) e.push('PAYROLL_ENABLED must stay off until the pay rules have been reviewed by a qualified person.');
+  if (get('STORAGE_DRIVER') !== 's3') e.push('STORAGE_DRIVER must be s3 in production.');
+  else {
+    if (!get('S3_BUCKET')) e.push('S3_BUCKET is required.');
+    if (get('S3_ACCESS_KEY_ID') && PLACEHOLDER.test(get('S3_SECRET_ACCESS_KEY'))) e.push('S3_SECRET_ACCESS_KEY is still a placeholder value.');
+    if (Boolean(get('S3_ACCESS_KEY_ID')) !== Boolean(get('S3_SECRET_ACCESS_KEY'))) e.push('S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together.');
+    if (get('S3_ENDPOINT') && !isPublicHttps(get('S3_PUBLIC_ENDPOINT') || get('S3_ENDPOINT'))) e.push('S3_PUBLIC_ENDPOINT must be the https:// address phones can reach the bucket on.');
+  }
+  return e;
+}
+function bool2(v: string | undefined, fallback: boolean) {
+  if (v === undefined || v === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase());
+}
+
 export function assertRuntimeConfig() {
   const missing: string[] = [];
   if (!config.jwtSecret || config.jwtSecret.length < 32) missing.push('JWT_SECRET (≥ 32 chars)');
@@ -124,10 +182,8 @@ export function assertRuntimeConfig() {
   if (missing.length) {
     throw new Error(`Missing configuration: ${missing.join(', ')}.\nRun "npm run setup" to create .env, or see .env.example.`);
   }
-  if (config.isProduction && config.demoMode) {
-    throw new Error('DEMO_MODE must not be enabled when NODE_ENV=production.');
-  }
-  if (config.isProduction && !config.cookieSecure) {
-    throw new Error('COOKIE_SECURE must be true in production (serve over HTTPS).');
+  if (config.isProduction) {
+    const errors = productionConfigErrors(process.env);
+    if (errors.length) throw new Error(`Refusing to start in production:\n - ${errors.join('\n - ')}`);
   }
 }

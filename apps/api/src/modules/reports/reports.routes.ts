@@ -8,7 +8,7 @@ import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
-import { employeeSite, siteFilter } from '../../lib/tenancy.js';
+import { employeeSite, overtimeCounts, siteFilter } from '../../lib/tenancy.js';
 import { badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { computeHours, hoursText, loadWorkRecords } from './hours.js';
@@ -264,7 +264,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         `SELECT COALESCE(SUM(ROUND(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - started_at)) / 60)) FILTER (WHERE shift_date = $1), 0)::int AS today_minutes,
                 COALESCE(SUM(approved_minutes) FILTER (WHERE shift_date = $1 AND status = 'APPROVED'), 0)::int AS today_approved_minutes,
                 count(*) FILTER (WHERE status = 'PENDING' AND ended_at IS NOT NULL)::int AS pending
-         FROM overtime_entries WHERE ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4')}`,
+         FROM overtime_entries WHERE ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4')} AND ${overtimeCounts('overtime_entries')}`,
         [date, wp, org, user.sites],
       );
       const employees = new Set(rows.map((r) => r.employee_id));

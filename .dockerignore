@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+data
+docs
+**/node_modules
+**/.next
+**/.expo
+**/dist
+**/coverage
+**/*.tsbuildinfo
+apps/mobile

@@ -30,7 +30,7 @@ export interface Digest {
 export const senders = {
   async whatsapp(to: string, d: Digest): Promise<string> {
     if (!config.whatsapp.token || !config.whatsapp.phoneNumberId) {
-      logger.info({ to, message: `${d.company} — ${d.when}: ${d.line}` }, 'WhatsApp not configured; summary logged instead');
+      logger.info({ company: d.company, when: d.when }, 'WhatsApp not configured; summary not sent');
       return 'not configured (logged)';
     }
     const res = await fetch(`https://graph.facebook.com/v21.0/${config.whatsapp.phoneNumberId}/messages`, {

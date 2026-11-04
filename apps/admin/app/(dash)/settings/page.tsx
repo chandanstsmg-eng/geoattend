@@ -175,7 +175,8 @@ export default function SettingsPage() {
                 <Integration state={d.integrations.webPush ? 'on' : 'off'} label="Browser push" />
                 <Integration state={d.integrations.email ? 'on' : 'off'} label="E-mail alerts" />
                 <Integration state={d.integrations.expoPush ? 'on' : 'off'} label="Employee device push" />
-                <Integration state={d.integrations.storageDriver === 's3' ? 'on' : 'warn'} label={d.integrations.storageDriver === 's3' ? 'Photo storage: private bucket' : 'Photo storage: this server’s disk'} />
+                <Integration state={d.integrations.photoAutoDelete ? 'on' : 'off'} label={d.integrations.photoAutoDelete ? 'Automatic photo deletion available' : 'Automatic photo deletion on hold'} />
+                  <Integration state={d.integrations.storageDriver === 's3' ? 'on' : 'warn'} label={d.integrations.storageDriver === 's3' ? 'Photo storage: private bucket' : 'Photo storage: this server’s disk'} />
                 {d.integrations.demoMode && <Integration state="unsafe" label="Demo mode on — not for production" />}
               </ul>
             </Card>
@@ -317,7 +318,7 @@ export default function SettingsPage() {
                       </label>
                       <label className="flex items-center gap-2 text-sm text-gray-700">
                         <input type="checkbox" checked={v.keepMatchedPhotos} onChange={(e) => setV({ ...v, keepMatchedPhotos: e.target.checked })} />
-                        Keep check-in selfies after the face check matches (deleted when the photo retention period ends)
+                        Keep check-in selfies after the face check matches. Photos are not removed while automatic photo deletion is on hold.
                       </label>
                       <p className="text-xs text-gray-500">
                         Worked hours stop at the scheduled end of each shift. Staying longer is overtime: the employee starts it in the app with a selfie when the shift ends, and it counts toward hours and pay only once approved on the{' '}
@@ -380,14 +381,18 @@ export default function SettingsPage() {
                       <Field label="Raw location history (days)"><Input type="number" min={1} value={v.locationDays} onChange={(e) => setV({ ...v, locationDays: Number(e.target.value) })} /></Field>
                       <Field label="Attendance photos (days)"><Input type="number" min={1} value={v.photoDays} onChange={(e) => setV({ ...v, photoDays: Number(e.target.value) })} /></Field>
                       <Field label="Notifications (days)"><Input type="number" min={7} value={v.notificationDays} onChange={(e) => setV({ ...v, notificationDays: Number(e.target.value) })} /></Field>
+                      <label className="flex items-start gap-2 text-sm text-gray-700 sm:col-span-3">
+                        <input type="checkbox" className="mt-0.5" checked={v.photoAutoDelete} disabled={!d.integrations.photoAutoDelete} onChange={(e) => setV({ ...v, photoAutoDelete: e.target.checked })} />
+                        <span>Delete attendance photos automatically after this period.{!d.integrations.photoAutoDelete && ' On hold until the retention rules have been legally reviewed: no photo is deleted automatically.'}</span>
+                      </label>
                     </div>
                   )}
                 </SectionForm>
                 <div className="mt-4 flex items-center gap-2 border-t border-gray-100 pt-4">
-                  <ConfirmButton title="Run retention now?" description="Location history and photos older than the periods above are permanently deleted. This cannot be undone." confirmLabel="Delete expired data" danger onConfirm={() => retention.mutate()} loading={retention.isPending}>Run retention now</ConfirmButton>
+                  <ConfirmButton title="Run retention now?" description={`Location history older than the period above is permanently deleted${d.settings.retention.photoAutoDelete && d.integrations.photoAutoDelete ? ', and so are photos past theirs' : '. Photos stay: automatic deletion is off'}. This cannot be undone.`} confirmLabel="Delete expired data" danger onConfirm={() => retention.mutate()} loading={retention.isPending}>Run retention now</ConfirmButton>
                   {retention.data && (
                     <span className="text-xs text-gray-600">
-                      Deleted {(retention.data as any).locationUpdatesDeleted} location records, {(retention.data as any).photosDeleted} photos, {(retention.data as any).notificationsDeleted} notifications.
+                      Deleted {(retention.data as any).locationUpdatesDeleted} location records, {(retention.data as any).photosDeleted} photos, {(retention.data as any).notificationsDeleted} notifications.{(retention.data as any).photosHeld > 0 && ` ${(retention.data as any).photosHeld} photos past their date were kept.`}
                     </span>
                   )}
                   <InlineError error={retention.error} />

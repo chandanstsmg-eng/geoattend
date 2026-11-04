@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { assertApprovedDevice } from '../devices/devices.routes.js';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { OPEN_STATES } from '@geoattend/shared';
@@ -60,7 +61,8 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     access: 'employee',
     body: z.object({ shiftId: z.uuid(), deviceId: z.string().min(8).max(128).optional() }),
     handler: async ({ user, body, res }) => {
-      const s = await startSession(user.id, body.shiftId, body.deviceId ?? null, 'EMPLOYEE');
+      await assertApprovedDevice(user);
+      const s = await startSession(user.id, body.shiftId, user.deviceId ?? body.deviceId ?? null, 'EMPLOYEE');
       res.status(201);
       return sessionStatus(s.id);
     },
@@ -329,7 +331,8 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     access: 'admin',
     params: idParams,
     scope: 'session',
-    handler: async ({ params }) => ({
+    handler: async ({ params, user, req }) => ({
+      viewed: await audit({ actor: user, action: 'location.view', resourceType: 'session', resourceId: params.id, req }),
       transitions: await q('SELECT * FROM session_state_transitions WHERE session_id = $1 ORDER BY at, id', [params.id]),
       geofenceEvents: await q('SELECT * FROM geofence_events WHERE session_id = $1 ORDER BY event_time, id', [params.id]),
       absences: await q('SELECT * FROM absence_intervals WHERE session_id = $1 ORDER BY started_at', [params.id]),

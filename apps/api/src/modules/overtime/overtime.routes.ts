@@ -15,7 +15,7 @@ import { getPool, one, q, tx } from '../../db/pool.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
-import { siteFilter } from '../../lib/tenancy.js';
+import { overtimeCounts, siteFilter } from '../../lib/tenancy.js';
 import { createDownloadUrl } from '../../lib/storage.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
@@ -103,6 +103,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
            AND ($3::date IS NULL OR o.shift_date >= $3) AND ($4::date IS NULL OR o.shift_date <= $4)
            AND ($5::text IS NULL OR ($5 = 'RUNNING' AND o.ended_at IS NULL) OR (o.ended_at IS NOT NULL AND o.status = $5))
            AND ($6::uuid IS NULL OR o.workplace_id = $6) AND ($7::uuid IS NULL OR o.employee_id = $7) AND ($8 OR NOT o.is_simulated)
+           AND (o.status <> 'PENDING' OR ${overtimeCounts()})
          ORDER BY o.started_at DESC LIMIT 1000`,
         [user.orgId, user.sites, query.from ?? null, query.to ?? null, query.status ?? null, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true'],
       ),
@@ -116,7 +117,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
     handler: async ({ query, user }) => {
       const date = query.date ?? (await defaultDate(user.orgId, query.workplaceId));
       const params = [user.orgId, user.sites, date, query.workplaceId ?? null];
-      const where = `u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')} AND ($4::uuid IS NULL OR o.workplace_id = $4)`;
+      const where = `u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')} AND ($4::uuid IS NULL OR o.workplace_id = $4) AND ${overtimeCounts()}`;
       const totals = await one(
         `SELECT count(*) FILTER (WHERE o.ended_at IS NULL)::int AS running,
                 count(DISTINCT o.employee_id) FILTER (WHERE o.shift_date = $3)::int AS workers,
@@ -160,6 +161,9 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
         if (!before) throw notFound('Overtime');
         await assertPayrollMonthOpen(user.orgId, before.shift_date, db);
         if (!before.ended_at) throw conflict('OVERTIME_RUNNING', 'This overtime is still running. It can be approved once the employee ends it.');
+        if (body.decision === 'APPROVE' && !(await one(`SELECT ${overtimeCounts()} AS counts FROM overtime_entries o WHERE o.id = $1`, [params.id], db)).counts) {
+          throw conflict('ATTENDANCE_VOIDED', "This shift's attendance was voided, so its overtime cannot be approved.");
+        }
         const minutes = body.decision === 'APPROVE' ? (body.minutes ?? before.claimed_minutes) : null;
         if (minutes != null && minutes > before.claimed_minutes) {
           throw badRequest('MINUTES_TOO_HIGH', `At most ${fmtMinutes(before.claimed_minutes)} can be approved — the time recorded between the overtime photos.`);
@@ -204,7 +208,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
           `UPDATE overtime_entries o SET status = 'APPROVED', approved_minutes = ${CLAIMED}, decided_by = $3, decided_at = now(), decision_note = NULL
            FROM users u
            WHERE u.id = o.employee_id AND o.id = ANY($1::uuid[]) AND u.org_id = $2 AND ${siteFilter('o.workplace_id', '$4')}
-             AND o.status = 'PENDING' AND o.ended_at IS NOT NULL
+             AND o.status = 'PENDING' AND o.ended_at IS NOT NULL AND ${overtimeCounts()}
            RETURNING o.*, o.approved_minutes AS claimed_minutes`,
           [body.ids, user.orgId, user.id, user.sites],
           db,
@@ -250,18 +254,19 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
       const month = query.month ?? DateTime.now().toFormat('yyyy-MM');
       const rows = await q(
         `SELECT o.id, o.shift_date, o.note, o.started_at, o.ended_at, CASE WHEN o.ended_at IS NULL THEN 'RUNNING' ELSE o.status END AS status,
-                o.approved_minutes, o.decision_note, o.decided_at, ${CLAIMED} AS claimed_minutes, sh.name AS shift_name, w.name AS workplace_name
+                o.approved_minutes, o.decision_note, o.decided_at, ${CLAIMED} AS claimed_minutes, sh.name AS shift_name, w.name AS workplace_name, ${overtimeCounts()} AS counts
          FROM overtime_entries o JOIN tracking_sessions s ON s.id = o.session_id JOIN shifts sh ON sh.id = s.shift_id JOIN workplaces w ON w.id = o.workplace_id
          WHERE o.employee_id = $1 AND to_char(o.shift_date, 'YYYY-MM') = $2
          ORDER BY o.started_at DESC`,
         [user.id, month],
       );
+      const counted = rows.filter((r) => r.counts);
       return {
         month,
         totals: {
-          claimedMinutes: rows.reduce((n, r) => n + r.claimed_minutes, 0),
-          approvedMinutes: rows.reduce((n, r) => n + (r.status === 'APPROVED' ? r.approved_minutes : 0), 0),
-          pending: rows.filter((r) => r.status === 'PENDING' || r.status === 'RUNNING').length,
+          claimedMinutes: counted.reduce((n, r) => n + r.claimed_minutes, 0),
+          approvedMinutes: counted.reduce((n, r) => n + (r.status === 'APPROVED' ? r.approved_minutes : 0), 0),
+          pending: counted.filter((r) => r.status === 'PENDING' || r.status === 'RUNNING').length,
         },
         rows,
       };

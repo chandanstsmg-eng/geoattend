@@ -36,11 +36,10 @@ import { tasksRouter } from './modules/tasks/tasks.routes.js';
 import { broadcastsRouter, sosRouter } from './modules/sos/sos.routes.js';
 import { overtimeRouter } from './modules/overtime/overtime.routes.js';
 import { analyticsRouter } from './modules/reports/analytics.routes.js';
-import { clientCount } from './modules/notifications/live-hub.js';
 
 export function createApp() {
   const app = express();
-  app.set('trust proxy', config.trustProxy === 'true' ? true : config.trustProxy);
+  app.set('trust proxy', config.trustProxy);
   app.disable('x-powered-by');
 
   app.use(
@@ -88,7 +87,11 @@ export function createApp() {
   }
 
   app.use(cookieParser());
-  app.use('/api/v1/storage', storageRouter); // raw image bodies — must precede the JSON parser
+  app.use(
+    '/api/v1/storage',
+    rateLimit({ windowMs: 60_000, limit: config.isTest ? 100_000 : 600, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } } }),
+    storageRouter, // raw image bodies — must precede the JSON parser
+  );
   app.use(express.json({ limit: '512kb' }));
 
   app.use(
@@ -99,7 +102,7 @@ export function createApp() {
   app.get('/health', async (_req, res) => {
     try {
       await getPool().query('SELECT 1');
-      res.json({ status: 'ok', database: 'ok', liveClients: clientCount(), demoMode: config.demoMode, time: new Date() });
+      res.json({ status: 'ok', database: 'ok' });
     } catch {
       res.status(503).json({ status: 'degraded', database: 'unreachable' });
     }
@@ -136,17 +139,20 @@ export function createApp() {
   app.use('/api/v1/analytics', analyticsRouter);
   if (config.demoMode) app.use('/api/v1/demo', demoRouter);
 
-  const openapi = buildOpenApi();
-  app.get('/api/v1/openapi.json', (_req, res) => res.json(openapi));
-  app.use('/api/docs/assets', express.static(swaggerUi.getAbsoluteFSPath(), { index: false }));
-  app.get('/api/docs', (_req, res) => {
-    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>GeoAttend API</title>
+  // The API map is for development; production does not publish it.
+  if (!config.isProduction) {
+    const openapi = buildOpenApi();
+    app.get('/api/v1/openapi.json', (_req, res) => res.json(openapi));
+    app.use('/api/docs/assets', express.static(swaggerUi.getAbsoluteFSPath(), { index: false }));
+    app.get('/api/docs', (_req, res) => {
+      res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>GeoAttend API</title>
 <link rel="stylesheet" href="/api/docs/assets/swagger-ui.css"></head><body><div id="swagger-ui"></div>
 <script src="/api/docs/assets/swagger-ui-bundle.js"></script><script src="/api/docs/init.js"></script></body></html>`);
-  });
-  app.get('/api/docs/init.js', (_req, res) => {
-    res.type('application/javascript').send(`window.ui = SwaggerUIBundle({ url: '/api/v1/openapi.json', dom_id: '#swagger-ui' });`);
-  });
+    });
+    app.get('/api/docs/init.js', (_req, res) => {
+      res.type('application/javascript').send(`window.ui = SwaggerUIBundle({ url: '/api/v1/openapi.json', dom_id: '#swagger-ui' });`);
+    });
+  }
 
   app.use('/api', (_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No such endpoint' } }));
 
@@ -162,6 +168,7 @@ export function createApp() {
       logger.error({ url: req.url?.split('?')[0] }, 'database unavailable');
       return res.status(503).json({ error: { code: 'DATABASE_UNAVAILABLE', message: 'The database is temporarily unavailable. Please try again in a few seconds.' } });
     }
+    if (err?.code === '23503') return res.status(409).json({ error: { code: 'IN_USE', message: 'This record is referenced by other records.' } });
     if (err?.code === '23505') return res.status(409).json({ error: { code: 'CONFLICT', message: 'A record with these values already exists.' } });
     if (err?.code === '23514' || err?.code === '22P02' || err?.code === '22007' || err?.code === '22008') {
       return res.status(400).json({ error: { code: 'INVALID_VALUE', message: 'A value is out of the permitted range or format.' } });

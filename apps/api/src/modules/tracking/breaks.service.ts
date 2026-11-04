@@ -18,6 +18,7 @@ import { classifyReading, distanceMeters } from '@geoattend/shared';
 import { one, q, tx } from '../../db/pool.js';
 import { HttpError, badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { createUploadUrl, inspectObject, newObjectKey, type PhotoType } from '../../lib/storage.js';
+import { confirmUpload } from '../attendance/photo-upload.js';
 import { config } from '../../config.js';
 import { getSettings } from '../settings/settings.service.js';
 import { notify } from '../notifications/notify.js';
@@ -77,7 +78,7 @@ export async function startBreak(employeeId: string, sessionId: string, input: S
     if (input.photoId) {
       photo = await one('SELECT * FROM attendance_photos WHERE id = $1 FOR UPDATE', [input.photoId], db);
       if (!photo || photo.session_id !== s.id || photo.employee_id !== employeeId || photo.purpose !== 'BREAK') throw notFound('Photo');
-      if (photo.status !== 'UPLOADED') throw new HttpError(422, 'PHOTO_MISSING', 'The photo was not uploaded. Please retry.');
+      if (!(await confirmUpload('attendance_photos', photo, db))) throw new HttpError(422, 'PHOTO_MISSING', 'The photo was not uploaded. Please retry.');
       const obj = await inspectObject(photo.object_key);
       if (!obj || obj.type !== photo.content_type || obj.sizeBytes === 0) throw new HttpError(422, 'PHOTO_INVALID', 'The photo could not be read. Please take it again.');
       photo.obj = obj;

@@ -363,7 +363,7 @@ export interface PrivacyNotice {
   controller: string;
   contact: string;
   text: string;
-  retention: { locationDays: number; photoDays: number };
+  retention: { locationDays: number; photoDays: number; photoAutoDelete?: boolean };
   tracking: { updateIntervalSec: number; earlyStartMinutes: number; endGraceMinutes: number };
   acknowledged: boolean;
 }

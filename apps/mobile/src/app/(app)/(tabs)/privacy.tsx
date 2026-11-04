@@ -47,7 +47,7 @@ export default function PrivacyScreen() {
         <Row label="Data controller" value={n.controller} />
         <Row label="Contact" value={n.contact} />
         <Row label="Location history kept for" value={`${n.retention.locationDays} days`} strong />
-        <Row label="Attendance photos kept for" value={`${n.retention.photoDays} days`} strong />
+        <Row label="Attendance photos kept for" value={n.retention.photoAutoDelete ? `${n.retention.photoDays} days` : `At least ${n.retention.photoDays} days, not deleted automatically yet`} strong />
         <Row label="Update interval while tracking" value={`about every ${n.tracking.updateIntervalSec} s`} />
         <Row label="Earliest start before shift" value={`${n.tracking.earlyStartMinutes} min`} />
         <Row label="Tracking stops after shift end" value={`within ${n.tracking.endGraceMinutes} min`} />

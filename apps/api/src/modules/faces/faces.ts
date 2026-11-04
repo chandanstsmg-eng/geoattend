@@ -15,15 +15,14 @@
  * the score, which is why a person decides.
  */
 import crypto from 'node:crypto';
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getPool, one, q } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
-import { deleteObject, readLocalObject } from '../../lib/storage.js';
+import { deleteObject, readObject } from '../../lib/storage.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
 import { bestMatch, faceEngine } from './engine.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, photoDeletionAllowed } from '../settings/settings.service.js';
 
 export const CHALLENGES = [
   { en: 'Hold up two fingers', hi: 'दो उंगलियाँ दिखाएँ' },
@@ -43,10 +42,7 @@ export function challengeFor(sessionId: string) {
 }
 
 export async function readPhoto(key: string): Promise<Buffer> {
-  if (config.storage.driver === 'local') return readLocalObject(key);
-  const s3 = new S3Client({ region: config.storage.s3Region, endpoint: config.storage.s3Endpoint || undefined, forcePathStyle: config.storage.s3ForcePathStyle });
-  const out = await s3.send(new GetObjectCommand({ Bucket: config.storage.s3Bucket, Key: key }));
-  return Buffer.from(await out.Body!.transformToByteArray());
+  return readObject(key);
 }
 
 /** Deletes a checked photo's file and marks the row, keeping the record of what happened. */
@@ -102,7 +98,8 @@ export async function sweepFaceChecks(limit = 10) {
         if (result.status === 'MATCH') {
           // Verified. The photo stays as evidence until the retention period ends, unless the
           // company chose to keep only the result and the score.
-          if (!(await getSettings(r.org_id)).workforce.keepMatchedPhotos) await discardPhoto(photoId, key, 'face matched — photo not kept');
+          const settings = await getSettings(r.org_id);
+          if (!settings.workforce.keepMatchedPhotos && photoDeletionAllowed(settings)) await discardPhoto(photoId, key, 'face matched — photo not kept');
         } else if (result.status === 'MISMATCH' || result.status === 'NO_FACE') {
           await q(
             `UPDATE attendance_records SET face_review = 'PENDING', risk_flags = CASE WHEN $2 = ANY(risk_flags) THEN risk_flags ELSE array_append(risk_flags, $2) END

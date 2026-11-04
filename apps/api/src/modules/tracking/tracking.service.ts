@@ -12,10 +12,11 @@ import { distanceMeters, isValidLatLng, OPEN_STATES, STATE_LABELS, TRACKING_STAT
 import { one, q, tx, type Queryable } from '../../db/pool.js';
 import { HttpError, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { currentInstance, nextInstance, type DateRange } from '../../lib/shift-window.js';
-import { getSettings, hasAcknowledgedNotice, orgOfUser, type Settings } from '../settings/settings.service.js';
+import { getSettings, photoDeletionAllowed, hasAcknowledgedNotice, orgOfUser, type Settings } from '../settings/settings.service.js';
 import { challengeFor } from '../faces/faces.js';
 import { config } from '../../config.js';
 import { createUploadUrl, deleteObject, inspectObject, newObjectKey } from '../../lib/storage.js';
+import { confirmUpload } from '../attendance/photo-upload.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
 import { evaluate, type EngineEffect, type EngineRules } from './engine.js';
@@ -701,7 +702,7 @@ export async function endSession(sessionId: string, actorUser: { id: string; rol
 async function attachEndPhoto(db: pg.PoolClient, s: any, photoId: string) {
   const p = await one(`SELECT * FROM attendance_photos WHERE id = $1 FOR UPDATE`, [photoId], db);
   if (!p || p.session_id !== s.id || p.employee_id !== s.employee_id || p.purpose !== 'SHIFT_END') throw notFound('Photo');
-  if (p.status !== 'UPLOADED') throw new HttpError(422, 'PHOTO_MISSING', 'The end-of-shift photo was not uploaded. Take it again.');
+  if (!(await confirmUpload('attendance_photos', p, db))) throw new HttpError(422, 'PHOTO_MISSING', 'The end-of-shift photo was not uploaded. Take it again.');
   const obj = await inspectObject(p.object_key);
   if (!obj || obj.type !== p.content_type) throw new HttpError(422, 'PHOTO_INVALID', 'The end-of-shift photo could not be read. Take it again.');
   const settings = await getSettings(s.org_id, db);
@@ -719,7 +720,7 @@ async function attachEndPhoto(db: pg.PoolClient, s: any, photoId: string) {
       [p.id, obj.sizeBytes, obj.sha256, settings.retention.photoDays],
       db,
     );
-  } else {
+  } else if (photoDeletionAllowed(settings)) {
     await deleteObject(p.object_key);
     await q(`UPDATE attendance_photos SET status = 'DELETED', deleted_at = now(), deleted_reason = 'no attendance to verify' WHERE id = $1`, [p.id], db);
   }

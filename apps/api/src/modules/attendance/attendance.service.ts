@@ -18,7 +18,7 @@
 import type pg from 'pg';
 import { classifyReading, distanceMeters } from '@geoattend/shared';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
-import { HttpError, conflict, forbidden, notFound } from '../../lib/errors.js';
+import { HttpError, badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { createUploadUrl, inspectObject, newObjectKey, type PhotoType } from '../../lib/storage.js';
 import { config } from '../../config.js';
 import { audit } from '../../lib/audit.js';
@@ -345,11 +345,16 @@ export async function reportIssue(employeeId: string, input: { sessionId?: strin
     }
     let attendance: any = null;
     if (input.attendanceId) {
-      attendance = await one('SELECT * FROM attendance_records WHERE id = $1', [input.attendanceId], db);
+      attendance = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [input.attendanceId], db);
       if (!attendance || attendance.employee_id !== employeeId) throw forbidden();
     }
     if (input.kind === 'DISPUTE' && !attendance) throw new HttpError(400, 'ATTENDANCE_REQUIRED', 'A dispute must reference an attendance record.');
-    const emp = await one('SELECT full_name, is_demo FROM users WHERE id = $1', [employeeId], db);
+    if (input.kind === 'DISPUTE') {
+      // A voided record is final: a dispute must not lift it back into reports.
+      if (attendance.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'This attendance record was voided and cannot be disputed. Speak to your administrator.');
+      if (await one(`SELECT 1 FROM review_requests WHERE attendance_id = $1 AND kind = 'DISPUTE' AND status = 'OPEN'`, [attendance.id], db)) throw conflict('DISPUTE_OPEN', 'A dispute for this record is already open.');
+    }
+    const emp = await one('SELECT full_name, is_demo, org_id FROM users WHERE id = $1', [employeeId], db);
     const row = await one(
       `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, requested_by, before_data, is_simulated)
        VALUES ($1,$2,$3,$4,$5,$2,$6,$7) RETURNING *`,
@@ -358,6 +363,7 @@ export async function reportIssue(employeeId: string, input: { sessionId?: strin
     );
     if (attendance && input.kind === 'DISPUTE') {
       await q(`UPDATE attendance_records SET verification_status = 'DISPUTED', updated_at = now() WHERE id = $1`, [attendance.id], db);
+      await audit({ actor: { id: employeeId, role: 'EMPLOYEE', orgId: emp.org_id }, action: 'attendance.dispute', resourceType: 'attendance_record', resourceId: attendance.id, before: { status: attendance.verification_status }, after: { status: 'DISPUTED' }, reason: input.reason }, db);
     }
     await notify(db, outbox, {
       type: input.kind === 'DISPUTE' ? 'MANUAL_REVIEW_REQUESTED' : 'TECHNICAL_ISSUE_REPORTED',
@@ -382,6 +388,7 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
     const r = await one('SELECT * FROM review_requests WHERE id = $1 FOR UPDATE', [reviewId], db);
     if (!r) throw notFound('Review request');
     if (r.status !== 'OPEN') throw conflict('REVIEW_CLOSED', 'This request has already been resolved.');
+    if (r.kind === 'ADMIN_CORRECTION') return decideCorrection(db, outbox, admin, r, decision, note, req);
     let attendanceId: string | null = r.attendance_id;
     let arrivalAt: Date | null = null;
 
@@ -418,7 +425,7 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
     } else if (r.kind === 'DISPUTE' && r.attendance_id) {
       // Rejecting a dispute restores the previous status; approving requires a correction (separate call).
       const prevStatus = r.before_data?.verification_status ?? 'VERIFIED';
-      if (decision !== 'APPROVE') await q(`UPDATE attendance_records SET verification_status = $2, updated_at = now() WHERE id = $1`, [r.attendance_id, prevStatus], db);
+      if (decision !== 'APPROVE') await q(`UPDATE attendance_records SET verification_status = $2, updated_at = now() WHERE id = $1 AND verification_status = 'DISPUTED'`, [r.attendance_id, prevStatus], db);
     }
 
     const status = decision === 'APPROVE' ? 'APPROVED' : decision === 'REJECT' ? 'REJECTED' : 'ACKNOWLEDGED';
@@ -438,49 +445,114 @@ export interface CorrectionInput {
   lateByMinutes?: number;
 }
 
-/** Admin correction: mandatory reason, before/after captured in review history and the audit log. */
-export async function correctAttendance(admin: AuthUser, attendanceId: string, c: CorrectionInput, req?: any) {
-  const outbox = new Outbox();
-  const updated = await tx(async (db) => {
-    const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
-    if (!before) throw notFound('Attendance record');
-    await assertPayrollMonthOpen(admin.orgId, before.shift_date, db);
-    // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
-    let isLate = c.isLate ?? null;
-    let lateBy = c.lateByMinutes ?? null;
-    if (c.recordedAt && isLate === null && lateBy === null) {
-      const session = before.session_id ? await one('SELECT scheduled_start_at FROM tracking_sessions WHERE id = $1', [before.session_id], db) : null;
-      const shift = await shiftStartOn(db, before.shift_id, before.shift_date);
-      const l = lateness(new Date(c.recordedAt), session ? new Date(session.scheduled_start_at) : shift.at, shift.grace);
-      isLate = l.isLate;
-      lateBy = l.lateBy;
-    }
-    const after = await one(
-      `UPDATE attendance_records SET
-         verification_status = COALESCE($2, CASE WHEN verification_status = 'VERIFIED' THEN 'CORRECTED' ELSE verification_status END),
-         original_recorded_at = CASE WHEN $3::timestamptz IS NOT NULL THEN COALESCE(original_recorded_at, recorded_at) ELSE original_recorded_at END,
-         recorded_at = COALESCE($3::timestamptz, recorded_at),
-         is_late = COALESCE($4, is_late),
-         late_by_minutes = COALESCE($5, late_by_minutes),
-         updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [attendanceId, c.verificationStatus ?? null, c.recordedAt ?? null, isLate, lateBy],
+/**
+ * Applies a correction. The whole record before and after is kept in review history and the audit log.
+ * `pending` is the supervisor's request being approved; without it the approver is also the requester.
+ */
+async function applyCorrection(db: Queryable, outbox: Outbox, approver: AuthUser, attendanceId: string, c: CorrectionInput, req?: any, pending?: { id: string; requestedBy: string; note: string }) {
+  const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
+  if (!before) throw notFound('Attendance record');
+  if (before.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'A voided record cannot be changed. Its history stays in the audit log.');
+  await assertPayrollMonthOpen(approver.orgId, before.shift_date, db);
+  // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
+  let isLate = c.isLate ?? null;
+  let lateBy = c.lateByMinutes ?? null;
+  if (c.recordedAt && isLate === null && lateBy === null) {
+    const session = before.session_id ? await one('SELECT scheduled_start_at FROM tracking_sessions WHERE id = $1', [before.session_id], db) : null;
+    const shift = await shiftStartOn(db, before.shift_id, before.shift_date);
+    const l = lateness(new Date(c.recordedAt), session ? new Date(session.scheduled_start_at) : shift.at, shift.grace);
+    isLate = l.isLate;
+    lateBy = l.lateBy;
+  }
+  const after = await one(
+    `UPDATE attendance_records SET
+       verification_status = COALESCE($2, CASE WHEN verification_status = 'VERIFIED' THEN 'CORRECTED' ELSE verification_status END),
+       original_recorded_at = CASE WHEN $3::timestamptz IS NOT NULL THEN COALESCE(original_recorded_at, recorded_at) ELSE original_recorded_at END,
+       recorded_at = COALESCE($3::timestamptz, recorded_at),
+       is_late = COALESCE($4, is_late),
+       late_by_minutes = COALESCE($5, late_by_minutes),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [attendanceId, c.verificationStatus ?? null, c.recordedAt ?? null, isLate, lateBy],
+    db,
+  );
+  if (pending) {
+    await q(
+      `UPDATE review_requests SET status = 'APPLIED', before_data = $2, after_data = $3, resolved_by = $4, resolved_at = now(), resolution_note = $5 WHERE id = $1`,
+      [pending.id, JSON.stringify(before), JSON.stringify({ ...after, proposed: c }), approver.id, pending.note],
       db,
     );
+  } else {
     await q(
       `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, status, before_data, after_data, requested_by, resolved_by, resolved_at, is_simulated)
        VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, 'APPLIED', $5, $6, $7, $7, now(), $8)`,
-      [before.employee_id, before.session_id, attendanceId, c.reason, JSON.stringify(before), JSON.stringify(after), admin.id, before.is_simulated],
+      [before.employee_id, before.session_id, attendanceId, c.reason, JSON.stringify(before), JSON.stringify(after), approver.id, before.is_simulated],
       db,
     );
-    // A corrected dispute is resolved by the correction.
-    await q(`UPDATE review_requests SET status = 'APPROVED', resolved_by = $2, resolved_at = now(), resolution_note = $3 WHERE attendance_id = $1 AND kind = 'DISPUTE' AND status = 'OPEN'`, [attendanceId, admin.id, `Corrected: ${c.reason}`], db);
-    await audit({ actor: admin, action: 'attendance.correct', resourceType: 'attendance_record', resourceId: attendanceId, before, after, reason: c.reason, req }, db);
-    outbox.push({ type: 'attendance.recorded', attendanceId, employeeId: before.employee_id });
-    return after;
-  });
+  }
+  // A corrected dispute is resolved by the correction.
+  await q(`UPDATE review_requests SET status = 'APPROVED', resolved_by = $2, resolved_at = now(), resolution_note = $3 WHERE attendance_id = $1 AND kind = 'DISPUTE' AND status = 'OPEN'`, [attendanceId, approver.id, `Corrected: ${c.reason}`], db);
+  await audit({ actor: approver, action: 'attendance.correct', resourceType: 'attendance_record', resourceId: attendanceId, before, after: { ...after, requestedBy: pending?.requestedBy ?? approver.id, approvedBy: approver.id }, reason: c.reason, req }, db);
+  outbox.push({ type: 'attendance.recorded', attendanceId, employeeId: before.employee_id });
+  return after;
+}
+
+/** A correction that applies at once: by an owner, or as the outcome of a decided face review. */
+export async function correctAttendance(admin: AuthUser, attendanceId: string, c: CorrectionInput, req?: any) {
+  const outbox = new Outbox();
+  const updated = await tx((db) => applyCorrection(db, outbox, admin, attendanceId, c, req));
   outbox.flush();
   return updated;
+}
+
+/** A supervisor's correction: nothing on the record changes until an owner approves it. */
+export async function requestCorrection(supervisor: AuthUser, attendanceId: string, c: CorrectionInput, req?: any) {
+  const { reason, ...change } = c;
+  if (!Object.values(change).some((v) => v !== undefined)) throw badRequest('NOTHING_TO_CORRECT', 'Say what should change on this record.');
+  const outbox = new Outbox();
+  const review = await tx(async (db) => {
+    const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
+    if (!before) throw notFound('Attendance record');
+    if (before.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'A voided record cannot be changed. Its history stays in the audit log.');
+    await assertPayrollMonthOpen(supervisor.orgId, before.shift_date, db);
+    if (await one(`SELECT 1 FROM review_requests WHERE attendance_id = $1 AND kind = 'ADMIN_CORRECTION' AND status = 'OPEN'`, [attendanceId], db)) {
+      throw conflict('CORRECTION_OPEN', 'A correction for this record is already waiting for an owner.');
+    }
+    const row = await one(
+      `INSERT INTO review_requests (kind, employee_id, session_id, attendance_id, reason, before_data, after_data, requested_by, is_simulated)
+       VALUES ('ADMIN_CORRECTION', $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [before.employee_id, before.session_id, attendanceId, reason, JSON.stringify(before), JSON.stringify(c), supervisor.id, before.is_simulated],
+      db,
+    );
+    await audit({ actor: supervisor, action: 'attendance.correction_request', resourceType: 'attendance_record', resourceId: attendanceId, before, after: change, reason, req }, db);
+    await notify(db, outbox, {
+      type: 'MANUAL_REVIEW_REQUESTED',
+      severity: 'WARNING',
+      body: `${supervisor.fullName} proposed an attendance correction, waiting for an owner: "${reason.slice(0, 200)}"`,
+      employeeId: before.employee_id,
+      workplaceId: before.workplace_id,
+      data: { reviewId: row.id, kind: 'ADMIN_CORRECTION' },
+      dedupeKey: `correction:${row.id}`,
+      simulated: before.is_simulated,
+    });
+    return row;
+  });
+  outbox.flush();
+  return { pending: true, review };
+}
+
+/** An owner's decision on a supervisor's correction. Rejecting leaves the record as it was. */
+async function decideCorrection(db: Queryable, outbox: Outbox, admin: AuthUser, r: any, decision: 'APPROVE' | 'REJECT' | 'ACKNOWLEDGE', note: string, req?: any) {
+  if (admin.access !== 'OWNER') throw new HttpError(403, 'OWNER_ONLY', 'Only the company owner can do this.');
+  if (r.requested_by === admin.id) throw new HttpError(403, 'OWN_REQUEST', 'A correction must be decided by someone other than the person who asked for it.');
+  if (decision === 'ACKNOWLEDGE') throw new HttpError(400, 'BAD_DECISION', 'Approve or reject a correction.');
+  if (decision === 'APPROVE') {
+    await applyCorrection(db, outbox, admin, r.attendance_id, r.after_data, req, { id: r.id, requestedBy: r.requested_by, note });
+    return { status: 'APPLIED', attendanceId: r.attendance_id };
+  }
+  await q(`UPDATE review_requests SET status = 'REJECTED', resolved_by = $2, resolved_at = now(), resolution_note = $3 WHERE id = $1`, [r.id, admin.id, note], db);
+  await audit({ actor: admin, action: 'review.reject', resourceType: 'review_request', resourceId: r.id, before: { status: r.status }, after: { status: 'REJECTED', attendanceId: r.attendance_id, requestedBy: r.requested_by }, reason: note, req }, db);
+  return { status: 'REJECTED', attendanceId: r.attendance_id };
 }
 
 /** Admin-entered attendance when no device evidence exists (e.g. broken phone). Always MANUAL_APPROVED and audited. */

@@ -10,11 +10,11 @@ GeoAttend processes employee location and photographs — sensitive personal dat
 | Visible tracking | Employee starts the shift explicitly; Android persistent foreground-service notification; in-app tracking indicator; iOS location indicator. |
 | Scope limited to shifts | Sessions can only start inside the shift window (configurable early start), are closed by the server at shift end + grace, and every upload outside an open session is rejected. The app stops collecting when told `shouldTrack=false`. **Exception — overtime:** after the scheduled end the employee may tap "Start overtime" (selfie + location); the session then stays open, wherever they work, until they tap "End overtime", an administrator ends it, the next shift starts, or no location arrives for an hour. The notice (version 2) says so. |
 | No covert collection | No hidden camera use, no background camera, no silent biometric identification, no location outside a session, no attempt to bypass OS permission controls. Denied permissions are reported honestly; the app offers manual review instead of collecting anyway. |
-| Data minimisation | Location stored with accuracy and time only during sessions; one attendance photo per shift; raw history and photos deleted automatically after configurable retention (default 90 / 180 days). |
+| Data minimisation | Location stored with accuracy and time only during sessions; one attendance photo per shift; raw history deleted automatically, and photos only once automatic photo deletion is switched on, after configurable retention (default 90 / 180 days). |
 | Access control | Location history and photos are admin-only; employees see only their own data; every admin view of location history or a photo, every export, correction and setting change is written to the append-only audit log. |
 | Honest uncertainty | GPS is treated as an estimate: accuracy margins, stabilisation, hysteresis; uncertain readings decide nothing; device silence is "tracking interrupted", never "left"; mock-location flags are "risk indicators, not proof". |
 | Correction and dispute | Employees can dispute a record or report a technical issue from the app; admins correct records only with a mandatory reason, keeping before/after history. |
-| Deletion | Retention job (hourly, or *Run retention now*), per-photo deletion with reason, deactivated employees' data retained only as long as retention allows. |
+| Deletion | Retention job (hourly, or *Run retention now*), per-photo deletion by the company owner with reason, audited. Automatic photo deletion is on hold until the rules have legal review ([EXTERNAL-DEPENDENCIES.md](EXTERNAL-DEPENDENCIES.md)), deactivated employees' data retained only as long as retention allows. |
 
 ## Things an organisation must decide and document
 
@@ -27,7 +27,7 @@ GeoAttend processes employee location and photographs — sensitive personal dat
 
 ## Identity verification
 
-The attendance photo is evidence for human review only. GeoAttend performs **no** face matching. If identity matching is ever required, design it as a separate, explicitly disclosed, consent-based, legally reviewed feature with accuracy/bias evaluation, an opt-out alternative and its own retention rules.
+The attendance photo is evidence for human review. GeoAttend also compares it with the face the employee enrolled, where the company requires enrollment: a mismatch is a prompt for a person to check, never proof, and the result is kept with the record. Face data needs its own legal review.
 
 ## GPS spoofing
 

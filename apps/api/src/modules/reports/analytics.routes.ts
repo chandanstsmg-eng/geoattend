@@ -31,7 +31,7 @@ import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
 import { badRequest } from '../../lib/errors.js';
 import { isoDate, mount, route } from '../../lib/http.js';
-import { employeeSite, siteFilter, SUPERVISOR_SITES } from '../../lib/tenancy.js';
+import { employeeSite, overtimeCounts, siteFilter, SUPERVISOR_SITES } from '../../lib/tenancy.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { getSettings } from '../settings/settings.service.js';
 import { defaultDate, roster, withLeaveAndNoShow } from './reports.routes.js';
@@ -259,7 +259,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
             COALESCE(SUM(o.approved_minutes) FILTER (WHERE o.status = 'APPROVED'), 0)::int AS approved
      FROM overtime_entries o JOIN users u ON u.id = o.employee_id JOIN tracking_sessions s ON s.id = o.session_id
      WHERE u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated) AND ($6::uuid IS NULL OR o.employee_id = $6)
-       AND s.shift_date BETWEEN $7::date AND $8::date
+       AND s.shift_date BETWEEN $7::date AND $8::date AND ${overtimeCounts()}
      GROUP BY 1`,
     [...P, emp, from, to],
   );
@@ -343,7 +343,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   );
   const overtimePending = await one(
     `SELECT count(*)::int AS n FROM overtime_entries o JOIN users u ON u.id = o.employee_id
-     WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated)`,
+     WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated) AND ${overtimeCounts()}`,
     P,
   );
   const activity = await q(

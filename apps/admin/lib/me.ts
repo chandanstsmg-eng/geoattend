@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { get } from './api';
 
 export interface Me {
-  user: { id: string; fullName: string; email: string; isDemo: boolean };
+  user: { id: string; fullName: string; email: string; isDemo: boolean; mustChangePassword?: boolean };
   organization: { id: string; name: string } | null;
   access: { role: 'OWNER' | 'SUPERVISOR'; sites: string[] | null; awayUntil: string | null } | null;
   permissions: { publishAnnouncements: boolean } | null;

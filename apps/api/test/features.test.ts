@@ -178,7 +178,7 @@ describe('bulk employee import', () => {
 describe('one phone per employee', () => {
   const login = (email: string, deviceId: string) => request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD, client: 'mobile', deviceId, platform: 'android', model: 'Test phone' });
 
-  it('approves the first phone, holds a new one for approval, and blocks shared phones', async () => {
+  it('holds every new phone for approval and blocks shared phones', async () => {
     await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'ENFORCE' }, null);
     try {
       const a = await createEmployee({ workplaceId: base.workplaceId });
@@ -186,16 +186,18 @@ describe('one phone per employee', () => {
       const phoneA = `phone-a-${crypto.randomUUID()}`;
       const phoneB = `phone-b-${crypto.randomUUID()}`;
 
-      await login(a.email, phoneA).expect(200); // first phone: approved automatically
+      const { agent, csrf } = await adminAgent(app);
+      expect((await login(a.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_PENDING'); // even the first phone
+      const first = (await agent.get('/api/v1/approvals').expect(200)).body.devices.find((d: any) => d.user_id === a.id);
+      await agent.post(`/api/v1/devices/${first.id}/approve`).set('X-CSRF-Token', csrf).send({}).expect(200);
       await login(a.email, phoneA).expect(200);
       expect((await login(a.email, phoneB).expect(403)).body.error.code).toBe('DEVICE_PENDING');
-      expect(await q(`SELECT 1 FROM notifications WHERE type = 'NEW_DEVICE' AND employee_id = $1`, [a.id])).toHaveLength(1);
+      expect(await q(`SELECT 1 FROM notifications WHERE type = 'NEW_DEVICE' AND employee_id = $1`, [a.id])).toHaveLength(2);
 
       // B tries A's phone: refused and flagged.
       expect((await login(b.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_IN_USE');
       expect(await q(`SELECT 1 FROM notifications WHERE type = 'SHARED_DEVICE' AND employee_id = $1`, [b.id])).toHaveLength(1);
 
-      const { agent, csrf } = await adminAgent(app);
       const inbox = (await agent.get('/api/v1/approvals').expect(200)).body;
       const pending = inbox.devices.find((d: any) => d.user_id === a.id);
       expect(pending.current_phone.platform).toBe('android');
@@ -206,8 +208,8 @@ describe('one phone per employee', () => {
       await login(a.email, phoneB).expect(200);
       expect((await login(a.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_REVOKED');
 
-      // The old phone is now free for B (their first phone).
-      await login(b.email, phoneA).expect(200);
+      // The old phone is now free for B, once someone approves it for them.
+      expect((await login(b.email, phoneA).expect(403)).body.error.code).toBe('DEVICE_PENDING');
     } finally {
       await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'OFF' }, null);
     }
@@ -538,6 +540,56 @@ describe('face check', () => {
       const after = (await q('SELECT verification_status, face_review FROM attendance_records WHERE id = $1', [rec]))[0];
       expect(after).toEqual({ verification_status: 'VOIDED', face_review: 'REJECTED' });
       await agent.post(`/api/v1/faces/reviews/${rec}`).set('X-CSRF-Token', csrf).send({ decision: 'APPROVE' }).expect(409);
+    });
+  });
+
+  it('keeps a matched selfie during the deletion hold, even for a company that keeps only results', async () => {
+    await withFakeEngine(async () => {
+      const faces = await import('../src/modules/faces/faces.js');
+      const { writeLocalObject } = await import('../src/lib/storage.js');
+      const { config } = await import('../src/config.js');
+      const { invalidateSettings } = await import('../src/modules/settings/settings.service.js');
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      const emp = await createEmployee({ workplaceId: base.workplaceId });
+      expect((await enroll(await mobileLogin(app, emp.email), 3)).status).toBe(200);
+      const selfie = async (daysAgo: number) => {
+        const session = (
+          await q(
+            `INSERT INTO tracking_sessions (employee_id, shift_id, workplace_id, shift_date, scheduled_start_at, scheduled_end_at, state, ended_at)
+             VALUES ($1,$2,$3,CURRENT_DATE - $4::int, now() - interval '1 day', now() - interval '16 hours','SHIFT_COMPLETED', now() - interval '16 hours') RETURNING id`,
+            [emp.id, base.shiftId, base.workplaceId, daysAgo],
+          )
+        )[0].id;
+        const key = `faces/${crypto.randomUUID()}.jpg`;
+        await writeLocalObject(key, faceJpeg(3));
+        const id = (await q(`INSERT INTO attendance_photos (employee_id, session_id, object_key, content_type, declared_bytes, idempotency_key, upload_expires_at, status, purpose)
+                             VALUES ($1,$3,$2,'image/jpeg',100,$2,now(),'ATTACHED','ATTENDANCE') RETURNING id`, [emp.id, key, session]))[0].id as string;
+        await q(`INSERT INTO attendance_records (employee_id, workplace_id, shift_id, session_id, shift_date, idempotency_key, radius_m_at_record, verification_status, photo_id)
+                 VALUES ($1,$2,$3,$4,CURRENT_DATE - $5::int,$6,30,'VERIFIED',$7)`, [emp.id, base.workplaceId, base.shiftId, session, daysAgo, `f-${crypto.randomUUID()}`, id]);
+        return { id, file: path.join(config.storage.localDir, key) };
+      };
+      const status = async (id: string) => (await q('SELECT status FROM attendance_photos WHERE id = $1', [id]))[0].status;
+      await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, deviceBinding: 'OFF', faceEnrollment: 'OFF', keepMatchedPhotos: false }, null);
+      try {
+        const held = await selfie(3);
+        await faces.sweepFaceChecks(50);
+        expect(await status(held.id)).toBe('ATTACHED');
+        expect(fs.existsSync(held.file)).toBe(true);
+
+        config.photoAutoDeleteEnabled = true;
+        await saveSettingsSection(DEFAULT_ORG_ID, 'retention', { ...DEFAULT_SETTINGS.retention, photoAutoDelete: true }, null);
+        invalidateSettings();
+        const discarded = await selfie(4);
+        await faces.sweepFaceChecks(50);
+        expect(await status(discarded.id)).toBe('DELETED');
+        expect(fs.existsSync(discarded.file)).toBe(false);
+      } finally {
+        config.photoAutoDeleteEnabled = false;
+        await saveSettingsSection(DEFAULT_ORG_ID, 'retention', DEFAULT_SETTINGS.retention, null);
+        await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, deviceBinding: 'OFF', faceEnrollment: 'OFF' }, null);
+        invalidateSettings();
+      }
     });
   });
 

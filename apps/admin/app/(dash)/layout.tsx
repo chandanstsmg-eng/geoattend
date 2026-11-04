@@ -461,6 +461,8 @@ function SampleBanner() {
   );
 }
 
+import { ChangePassword } from '@/components/change-password';
+
 export default function DashLayout({ children }: { children: ReactNode }) {
   const me = useQuery({ queryKey: ['me'], queryFn: () => get<Me>('/auth/me'), retry: false, staleTime: 5 * 60_000 });
   if (me.error && !(me.error instanceof ApiError && me.error.status === 401)) {
@@ -471,6 +473,7 @@ export default function DashLayout({ children }: { children: ReactNode }) {
     );
   }
   if (me.isLoading || !me.data) return <Spinner label="Loading dashboard…" />;
+  if (me.data.user.mustChangePassword) return <ChangePassword />;
   return (
     <LiveProvider>
       <MapsProvider>

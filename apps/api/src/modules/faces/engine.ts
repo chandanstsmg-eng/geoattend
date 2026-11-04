@@ -92,7 +92,7 @@ export const faceEngine = {
     const h = await human();
     // Phones send JPEG; anything else cannot be decoded here and is treated as "no face".
     if (!(photo[0] === 0xff && photo[1] === 0xd8)) return { faces: 0, embedding: null, score: null, real: null, live: null };
-    const img = jpeg.decode(photo, { useTArray: true, formatAsRGBA: false, maxMemoryUsageInMB: 256 });
+    const img = jpeg.decode(photo, { useTArray: true, formatAsRGBA: false, maxMemoryUsageInMB: 256, maxResolutionInMP: 40 });
     const t3 = h.tf.tensor3d(img.data, [img.height, img.width, 3], 'int32');
     const t4 = h.tf.expandDims(t3, 0);
     try {
