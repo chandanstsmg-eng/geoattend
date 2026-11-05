@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DateTime } from 'luxon';
-import { one, q, withOrg } from '../src/db/pool.js';
+import { one, q, tx, withOrg } from '../src/db/pool.js';
 import { config } from '../src/config.js';
 import { JobFailures, runJob } from '../src/modules/jobs/runner.js';
 import { sweepExpiredWindows } from '../src/modules/jobs/sweeper.js';
@@ -52,6 +52,14 @@ async function attendance(c: Co, s: Awaited<ReturnType<typeof session>>, status 
   );
   if (over) await q(`UPDATE attendance_records SET ${over} WHERE id = $1`, [r.id]);
   return r.id as string;
+}
+
+async function overtime(c: Co, s: Awaited<ReturnType<typeof session>>, attendanceId: string, photoId: string | null = null) {
+  await q(
+    `INSERT INTO overtime_entries (session_id, attendance_id, employee_id, workplace_id, shift_date, started_at, start_photo_id, start_latitude, start_longitude, start_accuracy_m, start_distance_m, ended_at, end_reason, created_at)
+     VALUES ($1,$2,$3,$4,$5,now() - interval '3 days',$6,12.97,77.59,10,5,now() - interval '3 days' + interval '1 hour','EMPLOYEE',now() - interval '3 days')`,
+    [s.sessionId, attendanceId, s.emp.id, c.workplaceId, s.date, photoId],
+  );
 }
 
 const old = (id: string) => q(`UPDATE attendance_records SET created_at = now() - interval '3 days' WHERE id = $1`, [id]);
@@ -136,9 +144,10 @@ describe('pending attendance', () => {
     const id = await attendance(A, s, 'VERIFIED', null, `face_review = 'PENDING'`);
     await old(id);
     const r = await one(`INSERT INTO review_requests (kind, employee_id, attendance_id, reason, requested_by, created_at) VALUES ('ADMIN_CORRECTION',$1,$2,'Wrong time',$3,now() - interval '3 days') RETURNING id`, [s.emp.id, id, A.adminId]);
+    await overtime(A, s, id);
     await sweepOverdueApprovals();
     const kinds = (await q(`SELECT data->>'kind' AS kind FROM notifications WHERE type = 'APPROVAL_OVERDUE' AND employee_id = $1 ORDER BY 1`, [s.emp.id])).map((n) => n.kind);
-    expect(kinds).toEqual(['correction', 'photo-check']);
+    expect(kinds).toEqual(['correction', 'overtime', 'photo-check']);
     await q(`UPDATE review_requests SET status = 'CANCELLED' WHERE id = $1`, [r.id]);
   });
 
@@ -194,6 +203,27 @@ describe('delivering notifications', () => {
     });
     globalThis.fetch = send as any;
     await Promise.all([processDeliveries(), processDeliveries(), processDeliveries()]);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('two runners that both listed a delivery cannot both send it', async () => {
+    await clear();
+    const id = await delivery(A);
+    const send = vi.fn(async () => answer(200));
+    globalThis.fetch = send as any;
+    // A held row lock keeps both runners at the claim, after each has listed the delivery as due.
+    let release = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const lock = tx(async (c) => {
+      await q(`SELECT 1 FROM notification_deliveries WHERE id = $1 FOR UPDATE`, [id], c);
+      await gate;
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const runners = Promise.all([processDeliveries(), processDeliveries()]);
+    await new Promise((r) => setTimeout(r, 500));
+    release();
+    await lock;
+    await runners;
     expect(send).toHaveBeenCalledTimes(1);
   });
 
@@ -529,6 +559,28 @@ describe('photo retention', () => {
     await q(`INSERT INTO employee_face_profiles (employee_id, poses, photo_ids, embeddings, model) VALUES ($1,'{front}',$2,'[]','test')`, [s.emp.id, [p.id]]);
     await runRetention(null, A.org);
     expect(await gone(p)).toEqual(kept);
+  });
+
+  it('the older single face reference stays too', async () => {
+    await allow();
+    const s = await session(A);
+    const p = await photo(A, s.emp.id, s.sessionId);
+    await q(`INSERT INTO employee_faces (employee_id, photo_id) VALUES ($1,$2)`, [s.emp.id, p.id]);
+    await runRetention(null, A.org);
+    expect(await gone(p)).toEqual(kept);
+  });
+
+  it('evidence for overtime not yet decided stays, and goes once it is', async () => {
+    await allow();
+    const s = await session(A);
+    const p = await photo(A, s.emp.id, s.sessionId);
+    const id = await attendance(A, s);
+    await overtime(A, s, id, p.id);
+    await runRetention(null, A.org);
+    expect(await gone(p)).toEqual(kept);
+    await q(`UPDATE overtime_entries SET status = 'REJECTED', decided_at = now() WHERE attendance_id = $1`, [id]);
+    await runRetention(null, A.org);
+    expect((await gone(p)).row).toBe('DELETED');
   });
 
   it('storage failing changes nothing, shows as a failing job, and the next run finishes it', async () => {

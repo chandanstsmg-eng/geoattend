@@ -12,6 +12,7 @@ import { errorText, redact } from '../src/lib/redact.js';
 import { eachCompany, eachRecord, recoverInterruptedJobs, resumeJobs, runJob, stopJobs, throwIfAny } from '../src/modules/jobs/runner.js';
 import { drainJobs, JOBS, sweepOnce } from '../src/modules/jobs/sweeper.js';
 import { evaluateAlerts } from '../src/modules/ops/alerts.js';
+import { hasOpsToken } from '../src/modules/ops/ops.routes.js';
 import { fullHealth } from '../src/modules/ops/health.js';
 import { adminAgent, createTestDatabase, seedBase, testSettings } from './helpers.js';
 
@@ -245,6 +246,8 @@ describe('who can see this', () => {
     try {
       await request(app).get('/api/v1/ops/jobs').expect(404);
       await request(app).get('/api/v1/ops/jobs').set('Authorization', 'Bearer ').expect(404);
+      // HTTP trims the trailing space above, so the rule itself is checked too.
+      expect(hasOpsToken({ headers: { authorization: 'Bearer ' } } as any)).toBe(false);
     } finally {
       config.opsToken = TOKEN;
     }
