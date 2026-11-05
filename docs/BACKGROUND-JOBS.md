@@ -17,7 +17,7 @@ By default the API runs them. To keep heavy work away from requests, set `JOBS_E
 | Safe retries | A failed job waits 30 s, doubling to 15 minutes, then runs again, however long the outage |
 | A stuck job | Recorded as failed after `JOB_TIMEOUT_MS` (10 minutes) so the jobs behind it run. Calls to outside services have their own 10 to 30 second limits |
 | Clean shutdown | A job finishes the record in hand and stops, recorded as `INTERRUPTED`, not failed. The next run carries on at once. Shutdown waits up to 8 seconds |
-| Recovery after a crash | A job cut off by a crash is detected when its lease runs out (`JOB_LEASE_SECONDS`, 5 minutes), recorded and run again |
+| Recovery after a crash | A job cut off by a crash is detected when its lease runs out (`JOB_LEASE_SECONDS`, 5 minutes), recorded and run again. It cannot be taken over until the interruption is on record |
 | Intervals survive restarts | The next run time is in the database |
 | Failures never vanish | `job_runs` keeps each run, `job_failures` each failure with its company. Good runs are kept 3 days, failures 30 |
 
@@ -107,6 +107,10 @@ Each backup records how it was proven in a manifest, with the size and SHA-256 o
 ## Connections
 
 Each process has up to 8 owner and 15 restricted connections, so plan for 23 per process, and for `max_connections` to cover them all.
+
+## Size
+
+Jobs run one at a time, so a long job delays the ones behind it. At 10 companies and 10,000 employees a normal tick took about 2 seconds, but the Monday weekly and monthly summaries, with all options on, took about 48 seconds, delaying notifications by that long, and held up the process they ran in for up to 0.2 seconds at a time. At that size, run `npm run worker` so requests are not affected.
 
 ## Adding a job
 

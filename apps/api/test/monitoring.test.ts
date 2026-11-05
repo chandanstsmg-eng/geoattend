@@ -129,6 +129,26 @@ describe('a failed job never disappears', () => {
     expect((await one(`SELECT run_id FROM job_failures WHERE job = $1`, [name])).run_id).toBe(r.id);
   });
 
+  it('an expired lease is not taken over until the crash is on record', async () => {
+    const name = job();
+    await q(`INSERT INTO job_state (job, holder, lease_until, running_since) VALUES ($1, 'dead:1', now() - interval '1 minute', now() - interval '6 minutes')`, [name]);
+    let ran = false;
+    expect(await runJob(name, async () => { ran = true; })).toBe('SKIPPED'); // a worker reaching the job before recovery has run
+    expect(ran).toBe(false);
+    await recoverInterruptedJobs();
+    expect((await runs(name)).map((r) => r.status)).toEqual(['INTERRUPTED']);
+    expect(await runJob(name, async () => { ran = true; })).toBe('OK');
+    expect(ran).toBe(true);
+    expect((await runs(name)).map((r) => r.status)).toEqual(['INTERRUPTED', 'OK']);
+  });
+
+  it('a run ends when the work ended, before the job is released', async () => {
+    const name = job();
+    await runJob(name, () => new Promise((r) => setTimeout(r, 20)));
+    const [r] = await runs(name);
+    expect(new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()).toBe(r.duration_ms);
+  });
+
   it('two instances recovering at once record it once', async () => {
     const name = job();
     await q(`INSERT INTO job_state (job, holder, lease_until, running_since) VALUES ($1, 'dead', now() - interval '1 minute', now() - interval '6 minutes')`, [name]);

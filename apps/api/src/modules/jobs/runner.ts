@@ -155,10 +155,12 @@ async function withinLimit(work: Promise<unknown>, ms: number) {
 export async function runJob(job: string, fn: () => Promise<unknown>, opts: { everyMs?: number; timeoutMs?: number } = {}): Promise<JobOutcome> {
   return asSystem(async () => {
     const lease = config.jobs.leaseSeconds;
+    // A job another process left running is not taken over here: recoverInterruptedJobs records the
+    // interruption first, so a crash can never pass unnoticed behind the next good run.
     const held = await one(
       `INSERT INTO job_state (job, holder, lease_until, running_since, last_started_at) VALUES ($1, $2, now() + make_interval(secs => $3), now(), now())
        ON CONFLICT (job) DO UPDATE SET holder = $2, lease_until = now() + make_interval(secs => $3), running_since = now(), last_started_at = now()
-       WHERE job_state.lease_until < now() AND job_state.next_run_at <= now()
+       WHERE job_state.lease_until < now() AND job_state.next_run_at <= now() AND job_state.running_since IS NULL
        RETURNING job`,
       [job, HOLDER, lease],
     );
@@ -172,8 +174,8 @@ export async function runJob(job: string, fn: () => Promise<unknown>, opts: { ev
     renew.unref();
     const history = (status: string, failures: number, error: string | null) =>
       one(
-        `INSERT INTO job_runs (job, holder, status, started_at, duration_ms, companies, companies_failed, failures, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-        [job, HOLDER, status, started, took, stats.companies, stats.companiesFailed, failures, error],
+        `INSERT INTO job_runs (job, holder, status, started_at, finished_at, duration_ms, companies, companies_failed, failures, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [job, HOLDER, status, started, new Date(started.getTime() + took), took, stats.companies, stats.companiesFailed, failures, error],
       );
     try {
       await withinLimit(progress.run(stats, fn), opts.timeoutMs ?? config.jobs.timeoutMs);
