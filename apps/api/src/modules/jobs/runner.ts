@@ -22,7 +22,7 @@ import os from 'node:os';
 import { asSystem, currentOrg, one, q, withOrg } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
-import { redact } from '../../lib/redact.js';
+import { errorText, redact } from '../../lib/redact.js';
 
 const HOLDER = `${os.hostname()}:${process.pid}:${crypto.randomBytes(3).toString('hex')}`;
 const RENEW_MS = 60_000;
@@ -43,7 +43,7 @@ export class JobFailures extends Error {
 
 class JobTimedOut extends Error {}
 
-const describe = (err: unknown) => redact(String((err as Error)?.message ?? err)).slice(0, 500);
+const describe = (err: unknown) => redact(errorText(err)).slice(0, 500);
 
 // What the job in progress has done so far, for its row in job_runs.
 const progress = new AsyncLocalStorage<{ companies: number; companiesFailed: number; cut: boolean }>();

@@ -17,7 +17,7 @@ import path from 'node:path';
 import pg from 'pg';
 import { config, DATA_DIR } from '../src/config.js';
 import { describeFolder, writeManifest } from '../src/lib/backups.js';
-import { redact } from '../src/lib/redact.js';
+import { errorText, redact } from '../src/lib/redact.js';
 
 if (config.externalDatabaseUrl) throw new Error('db:backup:online is for the built-in database only. Use db:backup with DATABASE_URL.');
 
@@ -119,7 +119,7 @@ try {
   for (const line of r.different) console.log(`    ${line}`);
   process.exit(0);
 } catch (err) {
-  const message = redact(String((err as Error).message)).slice(0, 500);
+  const message = redact(errorText(err)).slice(0, 500);
   writeManifest(target, { version: 1, kind: 'online', status: 'FAILED', createdAt, finishedAt: new Date().toISOString(), error: message, files: [] });
   console.error(`  Backup FAILED, and is recorded as failed: ${message}`);
   process.exit(1);

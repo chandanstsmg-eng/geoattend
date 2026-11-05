@@ -9,7 +9,7 @@ import { config } from '../../config.js';
 import { backupHealth } from '../../lib/backups.js';
 import { logger } from '../../lib/logger.js';
 import { mailer } from '../../lib/mailer.js';
-import { redact } from '../../lib/redact.js';
+import { errorText, redact } from '../../lib/redact.js';
 import { fullHealth } from './health.js';
 
 const MAX_NOTIFY_ATTEMPTS = 20;
@@ -82,7 +82,7 @@ export async function evaluateAlerts(now = new Date()) {
         }
       } catch (err) {
         failed++;
-        await q(`UPDATE ops_alerts SET notify_attempts = notify_attempts + 1, notify_error = $2 WHERE id = $1`, [a.id, redact(String((err as Error).message)).slice(0, 300)]);
+        await q(`UPDATE ops_alerts SET notify_attempts = notify_attempts + 1, notify_error = $2 WHERE id = $1`, [a.id, redact(errorText(err)).slice(0, 300)]);
       }
     }
     if (failed) throw new Error(`${failed} alert${failed === 1 ? '' : 's'} could not be sent.`);

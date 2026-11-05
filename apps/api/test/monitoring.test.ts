@@ -8,7 +8,7 @@ import type { Express } from 'express';
 import { one, q, withOrg } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { config, productionConfigErrors } from '../src/config.js';
-import { redact } from '../src/lib/redact.js';
+import { errorText, redact } from '../src/lib/redact.js';
 import { eachCompany, eachRecord, recoverInterruptedJobs, resumeJobs, runJob, stopJobs, throwIfAny } from '../src/modules/jobs/runner.js';
 import { drainJobs, JOBS, sweepOnce } from '../src/modules/jobs/sweeper.js';
 import { evaluateAlerts } from '../src/modules/ops/alerts.js';
@@ -207,6 +207,15 @@ describe('private data stays out of the job records', () => {
     for (const secret of ['a.b+c', '919800000001', '[abc]', 'hunter2', 'abc.def']) expect(out).not.toContain(secret);
     expect(out).toContain('2026-11-05 12:00');
     expect(redact('photo 3f2b8c1a-1111-4222-8333-123456789012 failed')).toContain('123456789012'); // ids are not phone numbers
+  });
+
+  it('a failure with no message of its own, like a refused connection, still says what happened', async () => {
+    const name = job();
+    await runJob(name, async () => { throw Object.assign(new AggregateError([new Error('connect refused')]), { code: 'ECONNREFUSED' }); });
+    expect((await state(name)).last_error).toBe('ECONNREFUSED');
+    expect((await runs(name))[0].error).toBe('ECONNREFUSED');
+    expect(errorText(new AggregateError([new Error('first cause')]))).toBe('first cause');
+    expect(errorText('plain text')).toBe('plain text');
   });
 
   it('what a failing job stores has none of it', async () => {

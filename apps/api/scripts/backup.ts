@@ -13,7 +13,7 @@ import { config } from '../src/config.js';
 import { embeddedBinary, ensureDatabase } from '../src/db/postgres.js';
 import { clientEnvironment } from '../src/db/restore-target.js';
 import { sha256, writeManifest, type BackupManifest } from '../src/lib/backups.js';
-import { redact } from '../src/lib/redact.js';
+import { errorText, redact } from '../src/lib/redact.js';
 
 const createdAt = new Date().toISOString();
 const dir = config.backups.dir;
@@ -36,7 +36,7 @@ try {
   await finish('READABLE');
   console.log(`  Backup written to ${file}. pg_restore can read it; it has not been restored.`);
 } catch (err) {
-  const message = redact(String((err as Error).message)).slice(0, 500);
+  const message = redact(errorText(err)).slice(0, 500);
   await finish('FAILED', message);
   console.error(`  Backup FAILED: ${message}`);
   process.exit(1);

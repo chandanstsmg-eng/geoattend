@@ -11,7 +11,7 @@ import { q } from '../../db/pool.js';
 import { eachCompany } from '../jobs/runner.js';
 import { logger } from '../../lib/logger.js';
 import { mailer } from '../../lib/mailer.js';
-import { redact } from '../../lib/redact.js';
+import { errorText, redact } from '../../lib/redact.js';
 
 const MAX_ATTEMPTS = 6;
 const SEND_TIMEOUT_MS = 15_000;
@@ -101,9 +101,9 @@ async function deliveriesForCompany(limit: number) {
       const backoffSec = Math.min(3600, 30 * 2 ** (attempts - 1));
       await q(
         `UPDATE notification_deliveries SET status = $2, attempts = $3, last_error = $4, next_attempt_at = now() + make_interval(secs => $5) WHERE id = $1`,
-        [d.id, giveUp ? 'GAVE_UP' : 'FAILED', attempts, redact(String((err as Error).message)).slice(0, 500), backoffSec],
+        [d.id, giveUp ? 'GAVE_UP' : 'FAILED', attempts, redact(errorText(err)).slice(0, 500), backoffSec],
       );
-      logger.warn({ channel: d.channel, attempts, err: redact(String((err as Error).message)) }, 'notification delivery failed');
+      logger.warn({ channel: d.channel, attempts, err: redact(errorText(err)) }, 'notification delivery failed');
     }
   }
 }

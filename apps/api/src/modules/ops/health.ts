@@ -6,7 +6,7 @@ import { asSystem, one, q, withOrg } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { backupHealth } from '../../lib/backups.js';
 import { checkStorage } from '../../lib/storage.js';
-import { redact } from '../../lib/redact.js';
+import { errorText, redact } from '../../lib/redact.js';
 
 type Level = 'ok' | 'warn' | 'fail' | 'off';
 const CHECK_LIMIT_MS = 5_000;
@@ -25,7 +25,7 @@ async function guarded<T extends { status: Level }>(name: string, fn: () => Prom
       }),
     ]);
   } catch (err) {
-    return { status: 'fail', message: redact(String((err as Error)?.message ?? err)).slice(0, 200) };
+    return { status: 'fail', message: redact(errorText(err)).slice(0, 200) };
   } finally {
     clearTimeout(timer);
   }
