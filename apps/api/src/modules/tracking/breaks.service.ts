@@ -16,6 +16,7 @@
 import type pg from 'pg';
 import { classifyReading, distanceMeters } from '@geoattend/shared';
 import { one, q, tx } from '../../db/pool.js';
+import { eachCompany, eachRecord, throwIfAny } from '../jobs/runner.js';
 import { HttpError, badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { createUploadUrl, inspectObject, newObjectKey, type PhotoType } from '../../lib/storage.js';
 import { confirmUpload } from '../attendance/photo-upload.js';
@@ -191,7 +192,9 @@ export async function endBreak(employeeId: string, sessionId: string, actor: Act
 }
 
 /** Breaks past their time limit: alert administrators (and remind the employee) once per break. */
-export async function sweepOverdueBreaks(realNow = new Date()) {
+export const sweepOverdueBreaks = (realNow = new Date()) => eachCompany(() => overdueBreaksForCompany(realNow));
+
+async function overdueBreaksForCompany(realNow: Date) {
   const outbox = new Outbox();
   const due = await q(
     `SELECT b.id, b.session_id FROM session_breaks b JOIN tracking_sessions s ON s.id = b.session_id
@@ -199,8 +202,8 @@ export async function sweepOverdueBreaks(realNow = new Date()) {
        AND b.started_at + make_interval(mins => b.max_minutes) <= $1::timestamptz + make_interval(secs => s.sim_clock_offset_sec)`,
     [realNow],
   );
-  for (const row of due) {
-    await tx(async (db) => {
+  const failures = await eachRecord(due, (row) =>
+    tx(async (db) => {
       const s = await lockSession(db, row.session_id);
       if (!s || s.ended_at) return;
       const now = new Date(realNow.getTime() + s.sim_clock_offset_sec * 1000);
@@ -238,7 +241,8 @@ export async function sweepOverdueBreaks(realNow = new Date()) {
         dedupeKey: `break-overdue-emp:${b.id}`,
         simulated: s.is_simulated,
       });
-    });
-  }
+    }),
+  );
   outbox.flush();
+  throwIfAny(failures);
 }

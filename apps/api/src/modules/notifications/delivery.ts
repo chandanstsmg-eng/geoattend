@@ -9,6 +9,7 @@ import webpush from 'web-push';
 import nodemailer from 'nodemailer';
 import { config } from '../../config.js';
 import { q } from '../../db/pool.js';
+import { eachCompany } from '../jobs/runner.js';
 import { logger } from '../../lib/logger.js';
 
 const MAX_ATTEMPTS = 6;
@@ -67,7 +68,13 @@ async function sendOne(d: any) {
   throw new Error(`Unknown channel ${d.channel}`);
 }
 
-export async function processDeliveries(limit = 25) {
+/** Companies with something to send. */
+const companiesWithDeliveries = async () =>
+  (await q(`SELECT DISTINCT n.org_id FROM notification_deliveries d JOIN notifications n ON n.id = d.notification_id WHERE d.status IN ('PENDING', 'FAILED') AND d.next_attempt_at <= now()`)).map((r) => r.org_id as string);
+
+export const processDeliveries = (limit = 25) => eachCompany(() => deliveriesForCompany(limit), companiesWithDeliveries);
+
+async function deliveriesForCompany(limit: number) {
   const due = await q(
     `SELECT d.*, n.title, n.body, n.type, n.severity, n.created_at, n.session_id
      FROM notification_deliveries d JOIN notifications n ON n.id = d.notification_id

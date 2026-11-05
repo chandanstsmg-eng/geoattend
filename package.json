@@ -34,6 +34,7 @@
     "demo:seed": "npm run demo:seed -w @geoattend/api",
     "demo:verify": "npm run demo:verify -w @geoattend/api",
     "db:stop": "npm run db:stop -w @geoattend/api",
+    "jobs:status": "npm run jobs:status -w @geoattend/api",
     "set-logins": "npm run set-logins -w @geoattend/api",
     "db:backup": "npm run db:backup -w @geoattend/api",
     "db:backup:online": "npm run db:backup:online -w @geoattend/api",

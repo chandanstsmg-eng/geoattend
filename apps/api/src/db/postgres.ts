@@ -19,9 +19,9 @@ import { config, DATA_DIR } from '../config.js';
 import { logger } from '../lib/logger.js';
 
 const run = promisify(execFile);
-const PG_DIR = path.join(DATA_DIR, 'pg');
+const PG_DIR = path.join(DATA_DIR, config.pgDataSubdir);
 const LOG_FILE = path.join(DATA_DIR, 'logs', 'postgres.log');
-const PG_USER = 'geoattend';
+const SUPERUSER = 'geoattend';
 
 async function binaries(): Promise<{ pg_ctl: string; initdb: string }> {
   const platform = os.platform() === 'win32' ? 'windows' : os.platform();
@@ -60,7 +60,7 @@ function startServer(pgCtl: string): Promise<void> {
 }
 
 function serverUrl(db: string) {
-  return `postgresql://${PG_USER}:${encodeURIComponent(config.pgPassword)}@localhost:${config.pgPort}/${db}`;
+  return `postgresql://${config.pgUser}:${encodeURIComponent(config.pgPassword)}@localhost:${config.pgPort}/${db}`;
 }
 
 /** Creates a database on the embedded server if it does not exist. */
@@ -99,11 +99,11 @@ export async function ensureDatabase(dbName = config.dbName): Promise<string> {
     const pwFile = path.join(DATA_DIR, '.pgpass-init');
     fs.writeFileSync(pwFile, config.pgPassword, { mode: 0o600 });
     try {
-      await run(initdb, ['-D', PG_DIR, '-U', PG_USER, `--pwfile=${pwFile}`, '-A', 'scram-sha-256', '-E', 'UTF8', '--no-locale'], { windowsHide: true });
+      await run(initdb, ['-D', PG_DIR, '-U', SUPERUSER, `--pwfile=${pwFile}`, '-A', 'scram-sha-256', '-E', 'UTF8', '--no-locale'], { windowsHide: true });
     } finally {
       fs.rmSync(pwFile, { force: true });
     }
-    fs.appendFileSync(path.join(PG_DIR, 'postgresql.conf'), "\n# GeoAttend local\nshared_buffers = 64MB\nmax_connections = 60\ntimezone = 'UTC'\nlog_timezone = 'UTC'\n");
+    fs.appendFileSync(path.join(PG_DIR, 'postgresql.conf'), `\n# GeoAttend local\nshared_buffers = 64MB\nmax_connections = ${config.pgMaxConnections}\ntimezone = 'UTC'\nlog_timezone = 'UTC'\n`);
   }
 
   if (!(await isRunning(pg_ctl))) await startServer(pg_ctl);

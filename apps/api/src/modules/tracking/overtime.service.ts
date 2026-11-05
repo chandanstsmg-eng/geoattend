@@ -19,6 +19,7 @@
 import type pg from 'pg';
 import { distanceMeters, type SessionState } from '@geoattend/shared';
 import { getPool, one, q, tx } from '../../db/pool.js';
+import { eachCompany, eachRecord, throwIfAny } from '../jobs/runner.js';
 import { HttpError, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { createUploadUrl, inspectObject, newObjectKey, type PhotoType } from '../../lib/storage.js';
 import { confirmUpload } from '../attendance/photo-upload.js';
@@ -215,7 +216,9 @@ export async function finalizeOvertimeSession(db: pg.PoolClient, outbox: Outbox,
  *  - at a shift's scheduled end, ask the employee (once) whether they are still working;
  *  - end overtime whose phone has sent nothing for OVERTIME_LOST_AFTER_MIN, at the last location.
  */
-export async function sweepOvertime(realNow = new Date()) {
+export const sweepOvertime = (realNow = new Date()) => eachCompany(() => overtimeForCompany(realNow));
+
+async function overtimeForCompany(realNow: Date) {
   const outbox = new Outbox();
   const prompts = await q(
     `SELECT s.id, s.employee_id, s.is_simulated, sh.name AS shift_name FROM tracking_sessions s JOIN shifts sh ON sh.id = s.shift_id
@@ -225,7 +228,7 @@ export async function sweepOvertime(realNow = new Date()) {
        AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.dedupe_key = 'ot-prompt:' || s.id)`,
     [realNow, START_STATES],
   );
-  for (const s of prompts) {
+  const failures = await eachRecord(prompts, async (s) => {
     await notify(getPool(), outbox, {
       type: 'OVERTIME_PROMPT',
       audience: 'EMPLOYEE',
@@ -237,7 +240,7 @@ export async function sweepOvertime(realNow = new Date()) {
       dedupeKey: `ot-prompt:${s.id}`,
       simulated: s.is_simulated,
     });
-  }
+  });
 
   const lost = await q(
     `SELECT id FROM tracking_sessions
@@ -245,15 +248,16 @@ export async function sweepOvertime(realNow = new Date()) {
        AND COALESCE(last_location_at, started_at) < $1::timestamptz + make_interval(secs => sim_clock_offset_sec) - make_interval(mins => $2)`,
     [realNow, OVERTIME_LOST_AFTER_MIN],
   );
-  for (const { id } of lost) {
-    await tx(async (db) => {
+  failures.push(...await eachRecord(lost, ({ id }) =>
+    tx(async (db) => {
       const s = await lockSession(db, id);
       if (!s || s.ended_at || !onOvertime(s)) return;
       const now = new Date(realNow.getTime() + s.sim_clock_offset_sec * 1000);
       const last = new Date(s.last_location_at ?? s.started_at);
       if (now.getTime() - last.getTime() < OVERTIME_LOST_AFTER_MIN * 60_000) return;
       await finalizeOvertimeSession(db, outbox, s, last, 'TRACKING_LOST');
-    });
-  }
+    }),
+  ));
   outbox.flush();
+  throwIfAny(failures);
 }

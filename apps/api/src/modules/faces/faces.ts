@@ -16,6 +16,7 @@
  */
 import crypto from 'node:crypto';
 import { getPool, one, q } from '../../db/pool.js';
+import { eachCompany } from '../jobs/runner.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { deleteObject, readObject } from '../../lib/storage.js';
@@ -66,7 +67,9 @@ async function check(employeeId: string, objectKey: string): Promise<{ status: S
 }
 
 /** Checks pending start- and end-of-shift photos (a few per sweep). */
-export async function sweepFaceChecks(limit = 10) {
+export const sweepFaceChecks = (limit = 10) => eachCompany(() => faceChecksForCompany(limit));
+
+async function faceChecksForCompany(limit: number) {
   const due = await q(
     `SELECT ar.id, ar.employee_id, ar.workplace_id, ar.is_simulated, u.full_name, u.org_id,
             ar.face_status IS NULL AS start_due, ar.photo_id, sp.object_key AS start_key, sp.status AS start_photo_status,

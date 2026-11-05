@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { DateTime } from 'luxon';
-import { asSystem, currentOrg, getPool, one, q, tx, withOrg } from '../src/db/pool.js';
+import { asSystem, currentOrg, databaseRoleProblems, getTenantPool, one, q, tx, withOrg } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { signAccessToken } from '../src/lib/auth.js';
 import { HttpError } from '../src/lib/errors.js';
@@ -24,7 +24,7 @@ let A: Company;
 let B: Company;
 
 /** Tables with no company in them, which requests must not be able to touch at all. */
-const NOT_TENANT_DATA = ['schema_migrations'];
+const NOT_TENANT_DATA = ['schema_migrations', 'job_state', 'job_failures'];
 
 async function company(name: string, orgId?: string) {
   const org = orgId ?? (await one(`INSERT INTO organizations (name) VALUES ($1) RETURNING id`, [name])).id;
@@ -78,8 +78,35 @@ describe('how the database is set up', () => {
 
   it('the role requests run as cannot get around it', async () => {
     const r = await one(`SELECT rolsuper, rolbypassrls, rolcanlogin, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = 'geoattend_tenant'`);
-    expect(r).toEqual({ rolsuper: false, rolbypassrls: false, rolcanlogin: false, rolcreaterole: false, rolcreatedb: false });
+    expect(r).toEqual({ rolsuper: false, rolbypassrls: false, rolcanlogin: true, rolcreaterole: false, rolcreatedb: false });
     expect(await q(`SELECT 1 FROM pg_class c WHERE c.relowner = 'geoattend_tenant'::regrole`)).toEqual([]);
+  });
+
+  it('tests themselves run without superuser rights, like production', async () => {
+    expect(await one(`SELECT current_user AS u, rolsuper FROM pg_roles WHERE rolname = current_user`)).toEqual({ u: 'geoattend_owner', rolsuper: false });
+    expect(await databaseRoleProblems()).toEqual([]);
+  });
+
+  it('a request\'s connection really is the restricted login, not a role switched on another one', async () => {
+    const r = await withOrg(A.org, () => one(`SELECT session_user AS s, current_user AS c`));
+    expect(r).toEqual({ s: 'geoattend_tenant', c: 'geoattend_tenant' });
+  });
+
+  it('the restricted login cannot become anyone else, whatever SQL it runs', async () => {
+    for (const sql of [`SET ROLE geoattend_owner`, `SET SESSION AUTHORIZATION geoattend_owner`, `SELECT set_config('role', 'geoattend_owner', false)`, `SET ROLE postgres`]) {
+      await expect(withOrg(A.org, () => q(sql))).rejects.toThrow();
+    }
+    expect((await withOrg(A.org, () => one(`SELECT current_user AS c`))).c).toBe('geoattend_tenant');
+  });
+
+  it('the restricted login cannot change the schema, the policies or the protections', async () => {
+    for (const sql of [
+      `DROP TABLE holidays`, `ALTER TABLE users DISABLE ROW LEVEL SECURITY`, `DROP POLICY company_isolation ON users`, `TRUNCATE holidays`,
+      `CREATE TABLE stolen (x int)`, `ALTER TABLE attendance_records DISABLE TRIGGER USER`, `CREATE OR REPLACE FUNCTION app_org() RETURNS uuid LANGUAGE sql AS 'SELECT NULL::uuid'`,
+      `CREATE ROLE spy LOGIN`, `COPY users TO PROGRAM 'x'`, `SELECT pg_read_file('postgresql.conf')`,
+    ]) {
+      await expect(withOrg(A.org, () => q(sql)), sql).rejects.toThrow();
+    }
   });
 
   it('no view reads with its owner\'s rights', async () => {
@@ -89,7 +116,7 @@ describe('how the database is set up', () => {
   });
 
   it('a request cannot touch tables outside company data', async () => {
-    await expect(withOrg(A.org, () => q(`SELECT * FROM schema_migrations`))).rejects.toMatchObject({ code: '42501' });
+    for (const t of NOT_TENANT_DATA) await expect(withOrg(A.org, () => q(`SELECT * FROM ${t}`)), t).rejects.toMatchObject({ code: '42501' });
   });
 });
 
@@ -126,15 +153,14 @@ describe('a query that forgets its company filter', () => {
   });
 
   it('with no company set, sees nothing at all', async () => {
-    const client = await getPool().connect();
+    const client = await getTenantPool().connect();
     try {
-      await client.query(`SELECT set_config('app.org_id', '', false), set_config('role', 'geoattend_tenant', false)`);
+      await client.query(`SELECT set_config('app.org_id', '', false)`);
       for (const t of ['users', 'attendance_records', 'organizations', 'payslips', 'tracking_sessions']) {
         expect((await client.query(`SELECT count(*)::int AS n FROM ${t}`)).rows[0].n, t).toBe(0);
       }
     } finally {
-      await client.query(`SELECT set_config('role', 'none', false)`);
-      client.release(new Error('do not reuse')); // its scope is unknown to the pool's bookkeeping
+      client.release(new Error('do not reuse')); // its company is unknown to the pool's bookkeeping
     }
   });
 });

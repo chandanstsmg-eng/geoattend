@@ -7,6 +7,7 @@
 import nodemailer from 'nodemailer';
 import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
+import { eachCompany } from '../jobs/runner.js';
 import { DEFAULT_TIMEZONE, dayEndSql, dayStartSql } from '../../lib/dates.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
@@ -109,13 +110,29 @@ export async function composeDigest(orgId: string, date: string, when: string): 
   return { company: org.name, when, line, text };
 }
 
-/** Claims a slot; true when this call won it (and must send). */
+/**
+ * Claims a slot; true when this call won it (and must send). A slot can be claimed again, up to three
+ * times and five minutes apart, if nothing was delivered: every recipient failed, or the server stopped
+ * before recording the result. If some recipients got it, it is not sent again.
+ */
 async function claim(orgId: string, slot: string) {
-  return !!(await one(`INSERT INTO digest_runs (org_id, slot) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING slot`, [orgId, slot]));
+  return !!(await one(
+    `INSERT INTO digest_runs (org_id, slot) VALUES ($1, $2)
+     ON CONFLICT (org_id, slot) DO UPDATE SET attempts = digest_runs.attempts + 1, failed = false, results = '{}', sent_at = now()
+     WHERE (digest_runs.failed OR digest_runs.results = '{}') AND digest_runs.attempts < 3 AND digest_runs.sent_at < now() - interval '5 minutes'
+     RETURNING slot`,
+    [orgId, slot],
+  ));
 }
 
+const isFailure = (v: string) => v.startsWith('failed');
+
+/** Stores the outcome. Throws if anything failed, so the job shows up as failing. */
 async function record(orgId: string, slot: string, results: Record<string, string>) {
-  await q(`UPDATE digest_runs SET results = $3 WHERE org_id = $1 AND slot = $2`, [orgId, slot, JSON.stringify(results)]);
+  const outcomes = Object.values(results);
+  const nothingDelivered = outcomes.length > 0 && outcomes.every(isFailure);
+  await q(`UPDATE digest_runs SET results = $3, failed = $4 WHERE org_id = $1 AND slot = $2`, [orgId, slot, JSON.stringify(results), nothingDelivered]);
+  if (outcomes.some(isFailure)) throw new Error(`Summary ${slot}: ${outcomes.filter(isFailure).length} of ${outcomes.length} recipients failed`);
 }
 
 /** Sends one digest to everyone configured; returns a result per recipient. */
@@ -129,13 +146,18 @@ export async function sendDigest(orgId: string, d: Digest) {
   return results;
 }
 
-export async function sweepDigests(now = new Date()) {
-  const orgs = await q(
+/** Companies with someone to send a summary to. */
+const companiesWithDigests = async () =>
+  (await q(
     `SELECT DISTINCT s.org_id FROM application_settings s
      WHERE s.key = 'digest' AND (jsonb_array_length(COALESCE(s.value->'whatsappNumbers', '[]')) > 0 OR jsonb_array_length(COALESCE(s.value->'emailRecipients', '[]')) > 0)`,
-  );
-  for (const { org_id: orgId } of orgs) {
-    try {
+  )).map((r) => r.org_id as string);
+
+export const sweepDigests = (now = new Date()) => eachCompany((orgId) => digestsForCompany(orgId, now), companiesWithDigests);
+
+async function digestsForCompany(orgId: string, now: Date) {
+  {
+    {
       const { digest } = await getSettings(orgId);
       const org = await orgInfo(orgId);
       const local = DateTime.fromJSDate(now, { zone: org.timezone ?? DEFAULT_TIMEZONE });
@@ -166,8 +188,6 @@ export async function sweepDigests(now = new Date()) {
           await record(orgId, slot, { email: result });
         }
       }
-    } catch (err) {
-      logger.error({ err, orgId }, 'digest failed');
     }
   }
 }

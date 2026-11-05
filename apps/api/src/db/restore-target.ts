@@ -48,8 +48,9 @@ export async function ensureTenantRole(url: string) {
   try {
     await client.query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'geoattend_tenant') THEN
-        CREATE ROLE geoattend_tenant NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        CREATE ROLE geoattend_tenant LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
       END IF;
+    EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
     END $$`);
   } finally {
     await client.end();

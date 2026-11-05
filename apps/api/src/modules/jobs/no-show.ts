@@ -7,6 +7,7 @@
 import { DateTime } from 'luxon';
 import { getPool, q } from '../../db/pool.js';
 import { instanceFor } from '../../lib/shift-window.js';
+import { eachCompany, eachRecord, throwIfAny, type Failure } from './runner.js';
 import { getSettings } from '../settings/settings.service.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
@@ -24,7 +25,9 @@ interface Candidate {
   startsAt: Date;
 }
 
-export async function sweepNoShows(now = new Date()) {
+export const sweepNoShows = (now = new Date()) => eachCompany(() => noShowsForCompany(now));
+
+async function noShowsForCompany(now: Date) {
   const rows = await q(
     `SELECT esa.employee_id, esa.effective_from, esa.effective_to, u.full_name, u.org_id,
             sh.id AS shift_id, sh.name AS shift_name, sh.start_time, sh.end_time, sh.timezone, sh.days_of_week,
@@ -63,13 +66,14 @@ export async function sweepNoShows(now = new Date()) {
   const done = new Set(started.map((s) => `${s.employee_id}|${s.shift_id}|${s.shift_date}`));
 
   const outbox = new Outbox();
+  const failures: Failure[] = [];
   const byDate = new Map<string, Candidate[]>();
   for (const d of due) byDate.set(d.shiftDate, [...(byDate.get(d.shiftDate) ?? []), d]);
   for (const [date, list] of byDate) {
     const onLeave = await approvedLeaveOn(date, list.map((d) => d.employeeId));
     const holidays = await holidaysOn(date, [...new Set(list.map((d) => d.workplaceId))]);
-    for (const d of list) {
-      if (done.has(`${d.employeeId}|${d.shiftId}|${d.shiftDate}`) || onLeave.has(d.employeeId) || holidays.has(d.workplaceId)) continue;
+    const absent = list.filter((d) => !done.has(`${d.employeeId}|${d.shiftId}|${d.shiftDate}`) && !onLeave.has(d.employeeId) && !holidays.has(d.workplaceId));
+    failures.push(...await eachRecord(absent, async (d) => {
       const lateBy = Math.round((now.getTime() - d.startsAt.getTime()) / 60_000);
       const key = `${d.employeeId}:${d.shiftId}:${d.shiftDate}`;
       await notify(getPool(), outbox, {
@@ -91,7 +95,8 @@ export async function sweepNoShows(now = new Date()) {
         data: { shiftId: d.shiftId, shiftDate: d.shiftDate },
         dedupeKey: `no-show-employee:${key}`,
       });
-    }
+    }));
   }
   outbox.flush();
+  throwIfAny(failures);
 }

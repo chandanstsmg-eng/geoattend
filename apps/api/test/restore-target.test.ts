@@ -56,7 +56,7 @@ describe('restore target', () => {
     await c.connect();
     const r = (await c.query(`SELECT rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname = 'geoattend_tenant'`)).rows;
     await c.end();
-    expect(r).toEqual([{ rolsuper: false, rolbypassrls: false, rolcanlogin: false }]);
+    expect(r).toEqual([{ rolsuper: false, rolbypassrls: false, rolcanlogin: true }]);
   });
 
   it('needs explicit confirmation on a production system', () => {

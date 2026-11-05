@@ -49,9 +49,15 @@ export const config = {
     .filter(Boolean),
   trustProxy: parseTrustProxy(str('TRUST_PROXY', 'loopback')),
 
+  /** The owner login: migrations, sign-in and listing companies for jobs. Never a superuser in production. */
   externalDatabaseUrl: str('DATABASE_URL'),
+  /** The restricted login every signed-in request and every job runs on. Required in production. */
+  tenantDatabaseUrl: str('APP_DATABASE_URL'),
   pgPort: int('PG_PORT', 54340),
   pgPassword: str('PG_PASSWORD'),
+  pgUser: str('PG_USER') || 'geoattend',
+  pgDataSubdir: str('PG_DATA_SUBDIR') || 'pg',
+  pgMaxConnections: int('PG_MAX_CONNECTIONS', 60),
   dbName: str('PG_DATABASE', 'geoattend'),
 
   jwtSecret: str('JWT_SECRET'),
@@ -119,6 +125,8 @@ export const config = {
   dashboardUrl: str('DASHBOARD_URL', 'http://localhost:3400'),
 
   sweeperIntervalMs: int('SWEEPER_INTERVAL_MS', 15_000),
+  /** Bearer token for GET /health/jobs. Unset: that endpoint does not exist. */
+  opsToken: str('OPS_TOKEN'),
   logLevel: str('LOG_LEVEL', nodeEnv === 'test' ? 'silent' : 'info'),
 };
 
@@ -150,6 +158,9 @@ export function productionConfigErrors(env: Record<string, string | undefined>) 
   if (get('JWT_SECRET') && get('JWT_SECRET') === get('STORAGE_SIGNING_KEY')) e.push('JWT_SECRET and STORAGE_SIGNING_KEY must be different.');
   if (!get('DATABASE_URL')) e.push('DATABASE_URL is required: the built-in database is for development only.');
   else if (PLACEHOLDER.test(get('DATABASE_URL'))) e.push('DATABASE_URL still contains a placeholder value.');
+  if (!get('APP_DATABASE_URL')) e.push('APP_DATABASE_URL is required: the restricted database login for requests and jobs (see docs/COMPANY-ISOLATION.md).');
+  else if (PLACEHOLDER.test(get('APP_DATABASE_URL'))) e.push('APP_DATABASE_URL still contains a placeholder value.');
+  else if (get('APP_DATABASE_URL') === get('DATABASE_URL')) e.push('APP_DATABASE_URL must be a different login from DATABASE_URL.');
   if (!isPublicHttps(get('PUBLIC_API_URL'))) e.push('PUBLIC_API_URL must be the public https:// address of the API.');
   if (!isPublicHttps(get('DASHBOARD_URL'))) e.push('DASHBOARD_URL must be the public https:// address of the dashboard.');
   const origins = get('CORS_ORIGINS').split(',').map((s) => s.trim()).filter(Boolean);

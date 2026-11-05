@@ -314,7 +314,7 @@ describe('the code base', () => {
   });
 
   it('never queries the pool directly, which would skip the company setting', () => {
-    expect(offenders(/getPool\(\)\.query\(/, ['/app.ts', '/server.ts'])).toEqual([]); // health checks: SELECT 1
+    expect(offenders(/getPool\(\)\.query\(/, ['/app.ts', '/server.ts', '/db/pool.ts'])).toEqual([]); // health checks, and setting up the login
   });
 });
 

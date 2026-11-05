@@ -4,7 +4,8 @@
  * payroll/legal record keeping. Photos are deleted only where photoDeletionAllowed() says so.
  * Each run is summarised in that company's audit log.
  */
-import { q } from '../../db/pool.js';
+import { asSystem, q, withOrg } from '../../db/pool.js';
+import { eachCompany } from './runner.js';
 import { audit } from '../../lib/audit.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { deleteObject } from '../../lib/storage.js';
@@ -13,11 +14,19 @@ import { getSettings, photoDeletionAllowed } from '../settings/settings.service.
 
 /** Runs retention for one company, or for every company when `orgId` is omitted. */
 export async function runRetention(actor: AuthUser | null = null, orgId?: string, now = new Date()) {
-  const orgs = orgId ? [orgId] : (await q<{ id: string }>('SELECT id FROM organizations')).map((o) => o.id);
+  if (orgId) return withOrg(orgId, () => runForOrg(orgId, actor, now));
   let last: Awaited<ReturnType<typeof runForOrg>> | null = null;
-  for (const id of orgs) last = await runForOrg(id, actor, now);
-  // Platform-wide housekeeping: expired refresh tokens.
-  if (!orgId) await q(`DELETE FROM refresh_tokens WHERE expires_at < $1::timestamptz - interval '7 days'`, [now]);
+  try {
+    await eachCompany(async (id) => {
+      last = await runForOrg(id, actor, now);
+    });
+  } finally {
+    // Platform-wide housekeeping: expired refresh tokens, and the job failure log.
+    await asSystem(async () => {
+      await q(`DELETE FROM refresh_tokens WHERE expires_at < $1::timestamptz - interval '7 days'`, [now]);
+      await q(`DELETE FROM job_failures WHERE at < $1::timestamptz - interval '30 days'`, [now]);
+    });
+  }
   return last;
 }
 

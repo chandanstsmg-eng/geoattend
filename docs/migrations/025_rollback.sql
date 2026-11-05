@@ -1,6 +1,7 @@
 -- Rollback of 025_company_isolation. Run by hand after a backup, with the API stopped: code from the
 -- same release expects the role and the policies. No rows change. After this, company isolation rests
--- on the application's own filters alone. The role stays, because other databases on the server may use it.
+-- on the application's own filters alone, and the API needs code from before this migration: the current
+-- code connects with the restricted login. The role stays, because other databases on the server may use it.
 BEGIN;
 DO $$
 DECLARE

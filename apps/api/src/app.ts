@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -9,6 +10,7 @@ import { logger } from './lib/logger.js';
 import { HttpError } from './lib/errors.js';
 import { buildOpenApi } from './lib/openapi.js';
 import { getPool } from './db/pool.js';
+import { jobHealth } from './modules/jobs/runner.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { meRouter } from './modules/employees/me.routes.js';
 import { employeesRouter } from './modules/employees/employees.routes.js';
@@ -105,6 +107,18 @@ export function createApp() {
       res.json({ status: 'ok', database: 'ok' });
     } catch {
       res.status(503).json({ status: 'degraded', database: 'unreachable' });
+    }
+  });
+
+  // For monitoring: job counts, nothing about any company. Absent unless OPS_TOKEN is set, and to anyone without it.
+  app.get('/health/jobs', async (req, res, next) => {
+    try {
+      const given = Buffer.from(req.headers.authorization ?? '');
+      const expected = Buffer.from(`Bearer ${config.opsToken}`);
+      if (!config.opsToken || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No such endpoint' } });
+      res.json(await jobHealth());
+    } catch (err) {
+      next(err);
     }
   });
 

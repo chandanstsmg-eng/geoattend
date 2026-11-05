@@ -40,7 +40,7 @@ The second layer exists for the day the first has a bug.
   ```
 
 - The API must connect directly or through a pooler in **session** mode. Transaction pooling (PgBouncer's default for many hosted databases) would mix up the per-connection company setting, and PgBouncer also refuses the startup option that pins connections to UTC.
-- A logical restore needs the role to exist first. `npm run db:restore` creates it. This has **not** been run end to end: the embedded database has no `pg_dump` or `pg_restore`, so `npm run db:backup` and `npm run db:restore` need the PostgreSQL client tools installed. `npm run db:backup:online` does not, and is what has been used and verified. Try a logical restore on the test server.
+- A logical restore needs the role to exist first. `npm run db:restore` creates it. This has **not** been run end to end: the embedded database has no `pg_dump` or `pg_restore`, so `npm run db:backup` and `npm run db:restore` need the PostgreSQL client tools installed. `npm run db:backup:online` does not, and is what has been used and verified. Try a logical restore on the test server. This has **not** been run end to end: the embedded database has no `pg_dump` or `pg_restore`, so `npm run db:backup` and `npm run db:restore` need the PostgreSQL client tools installed. `npm run db:backup:online` does not, and is what has been used and verified. Try a logical restore on the test server.
 
 ## Known limits
 

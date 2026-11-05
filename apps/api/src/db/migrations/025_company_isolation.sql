@@ -1,26 +1,24 @@
 -- Company isolation enforced by the database itself. Rollback: docs/migrations/025_rollback.sql.
--- No row is changed. Every request of a signed-in user runs as the role below with its company set,
--- so a query that forgets its company filter returns nothing from other companies instead of leaking,
--- and a write that points at another company's record is refused.
+-- No row is changed. Every signed-in request and every background job connects with the login below,
+-- with its company set, so a query that forgets its company filter returns nothing from other companies
+-- instead of leaking, and a write that points at another company's record is refused.
 --
--- The tables stay owned by the migration user, which is not subject to these policies: sign-in
--- (nobody is known yet) and background jobs (they serve every company) run that way.
+-- The tables stay owned by the migration user, which is not subject to these policies. Only sign-in
+-- (nobody is known yet) and choosing which companies a job visits use that login.
 --
 -- A NEW TABLE MUST BE ADDED HERE (or to a later migration): test/isolation.test.ts fails otherwise.
 
--- The role is shared by all databases of a server. It can never log in.
+-- The login is shared by all databases of a server. It is created without a password, so it cannot be
+-- used until one is set: by the API in development, by whoever runs the server in production. If the
+-- migration user may not create roles, an administrator creates it first (docs/COMPANY-ISOLATION.md).
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'geoattend_tenant') THEN
     BEGIN
-      CREATE ROLE geoattend_tenant NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+      CREATE ROLE geoattend_tenant LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
     EXCEPTION WHEN duplicate_object OR unique_violation THEN
       NULL; -- two databases migrating at the same moment
     END;
-  END IF;
-  -- The API must be allowed to become the role; superusers always are.
-  IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AND NOT pg_has_role(current_user, 'geoattend_tenant', 'MEMBER') THEN
-    EXECUTE format('GRANT geoattend_tenant TO %I', current_user);
   END IF;
 END $$;
 

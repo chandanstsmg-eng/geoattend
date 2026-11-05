@@ -6,10 +6,13 @@
 import { getPool, q } from '../../db/pool.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
+import { eachCompany, eachRecord, throwIfAny } from './runner.js';
 
 const WAIT_HOURS = 24;
 
-export async function sweepOverdueApprovals(now = new Date()) {
+export const sweepOverdueApprovals = (now = new Date()) => eachCompany(() => overdueForCompany(now));
+
+async function overdueForCompany(now: Date) {
   const cutoff = new Date(now.getTime() - WAIT_HOURS * 3600_000);
   const items = await q(
     `SELECT 'leave' AS kind, l.id, l.employee_id, u.full_name, l.created_at, 'a leave request' AS what FROM leave_requests l JOIN users u ON u.id = l.employee_id
@@ -26,7 +29,7 @@ export async function sweepOverdueApprovals(now = new Date()) {
   );
   if (!items.length) return;
   const outbox = new Outbox();
-  for (const it of items) {
+  const failures = await eachRecord(items, async (it) => {
     const hours = Math.round((now.getTime() - new Date(it.created_at).getTime()) / 3600_000);
     await notify(getPool(), outbox, {
       type: 'APPROVAL_OVERDUE',
@@ -36,6 +39,7 @@ export async function sweepOverdueApprovals(now = new Date()) {
       data: { kind: it.kind, id: it.id },
       dedupeKey: `overdue:${it.kind}:${it.id}`,
     });
-  }
+  });
   outbox.flush();
+  throwIfAny(failures);
 }
