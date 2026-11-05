@@ -36,7 +36,7 @@ git switch main                     # or return to the baseline completely
 
 **Development (any platform):** `npm run db:backup:online`
 
-Copies the running database into `data/backups/pg-online-<timestamp>/`, starts the copy on a separate port and compares row counts with the live database. The live server keeps running.
+Copies the running database into `data/backups/pg-online-<timestamp>/`, starts the copy on a separate port and compares row counts with the live database. The live server keeps running. The result and a checksum of every file go in the backup's `manifest.json`; a failure is recorded there and the command exits 1. `npm run db:backup:verify` checks backups against their manifests later. Backups made before this have no manifest and show as `NO_MANIFEST`: that means unproven, not bad.
 
 To restore one:
 

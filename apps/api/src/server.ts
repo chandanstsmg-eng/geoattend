@@ -33,7 +33,7 @@ async function main() {
   const server = app.listen(config.port, '0.0.0.0', () => {
     logger.info(`GeoAttend API on http://localhost:${config.port}  (docs: /api/docs)${config.demoMode ? '  — DEMO MODE: simulator enabled' : ''}`);
   });
-  const stopSweeper = startSweeper();
+  const stopSweeper = config.jobs.enabled ? startSweeper() : async () => undefined;
   const stopSample = sampleData ? startSampleHeartbeat() : () => undefined;
 
   // Built-in database watchdog: if the local PostgreSQL is stopped while the API runs
@@ -66,17 +66,20 @@ async function main() {
 
   const shutdown = async (signal: string) => {
     logger.info(`${signal} received — shutting down`);
-    stopSweeper();
     stopSample();
     // Let requests in flight finish; live streams and stuck clients are cut after 10 seconds.
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-      server.closeIdleConnections();
-      setTimeout(() => {
-        server.closeAllConnections();
-        resolve();
-      }, 10_000).unref();
-    });
+    // The job in hand gets the same chance, because the connections close after both.
+    await Promise.all([
+      stopSweeper(),
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeIdleConnections();
+        setTimeout(() => {
+          server.closeAllConnections();
+          resolve();
+        }, 10_000).unref();
+      }),
+    ]);
     await closePool();
     process.exit(0);
   };

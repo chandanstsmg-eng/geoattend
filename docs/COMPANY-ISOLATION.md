@@ -33,6 +33,7 @@ The second layer exists for the day the first has a bug.
 | `/api/v1/storage` upload and download | Authorised by a signed, short-lived token for one object, not a session |
 | Listing which companies a job should visit, job bookkeeping, removing expired sign-in tokens | They are not company data |
 | Stream re-checks (`recheckClients`) | Reads whether a signed-in user is still active |
+| The operations API and alerts | For whoever runs the platform, behind `OPS_TOKEN`; job records, counts and company names only |
 | Sample company heartbeat | Development only; never in production |
 | Migrations and scripts | They change the schema, or run by hand |
 

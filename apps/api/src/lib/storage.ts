@@ -14,7 +14,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from '../config.js';
 import { HttpError } from './errors.js';
@@ -193,6 +193,16 @@ export async function deleteObject(key: string) {
     return;
   }
   await fs.promises.rm(localPath(key), { force: true });
+}
+
+/** Throws unless photo storage can be reached: the bucket answers, or the folder can be written. */
+export async function checkStorage() {
+  if (config.storage.driver === 's3') {
+    await s3Client().send(new HeadBucketCommand({ Bucket: config.storage.s3Bucket }));
+    return;
+  }
+  fs.mkdirSync(config.storage.localDir, { recursive: true });
+  await fs.promises.access(config.storage.localDir, fs.constants.R_OK | fs.constants.W_OK);
 }
 
 export function requestOrigin(req: { protocol: string; get(name: string): string | undefined }) {

@@ -1,20 +1,24 @@
 /**
  * Daily summaries for owners who never open a laptop: at the company's chosen local
  * times, "who's in, who's missing, what needs me" goes to WhatsApp and e-mail. On the
- * 1st, last month's attendance summary (CSV) is e-mailed to the chosen recipients.
+ * 1st, last month's attendance summary (CSV) is e-mailed to the chosen recipients. If the
+ * company chose them, on Mondays last week's goes to those recipients, each supervisor gets
+ * their own sites, and each employee is told their own week in the app.
  * Each slot is claimed in digest_runs first, so it is sent at most once.
  */
-import nodemailer from 'nodemailer';
 import { DateTime } from 'luxon';
-import { one, q } from '../../db/pool.js';
-import { eachCompany } from '../jobs/runner.js';
+import { getPool, one, q } from '../../db/pool.js';
+import { eachCompany, eachRecord, throwIfAny } from '../jobs/runner.js';
 import { DEFAULT_TIMEZONE, dayEndSql, dayStartSql } from '../../lib/dates.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
+import { mailer } from '../../lib/mailer.js';
 import { toCsv } from '../../lib/csv.js';
 import { getSettings } from '../settings/settings.service.js';
 import { daySummary } from '../reports/insights.routes.js';
-import { monthlySummary } from '../reports/reports.routes.js';
+import { monthlySummary, periodSummary } from '../reports/reports.routes.js';
+import { notify } from '../notifications/notify.js';
+import { Outbox } from '../notifications/live-hub.js';
 
 /** Do not send a summary more than this long after its time (e.g. the server was down). */
 const LATE_LIMIT_MIN = 180;
@@ -38,6 +42,7 @@ export const senders = {
     const res = await fetch(`https://graph.facebook.com/v21.0/${config.whatsapp.phoneNumberId}/messages`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${config.whatsapp.token}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         to,
@@ -54,10 +59,10 @@ export const senders = {
   },
   async email(to: string[], subject: string, text: string, attachments: Array<{ filename: string; content: string }> = []): Promise<string> {
     if (!config.email.smtpUrl) {
-      logger.info({ to, subject }, 'SMTP not configured; summary e-mail logged instead');
+      logger.info({ recipients: to.length }, 'SMTP not configured; summary not e-mailed');
       return 'not configured (logged)';
     }
-    await nodemailer.createTransport(config.email.smtpUrl).sendMail({ from: config.email.from, to, subject, text, attachments });
+    await mailer().sendMail({ from: config.email.from, to, subject, text, attachments });
     return 'sent';
   },
 };
@@ -150,44 +155,115 @@ export async function sendDigest(orgId: string, d: Digest) {
 const companiesWithDigests = async () =>
   (await q(
     `SELECT DISTINCT s.org_id FROM application_settings s
-     WHERE s.key = 'digest' AND (jsonb_array_length(COALESCE(s.value->'whatsappNumbers', '[]')) > 0 OR jsonb_array_length(COALESCE(s.value->'emailRecipients', '[]')) > 0)`,
+     WHERE s.key = 'digest' AND (jsonb_array_length(COALESCE(s.value->'whatsappNumbers', '[]')) > 0 OR jsonb_array_length(COALESCE(s.value->'emailRecipients', '[]')) > 0
+       OR s.value->>'supervisorSummaries' = 'true' OR s.value->>'employeeSummaries' = 'true')`,
   )).map((r) => r.org_id as string);
 
 export const sweepDigests = (now = new Date()) => eachCompany((orgId) => digestsForCompany(orgId, now), companiesWithDigests);
 
+/** Claims a slot, produces it and records the result. A failure leaves the slot open for another try. */
+async function attempt(orgId: string, slot: string, produce: () => Promise<Record<string, string>>) {
+  if (!(await claim(orgId, slot))) return;
+  let results: Record<string, string>;
+  try {
+    results = await produce();
+  } catch (err) {
+    await q(`UPDATE digest_runs SET failed = true WHERE org_id = $1 AND slot = $2`, [orgId, slot]);
+    throw err;
+  }
+  await record(orgId, slot, results);
+}
+
+const SUMMARY_HEADERS = ['Employee ID', 'Employee', 'Workplace', 'Shifts', 'Present', 'Late', 'Paid leave', 'Unpaid leave', 'Holidays', 'Absent', 'Hours worked', 'Overtime hours', 'Left early', 'Pending days (not counted)', 'Pending hours (not counted)'];
+const summaryCsv = (rows: any[]) =>
+  toCsv(SUMMARY_HEADERS, rows.map((r) => [r.employee_code, r.full_name, r.workplace_name, r.scheduled, r.present, r.late, r.paid_leave, r.unpaid_leave, r.holidays, r.absent, (r.worked_minutes / 60).toFixed(2), (r.overtime_minutes / 60).toFixed(2), r.left_early, r.pending_days, (r.pending_minutes / 60).toFixed(2)]));
+
+const delivered = (to: string[], subject: string, text: string, filename: string, csv: string) =>
+  senders.email(to, subject, text, [{ filename, content: csv }]).catch((e: Error) => `failed: ${e.message}`);
+
+/** What an employee reads about their week. Pending days are named as not counted. */
+export function weekLine(r: any) {
+  const hours = (r.worked_minutes / 60).toFixed(1);
+  const pending = r.pending_days ? ` ${r.pending_days} day${r.pending_days === 1 ? '' : 's'} waiting for verification, not counted yet.` : '';
+  return `Last week: present ${r.present} of ${r.scheduled} days, ${hours} hours.${r.late ? ` Late ${r.late}.` : ''}${pending}`;
+}
+
 async function digestsForCompany(orgId: string, now: Date) {
-  {
-    {
-      const { digest } = await getSettings(orgId);
-      const org = await orgInfo(orgId);
-      const local = DateTime.fromJSDate(now, { zone: org.timezone ?? DEFAULT_TIMEZONE });
-      const date = local.toISODate()!;
-      for (const t of digest.times) {
-        const at = DateTime.fromISO(`${date}T${t}`, { zone: org.timezone ?? DEFAULT_TIMEZONE });
-        const late = local.diff(at, 'minutes').minutes;
-        if (late < 0 || late > LATE_LIMIT_MIN) continue;
-        const slot = `${date} ${t}`;
-        if (!(await claim(orgId, slot))) continue;
-        const d = await composeDigest(orgId, date, `${local.toFormat('ccc d LLL')}, ${t}`);
-        await record(orgId, slot, await sendDigest(orgId, d));
-      }
-      // Monthly report on the 1st, from 09:00 local, for the month that just ended.
-      if (digest.monthlyReport && digest.emailRecipients.length && local.day === 1 && local.hour >= 9) {
-        const month = local.minus({ months: 1 }).toFormat('yyyy-MM');
-        const slot = `monthly ${month}`;
-        if (await claim(orgId, slot)) {
-          const s = await monthlySummary(orgId, month, null, false);
-          const csv = toCsv(
-            ['Employee ID', 'Employee', 'Workplace', 'Shifts', 'Present', 'Late', 'Paid leave', 'Unpaid leave', 'Holidays', 'Absent', 'Hours worked', 'Overtime hours', 'Left early', 'Pending days (not counted)', 'Pending hours (not counted)'],
-            s.rows.map((r: any) => [r.employee_code, r.full_name, r.workplace_name, r.scheduled, r.present, r.late, r.paid_leave, r.unpaid_leave, r.holidays, r.absent, (r.worked_minutes / 60).toFixed(2), (r.overtime_minutes / 60).toFixed(2), r.left_early, r.pending_days, (r.pending_minutes / 60).toFixed(2)]),
-          );
-          const monthName = DateTime.fromISO(`${month}-01`).toFormat('LLLL yyyy');
-          const result = await senders
-            .email(digest.emailRecipients, `[GeoAttend] ${org.name} — attendance for ${monthName}`, `Attached: attendance summary for ${monthName} (${s.rows.length} employees).\n\nOpen the dashboard: ${config.dashboardUrl}`, [{ filename: `attendance_${month}.csv`, content: csv }])
-            .catch((e: Error) => `failed: ${e.message}`);
-          await record(orgId, slot, { email: result });
-        }
+  const { digest } = await getSettings(orgId);
+  const org = await orgInfo(orgId);
+  const zone = org.timezone ?? DEFAULT_TIMEZONE;
+  const local = DateTime.fromJSDate(now, { zone });
+  const date = local.toISODate()!;
+  const work: Array<() => Promise<unknown>> = [];
+
+  for (const t of digest.times) {
+    const late = local.diff(DateTime.fromISO(`${date}T${t}`, { zone }), 'minutes').minutes;
+    if (late < 0 || late > LATE_LIMIT_MIN) continue;
+    work.push(() => attempt(orgId, `${date} ${t}`, async () => sendDigest(orgId, await composeDigest(orgId, date, `${local.toFormat('ccc d LLL')}, ${t}`))));
+  }
+
+  // Monthly report from 09:00 local on the 1st, for the month that just ended. A server that was down
+  // on the 1st catches up by the 3rd; the claimed slot means it is still sent only once.
+  if (digest.monthlyReport && digest.emailRecipients.length && local.day <= 3 && (local.day > 1 || local.hour >= 9)) {
+    const month = local.minus({ months: 1 }).toFormat('yyyy-MM');
+    work.push(() =>
+      attempt(orgId, `monthly ${month}`, async () => {
+        const s = await monthlySummary(orgId, month, null, false);
+        const monthName = DateTime.fromISO(`${month}-01`).toFormat('LLLL yyyy');
+        return { email: await delivered(digest.emailRecipients, `[GeoAttend] ${org.name} — attendance for ${monthName}`, `Attached: attendance summary for ${monthName} (${s.rows.length} employees).\n\nOpen the dashboard: ${config.dashboardUrl}`, `attendance_${month}.csv`, summaryCsv(s.rows)) };
+      }),
+    );
+  }
+
+  // Weekly summaries from 09:00 local on Monday, for the Monday-to-Sunday week that just ended; catches up by Wednesday.
+  if (local.weekday <= 3 && (local.weekday > 1 || local.hour >= 9)) {
+    const monday = local.startOf('week').minus({ weeks: 1 });
+    const from = monday.toISODate()!;
+    const to = monday.plus({ days: 6 }).toISODate()!;
+    const label = `${monday.toFormat('d LLL')} to ${monday.plus({ days: 6 }).toFormat('d LLL yyyy')}`;
+    let summary: ReturnType<typeof periodSummary> | null = null;
+    const week = () => (summary ??= periodSummary(orgId, from, to, null, false)); // worked out once, and only if a slot needs it
+
+    if (digest.weeklyReport && digest.emailRecipients.length) {
+      work.push(() =>
+        attempt(orgId, `weekly ${from}`, async () => {
+          const s = await week();
+          return { email: await delivered(digest.emailRecipients, `[GeoAttend] ${org.name} — attendance for ${label}`, `Attached: attendance summary for ${label} (${s.rows.length} employees).\n\nOpen the dashboard: ${config.dashboardUrl}`, `attendance_${from}.csv`, summaryCsv(s.rows)) };
+        }),
+      );
+    }
+
+    if (digest.supervisorSummaries) {
+      const supervisors = await q(
+        `SELECT u.id, u.email, ap.site_ids FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id
+         WHERE u.org_id = $1 AND u.is_active AND NOT u.is_demo AND ap.access = 'SUPERVISOR' AND ap.notify_email AND cardinality(ap.site_ids) > 0`,
+        [orgId],
+      );
+      for (const sup of supervisors) {
+        work.push(() =>
+          attempt(orgId, `weekly ${from} supervisor ${sup.id}`, async () => {
+            const rows = (await week()).rows.filter((r: any) => sup.site_ids.includes(r.workplace_id)); // their own sites, nothing else
+            return { email: await delivered([sup.email], `[GeoAttend] Your sites — attendance for ${label}`, `Attached: attendance summary for your sites, ${label} (${rows.length} employees).\n\nOpen the dashboard: ${config.dashboardUrl}`, `attendance_${from}.csv`, summaryCsv(rows)) };
+          }),
+        );
       }
     }
+
+    if (digest.employeeSummaries) {
+      work.push(() =>
+        attempt(orgId, `weekly ${from} employees`, async () => {
+          const outbox = new Outbox();
+          const s = await week();
+          const failures = await eachRecord(s.rows, (r: any) =>
+            notify(getPool(), outbox, { type: 'WEEKLY_SUMMARY', severity: 'INFO', audience: 'EMPLOYEE', body: weekLine(r), employeeId: r.employee_id, data: { from, to }, dedupeKey: `weekly-summary:${r.employee_id}:${from}` }),
+          );
+          outbox.flush();
+          throwIfAny(failures);
+          return { employees: `${s.rows.length} told` };
+        }),
+      );
+    }
   }
+
+  throwIfAny(await eachRecord(work, (run) => run())); // one summary failing does not hold up the next
 }

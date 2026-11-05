@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -38,6 +37,7 @@ import { tasksRouter } from './modules/tasks/tasks.routes.js';
 import { broadcastsRouter, sosRouter } from './modules/sos/sos.routes.js';
 import { overtimeRouter } from './modules/overtime/overtime.routes.js';
 import { analyticsRouter } from './modules/reports/analytics.routes.js';
+import { hasOpsToken, opsRouter } from './modules/ops/ops.routes.js';
 
 export function createApp() {
   const app = express();
@@ -113,9 +113,7 @@ export function createApp() {
   // For monitoring: job counts, nothing about any company. Absent unless OPS_TOKEN is set, and to anyone without it.
   app.get('/health/jobs', async (req, res, next) => {
     try {
-      const given = Buffer.from(req.headers.authorization ?? '');
-      const expected = Buffer.from(`Bearer ${config.opsToken}`);
-      if (!config.opsToken || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No such endpoint' } });
+      if (!hasOpsToken(req)) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No such endpoint' } });
       res.json(await jobHealth());
     } catch (err) {
       next(err);
@@ -151,6 +149,7 @@ export function createApp() {
   app.use('/api/v1/broadcasts', broadcastsRouter);
   app.use('/api/v1/overtime', overtimeRouter);
   app.use('/api/v1/analytics', analyticsRouter);
+  app.use('/api/v1/ops', opsRouter);
   if (config.demoMode) app.use('/api/v1/demo', demoRouter);
 
   // The API map is for development; production does not publish it.

@@ -128,6 +128,12 @@ export const digestSchema = z.object({
   emailRecipients: z.array(z.email()).max(10),
   /** On the 1st, e-mail last month's summary (CSV) to the e-mail recipients. */
   monthlyReport: z.boolean(),
+  /** On Mondays, e-mail last week's summary (CSV) to the e-mail recipients. */
+  weeklyReport: z.boolean().optional(),
+  /** On Mondays, e-mail each supervisor last week's summary for their own sites. */
+  supervisorSummaries: z.boolean().optional(),
+  /** On Mondays, tell each employee their own week in the app. */
+  employeeSummaries: z.boolean().optional(),
 });
 
 export const settingsSchema = z.object({
@@ -215,7 +221,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Version 2: overtime (tracking after the shift, anywhere, until the employee ends it).
   privacy: { version: 2, controller: 'Your organisation (configure in Settings)', contact: 'hr@example.com', text: DEFAULT_PRIVACY_TEXT },
   workforce: { deviceBinding: 'ENFORCE', overtimeMinMinutes: 15, leftEarlyMinutes: 15, faceEnrollment: 'REQUIRED', supervisorAnnouncements: true, roundingMinutes: 0, weeklyRegularHours: 0, overtimeMultiplier: 1, keepMatchedPhotos: true },
-  digest: { times: ['10:00', '19:00'], whatsappNumbers: [], emailRecipients: [], monthlyReport: true },
+  digest: { times: ['10:00', '19:00'], whatsappNumbers: [], emailRecipients: [], monthlyReport: true, weeklyReport: false, supervisorSummaries: false, employeeSummaries: false },
   breaks: {
     types: [
       { key: 'LUNCH', label: 'Lunch', paid: false, maxMinutes: 45 },

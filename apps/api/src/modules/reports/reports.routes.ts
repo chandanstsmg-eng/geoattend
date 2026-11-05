@@ -104,8 +104,14 @@ export function workFlags(
  */
 export async function monthlySummary(orgId: string, month: string, workplaceId: string | null, includeSimulated: boolean) {
   const first = DateTime.fromISO(`${month}-01`);
+  return { month, ...(await periodSummary(orgId, first.toISODate()!, first.endOf('month').toISODate()!, workplaceId, includeSimulated)) };
+}
+
+/** The same summary for any run of days. */
+export async function periodSummary(orgId: string, from: string, until: string, workplaceId: string | null, includeSimulated: boolean) {
+  const first = DateTime.fromISO(from);
   const today = DateTime.fromISO(await defaultDate(orgId, workplaceId));
-  const last = DateTime.min(first.endOf('month').startOf('day'), today);
+  const last = DateTime.min(DateTime.fromISO(until), today);
   const totals = new Map<string, any>();
   for (let d = first; d <= last; d = d.plus({ days: 1 })) {
     const date = d.toISODate()!;
@@ -118,7 +124,7 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
       const r = shifts[0];
       let t = totals.get(employeeId);
       if (!t) {
-        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0, pending_days: 0, pending_minutes: 0 };
+        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_id: r.workplace_id, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0, pending_days: 0, pending_minutes: 0 };
         totals.set(employeeId, t);
       }
       t.scheduled++;
@@ -159,7 +165,7 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
       }
     }
   }
-  return { month, from: first.toISODate(), to, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
+  return { from: first.toISODate(), to, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
 }
 
 /** A stored time as it read on the wall at the workplace, for people reading an export. */

@@ -24,7 +24,7 @@ let A: Company;
 let B: Company;
 
 /** Tables with no company in them, which requests must not be able to touch at all. */
-const NOT_TENANT_DATA = ['schema_migrations', 'job_state', 'job_failures'];
+const NOT_TENANT_DATA = ['schema_migrations', 'job_state', 'job_failures', 'job_runs', 'ops_alerts'];
 
 async function company(name: string, orgId?: string) {
   const org = orgId ?? (await one(`INSERT INTO organizations (name) VALUES ($1) RETURNING id`, [name])).id;

@@ -276,6 +276,9 @@ export default function SettingsPage() {
                           <Input value={v.emailRecipients.join(', ')} onChange={(e) => setV({ ...v, emailRecipients: list(e.target.value) })} />
                         </Field>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.monthlyReport} onChange={(e) => setV({ ...v, monthlyReport: e.target.checked })} /> On the 1st, e-mail last month’s attendance (CSV)</label>
+                        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.weeklyReport} onChange={(e) => setV({ ...v, weeklyReport: e.target.checked })} /> On Mondays, e-mail last week’s attendance (CSV)</label>
+                        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.supervisorSummaries} onChange={(e) => setV({ ...v, supervisorSummaries: e.target.checked })} /> On Mondays, e-mail each supervisor last week’s attendance for their own sites</label>
+                        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.employeeSummaries} onChange={(e) => setV({ ...v, employeeSummaries: e.target.checked })} /> On Mondays, tell each employee their own week in the app</label>
                       </div>
                     );
                   }}

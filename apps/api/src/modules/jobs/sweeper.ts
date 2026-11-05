@@ -12,11 +12,12 @@
  *  - unfinished attendance submissions → back to ATTENDANCE_READY
  *  - notification deliveries with retry
  *  - retention (hourly)
+ *  - backups still proven (hourly), and alerts for whoever runs the server (each minute)
  */
 import { TRACKING_STATES } from '@geoattend/shared';
 import { logger } from '../../lib/logger.js';
 import { q, tx } from '../../db/pool.js';
-import { eachCompany, eachRecord, recoverInterruptedJobs, runJob, throwIfAny } from './runner.js';
+import { eachCompany, eachRecord, jobsStopping, recoverInterruptedJobs, resumeJobs, runJob, stopJobs, throwIfAny } from './runner.js';
 import { config } from '../../config.js';
 import { getSettings } from '../settings/settings.service.js';
 import { notify } from '../notifications/notify.js';
@@ -31,6 +32,7 @@ import { sweepNoShows } from './no-show.js';
 import { sweepOverdueApprovals } from './escalation.js';
 import { sweepDigests } from '../digest/digest.js';
 import { sweepFaceChecks } from '../faces/faces.js';
+import { checkBackups, evaluateAlerts } from '../ops/alerts.js';
 
 const mins = (ms: number) => Math.round(ms / 60000);
 
@@ -209,25 +211,53 @@ export const JOBS: Array<{ name: string; run: (now: Date) => Promise<unknown>; e
   { name: 'stale-intents', run: sweepStaleIntents },
   { name: 'deliveries', run: () => processDeliveries() },
   { name: 'retention', run: () => runRetention(), everyMs: 3600_000 },
+  { name: 'backup-check', run: checkBackups, everyMs: 3600_000 },
+  { name: 'ops-alerts', run: evaluateAlerts, everyMs: 60_000 },
 ];
 
-let running = false;
+let current: Promise<void> | null = null;
 
-export async function sweepOnce(now = new Date()) {
-  if (running) return;
-  running = true;
+async function sweep(now: Date) {
   try {
     await recoverInterruptedJobs();
-    for (const job of JOBS) await runJob(job.name, () => job.run(now), { everyMs: job.everyMs });
+    for (const job of JOBS) {
+      if (jobsStopping()) break;
+      await runJob(job.name, () => job.run(now), { everyMs: job.everyMs });
+    }
   } catch (err) {
     logger.error({ err }, 'sweeper run failed'); // the job tables are unreachable: the database is down
-  } finally {
-    running = false;
   }
 }
 
+export async function sweepOnce(now = new Date()) {
+  if (current || jobsStopping()) return;
+  current = sweep(now).finally(() => {
+    current = null;
+  });
+  await current;
+}
+
+/** Waits for the sweep in progress, for at most `waitMs`. Left unfinished, its lease runs out and it is recovered. */
+export async function drainJobs(waitMs = 8_000) {
+  stopJobs();
+  let timer: NodeJS.Timeout | undefined;
+  const finished = await Promise.race([
+    (current ?? Promise.resolve()).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), waitMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (!finished) logger.warn('a background job did not stop in time; it will be recovered when its lease runs out');
+  return finished;
+}
+
 export function startSweeper() {
+  resumeJobs();
   const timer = setInterval(() => void sweepOnce(), config.sweeperIntervalMs);
   timer.unref();
-  return () => clearInterval(timer);
+  return async () => {
+    clearInterval(timer);
+    await drainJobs();
+  };
 }

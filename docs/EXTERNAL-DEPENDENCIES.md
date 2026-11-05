@@ -7,7 +7,8 @@ What GeoAttend needs from outside this repository before launch, and what has re
 | Cloud S3 bucket | **Never tested.** Only a local SeaweedFS server | A bucket, credentials, a test run |
 | Docker deployment | **Never built.** Docker is not installed on the development machine. `docker/db-init` has never run | A machine with Docker |
 | Real PostgreSQL server | **Not tried.** Non-superuser logins are tested on the embedded server only; a logical dump and restore has never run | A test server with client tools |
-| Job alerts | `/health/jobs` exists; **nothing is watching it** | A monitoring service and someone to alert |
+| Job alerts | Alerts, `/api/v1/ops/health` and the webhook sender exist, tested against a local server only; **nothing is watching them** | A monitoring service polling `/api/v1/ops/health`, an `ALERT_WEBHOOK_URL` or `OPS_ALERT_EMAILS`, and someone to alert |
+| Backup monitoring | Works for backups made by this project's scripts | `BACKUP_DIR` on the server, a scheduled backup that writes a manifest, and copies off the machine. A provider's backups need the provider's own alerts |
 | Google Maps | **Key never exercised.** Local test port was refused by the key's referrer rule | A production key restricted to the real domain |
 | GitHub | **No remote.** CI file exists and has never run on GitHub | A private repository |
 | Android phones | **No real phone tested** | Xiaomi, Oppo and Vivo phones, plus the Phase D test plan |
