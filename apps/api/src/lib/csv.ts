@@ -24,9 +24,10 @@ export function dateChunks(from: string, to: string, days = 14) {
 
 /**
  * Writes a CSV as it is produced, one date range at a time, so a long export never sits in memory.
- * Returns the number of rows sent. Stops if the client has gone.
+ * Stops if the client has gone. `record` runs with the row count before the response ends, so a
+ * download never completes without its audit entry; if it fails, the connection is cut instead.
  */
-export async function streamCsv(res: { write(s: string): boolean; once(e: string, f: () => void): unknown; writableEnded?: boolean; destroyed?: boolean; end(): unknown }, headers: string[], pieces: Array<() => Promise<unknown[][]>>) {
+export async function streamCsv(res: { write(s: string): boolean; once(e: string, f: () => void): unknown; writableEnded?: boolean; destroyed?: boolean; end(): unknown }, headers: string[], pieces: Array<() => Promise<unknown[][]>>, record?: (rows: number) => Promise<unknown>) {
   const line = (r: unknown[]) => `${r.map(csvCell).join(',')}\r\n`;
   const write = (s: string) => (res.write(s) ? Promise.resolve() : new Promise<void>((resolve) => { res.once('drain', resolve); res.once('close', resolve); }));
   let rows = 0;
@@ -37,6 +38,7 @@ export async function streamCsv(res: { write(s: string): boolean; once(e: string
     rows += batch.length;
     if (batch.length) await write(batch.map(line).join(''));
   }
+  await record?.(rows);
   res.end();
   return rows;
 }
