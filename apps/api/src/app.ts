@@ -172,6 +172,12 @@ export function createApp() {
 
   // Errors: never leak internals.
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+    // An export that fails part way has already sent its headers. Cutting the connection tells the
+    // browser the download failed, instead of leaving a shorter file that looks complete.
+    if (res.headersSent) {
+      logger.error({ err, url: req.url?.split('?')[0] }, 'response failed part way through');
+      return res.destroy();
+    }
     if (err instanceof HttpError) {
       return res.status(err.status).json({ error: { code: err.code, message: err.message, ...(err.details !== undefined ? { details: err.details } : {}) } });
     }

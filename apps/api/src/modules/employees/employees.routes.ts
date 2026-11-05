@@ -122,6 +122,9 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       /** A supervisor's id, or "none" for workers nobody supervises yet. */
       supervisorId: z.union([z.uuid(), z.literal('none')]).optional(),
       status: z.enum(['active', 'inactive', 'all']).default('active'),
+      /** Optional: without it the whole list comes back, as the dashboard's pickers expect. */
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+      offset: z.coerce.number().int().min(0).default(0),
     }),
     handler: async ({ query, user }) =>
       q(
@@ -131,8 +134,8 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
            AND ($2::uuid IS NULL OR wa.workplace_id = $2)
            AND ($3 = 'all' OR ($3 = 'active') = u.is_active)
            AND ($6::text IS NULL OR ($6 = 'none' AND ep.supervisor_id IS NULL) OR ep.supervisor_id::text = $6)
-         ORDER BY u.full_name`,
-        [query.search?.trim() || null, query.workplaceId ?? null, query.status, user.orgId, user.sites, query.supervisorId ?? null],
+         ORDER BY u.full_name, u.id LIMIT $7 OFFSET $8`,
+        [query.search?.trim() || null, query.workplaceId ?? null, query.status, user.orgId, user.sites, query.supervisorId ?? null, query.limit ?? null, query.offset],
       ),
   }),
   route({

@@ -73,9 +73,13 @@ async function noShowsForCompany(now: Date) {
     const onLeave = await approvedLeaveOn(date, list.map((d) => d.employeeId));
     const holidays = await holidaysOn(date, [...new Set(list.map((d) => d.workplaceId))]);
     const absent = list.filter((d) => !done.has(`${d.employeeId}|${d.shiftId}|${d.shiftDate}`) && !onLeave.has(d.employeeId) && !holidays.has(d.workplaceId));
-    failures.push(...await eachRecord(absent, async (d) => {
+    // Most of these were alerted on an earlier sweep: one query finds them, instead of an attempt each.
+    const keyOf = (d: Candidate) => `${d.employeeId}:${d.shiftId}:${d.shiftDate}`;
+    const sent = new Set((await q(`SELECT dedupe_key FROM notifications WHERE dedupe_key = ANY($1)`, [absent.flatMap((d) => [`no-show:${keyOf(d)}`, `no-show-employee:${keyOf(d)}`])])).map((r) => r.dedupe_key));
+    const unsent = absent.filter((d) => !sent.has(`no-show:${keyOf(d)}`) || !sent.has(`no-show-employee:${keyOf(d)}`));
+    failures.push(...await eachRecord(unsent, async (d) => {
       const lateBy = Math.round((now.getTime() - d.startsAt.getTime()) / 60_000);
-      const key = `${d.employeeId}:${d.shiftId}:${d.shiftDate}`;
+      const key = keyOf(d);
       await notify(getPool(), outbox, {
         type: 'NO_SHOW',
         severity: 'WARNING',

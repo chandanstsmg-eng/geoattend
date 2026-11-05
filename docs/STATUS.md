@@ -152,6 +152,9 @@ On branch `phase-d-mobile`. Audit: [MOBILE-AUDIT.md](MOBILE-AUDIT.md). Phone tes
 ## Dates and company isolation (5 Nov 2026)
 
 - Business dates follow [TIME-AND-DATES.md](TIME-AND-DATES.md). Every use of the database's own date and of the server's zone is gone, on the API, the dashboard and the phone. Before this, "today" stayed on yesterday until 05:30 IST in about twenty places.
-- Row-level security now backs up the application's company filters: [COMPANY-ISOLATION.md](COMPANY-ISOLATION.md). A request runs as a restricted role with its company set.
+- Row-level security now backs up the application's company filters: [COMPANY-ISOLATION.md](COMPANY-ISOLATION.md). Requests and background jobs connect with a separate restricted login. Production refuses to start with an unsafe login.
+- Background jobs run one company at a time, and one failure no longer stops the rest. Leases, back-off, failure records and crash recovery: [BACKGROUND-JOBS.md](BACKGROUND-JOBS.md).
+- Load tested with 10 companies, 10,000 employees and 810,000 attendance records. Missing indexes had made the main reports time out; they do not now. The attendance list is paged before it is computed, long CSVs are streamed, and `/employees` honours a limit.
+- Each test run has its own throw-away database server and connects as a non-superuser, like production.
 - Records waiting for verification no longer count. `attendance_work` leaves them out, so hours, overtime and everything built on them are official figures; `attendance_work_all` keeps them for the separate pending hours. `hours.csv` and `overtime.csv` keep their agreed columns and official figures only; pending hours are on the hours and monthly reports, in `attendance.csv`, `monthly.csv` and `shift.csv`.
 - Physical Android testing stays NOT VERIFIED. The APK from Phase D must not be distributed: its server address is a placeholder.

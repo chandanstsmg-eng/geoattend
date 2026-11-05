@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
-import { dayEndSql, dayStartSql, orgToday } from '../../lib/dates.js';
+import { dayEndSql, dayStartSql, orgTimezoneSql, orgToday } from '../../lib/dates.js';
 import { isoDate, mount, route } from '../../lib/http.js';
-import { toCsv } from '../../lib/csv.js';
+import { dateChunks, streamCsv, toCsv } from '../../lib/csv.js';
 import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
@@ -165,11 +165,22 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
 /** A stored time as it read on the wall at the workplace, for people reading an export. */
 const wallClock = (v: Date | string | null | undefined, zone: string) => (v ? DateTime.fromJSDate(new Date(v), { zone }).toFormat('yyyy-MM-dd HH:mm') : '');
 
-function sendCsv(res: any, name: string, csv: string) {
+function csvHeaders(res: any, name: string) {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   res.setHeader('Cache-Control', 'no-store');
+}
+
+function sendCsv(res: any, name: string, csv: string) {
+  csvHeaders(res, name);
   res.send(csv);
+}
+
+/** Only the period that holds records is read, however wide the range asked for. */
+async function narrowedRange(sql: string, params: unknown[], from: string, to: string) {
+  const r = await one(sql, params);
+  if (!r?.first) return null;
+  return { from: r.first > from ? r.first as string : from, to: r.last < to ? r.last as string : to };
 }
 
 const rangeQuery = z.object({
@@ -187,7 +198,12 @@ const hoursQuery = z.object({
   employeeId: z.uuid().optional(),
   supervisorId: z.uuid().optional(),
   includeSimulated: z.enum(['true', 'false']).default('false'),
+  /** Optional: a page of the list. Totals are always worked out over the whole period first. */
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).default(0),
 });
+
+const pageOf = <T>(rows: T[], q0: { limit?: number; offset?: number }) => (q0.limit ? rows.slice(q0.offset ?? 0, (q0.offset ?? 0) + q0.limit) : rows);
 
 /** Someone listed only for pending time has no official figures, so is left out of the two official exports. */
 const official = (r: { days: number }) => r.days > 0;
@@ -212,7 +228,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     query: hoursQuery,
     handler: async ({ query, user }) => {
       const { rows, policy } = await hoursFor(user, query);
-      return { from: query.from, to: query.to, policy, rows };
+      return { from: query.from, to: query.to, policy, total: rows.length, rows: pageOf(rows, query) };
     },
   }),
   route({
@@ -319,8 +335,11 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     summary: 'Per-employee month totals: present, late, leave, holidays, absent, hours, overtime',
     access: 'admin',
     ownerOnly: true,
-    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('true') }),
-    handler: async ({ query, user }) => monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true'),
+    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('true'), limit: z.coerce.number().int().min(1).max(500).optional(), offset: z.coerce.number().int().min(0).default(0) }),
+    handler: async ({ query, user }) => {
+      const s = await monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true');
+      return { ...s, total: s.rows.length, rows: pageOf(s.rows, query) };
+    },
   }),
   route({
     method: 'get',
@@ -371,7 +390,8 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     raw: true,
     query: rangeQuery,
     handler: async ({ query, res, user, req }) => {
-      const rows = await q(
+      const { workforce } = await getSettings(user.orgId);
+      const rowsFor = (from: string, to: string) => q(
         `SELECT ar.shift_date, ep.employee_code, u.full_name, w.name AS workplace, sh.name AS shift, ar.recorded_at, ar.verification_status,
                 ar.is_late, ar.late_by_minutes, ROUND(ar.evidence_distance_m::numeric, 1) AS distance_m, ROUND(ar.evidence_accuracy_m::numeric, 1) AS accuracy_m,
                 ar.radius_m_at_record, array_to_string(ar.risk_flags, ' ') AS risk_flags,
@@ -383,22 +403,23 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN tracking_sessions s ON s.id = ar.session_id
          LEFT JOIN ${workJoin()}
          WHERE u.org_id = $6 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4::uuid IS NULL OR ar.employee_id = $4) AND ($5 OR NOT ar.is_simulated)
-         ORDER BY ar.shift_date, w.name, sh.name, u.full_name`,
-        [query.from, query.to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
+         ORDER BY ar.shift_date, w.name, sh.name, u.full_name, ar.id`,
+        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
       );
-      await audit({ actor: user, action: 'report.export', resourceType: 'attendance_csv', after: { ...query, rows: rows.length }, req });
-      const { workforce } = await getSettings(user.orgId);
-      sendCsv(
+      const range = await narrowedRange(
+        `SELECT min(ar.shift_date) AS first, max(ar.shift_date) AS last FROM attendance_records ar JOIN users u ON u.id = ar.employee_id WHERE u.org_id = $3 AND ar.shift_date BETWEEN $1 AND $2`,
+        [query.from, query.to, user.orgId], query.from, query.to,
+      );
+      csvHeaders(res, `attendance_${query.from}_${query.to}.csv`);
+      const sent = await streamCsv(
         res,
-        `attendance_${query.from}_${query.to}.csv`,
-        toCsv(
           ['Date', 'Employee ID', 'Employee', 'Workplace', 'Shift', 'Recorded at (UTC, server)', 'Verification', 'Late', 'Late by (min)', 'Distance (m)', 'GPS accuracy (m)', 'Radius (m)', 'Risk flags', 'Away (min)', 'Prolonged absences', 'Shift ended at (UTC)', 'Worked (min)', 'Overtime worked (min)', 'Overtime status', 'Overtime approved (min)', 'Left early', 'Simulated', 'Recorded at (local)', 'Shift ended at (local)', 'Pending worked (min, not counted)'],
-          rows.map((r) => {
+        (range ? dateChunks(range.from, range.to) : []).map((c) => async () => (await rowsFor(c.from, c.to)).map((r) => {
             const f = workFlags(r, workforce);
             return [r.shift_date, r.employee_code, r.full_name, r.workplace, r.shift, r.recorded_at, r.verification_status, r.is_late ? 'yes' : 'no', r.late_by_minutes, r.distance_m, r.accuracy_m, r.radius_m_at_record, r.risk_flags, r.away_minutes, r.prolonged_absences, r.shift_ended_at, r.worked_minutes ?? '', r.overtime_claimed_minutes || '', r.overtime_status ?? '', f.overtime_minutes || '', f.left_early ? 'yes' : '', r.is_simulated ? 'SIMULATED' : '', wallClock(r.recorded_at, r.timezone), wallClock(r.shift_ended_at, r.timezone), r.pending_minutes ?? ''];
-          }),
-        ),
+          })),
       );
+      await audit({ actor: user, action: 'report.export', resourceType: 'attendance_csv', after: { ...query, rows: sent }, req });
     },
   }),
   route({
@@ -410,23 +431,26 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     raw: true,
     query: rangeQuery,
     handler: async ({ query, res, user, req }) => {
-      const rows = await q(
+      const rowsFor = (from: string, to: string) => q(
         `SELECT a.started_at, a.ended_at, a.status, a.threshold_minutes, a.prolonged_at, a.tracking_gap, ep.employee_code, u.full_name, w.name AS workplace,
                 ROUND(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at)) / 60)::int AS minutes, a.is_simulated, w.timezone
          FROM absence_intervals a JOIN users u ON u.id = a.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id JOIN workplaces w ON w.id = a.workplace_id
          WHERE u.org_id = $6 AND a.started_at >= ${dayStartSql('$1', '$6')} AND a.started_at < ${dayEndSql('$2', '$6')} AND ($3::uuid IS NULL OR a.workplace_id = $3) AND ($4::uuid IS NULL OR a.employee_id = $4) AND ($5 OR NOT a.is_simulated)
-         ORDER BY a.started_at`,
-        [query.from, query.to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
+         ORDER BY a.started_at, a.id`,
+        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
       );
-      await audit({ actor: user, action: 'report.export', resourceType: 'absences_csv', after: { ...query, rows: rows.length }, req });
-      sendCsv(
+      const range = await narrowedRange(
+        `SELECT (min(a.started_at) AT TIME ZONE ${orgTimezoneSql('$3')})::date AS first, (max(a.started_at) AT TIME ZONE ${orgTimezoneSql('$3')})::date AS last
+         FROM absence_intervals a JOIN users u ON u.id = a.employee_id WHERE u.org_id = $3 AND a.started_at >= ${dayStartSql('$1', '$3')} AND a.started_at < ${dayEndSql('$2', '$3')}`,
+        [query.from, query.to, user.orgId], query.from, query.to,
+      );
+      csvHeaders(res, `absences_${query.from}_${query.to}.csv`);
+      const sent = await streamCsv(
         res,
-        `absences_${query.from}_${query.to}.csv`,
-        toCsv(
           ['Employee ID', 'Employee', 'Workplace', 'Departed (UTC)', 'Returned / closed (UTC)', 'Status', 'Duration (min)', 'Threshold (min)', 'Prolonged at (UTC)', 'Tracking gap during absence', 'Simulated', 'Departed (local)', 'Returned / closed (local)'],
-          rows.map((r) => [r.employee_code, r.full_name, r.workplace, r.started_at, r.ended_at, r.status, r.minutes, r.threshold_minutes, r.prolonged_at, r.tracking_gap ? 'yes' : 'no', r.is_simulated ? 'SIMULATED' : '', wallClock(r.started_at, r.timezone), wallClock(r.ended_at, r.timezone)]),
-        ),
+        (range ? dateChunks(range.from, range.to) : []).map((c) => async () => (await rowsFor(c.from, c.to)).map((r) => [r.employee_code, r.full_name, r.workplace, r.started_at, r.ended_at, r.status, r.minutes, r.threshold_minutes, r.prolonged_at, r.tracking_gap ? 'yes' : 'no', r.is_simulated ? 'SIMULATED' : '', wallClock(r.started_at, r.timezone), wallClock(r.ended_at, r.timezone)])),
       );
+      await audit({ actor: user, action: 'report.export', resourceType: 'absences_csv', after: { ...query, rows: sent }, req });
     },
   }),
   route({

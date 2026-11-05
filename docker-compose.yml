@@ -17,8 +17,12 @@ services:
       POSTGRES_DB: geoattend
       POSTGRES_USER: geoattend
       POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env}
+      # Used once, by docker/db-init, to create the two logins the API connects with.
+      PG_OWNER_PASSWORD: ${PG_OWNER_PASSWORD:?set PG_OWNER_PASSWORD in .env}
+      PG_TENANT_PASSWORD: ${PG_TENANT_PASSWORD:?set PG_TENANT_PASSWORD in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U geoattend -d geoattend']
       interval: 5s
@@ -74,7 +78,9 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://geoattend:${PG_PASSWORD}@db:5432/geoattend
+      # The API refuses to start with a superuser or with one login for both.
+      DATABASE_URL: postgresql://geoattend_owner:${PG_OWNER_PASSWORD}@db:5432/geoattend
+      APP_DATABASE_URL: postgresql://geoattend_tenant:${PG_TENANT_PASSWORD}@db:5432/geoattend
       STORAGE_DRIVER: s3
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       # The address phones and browsers reach the bucket on (through your TLS proxy); links are signed for it.

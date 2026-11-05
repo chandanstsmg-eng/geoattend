@@ -79,14 +79,17 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       const rows = await q(
         // Check-out, worked time and approved overtime come from the same attendance_work view the
         // hours reports use, so the list and the exports always agree.
-        `SELECT ar.*, u.full_name, ep.employee_code, w.name AS workplace_name, sh.name AS shift_name,
+        // The page is chosen first, so worked time is only computed for the rows on it. The id breaks ties,
+        // so a record can never appear on two pages or on none.
+        `WITH page AS (SELECT ar.id FROM attendance_records ar WHERE ${where} ORDER BY ar.shift_date DESC, ar.recorded_at DESC, ar.id DESC LIMIT $10 OFFSET $11)
+         SELECT ar.*, u.full_name, ep.employee_code, w.name AS workplace_name, sh.name AS shift_name,
                 p.status AS photo_status, p.deleted_at AS photo_deleted_at,
                 s.ended_at AS checked_out_at, aw.worked_minutes, aw.overtime_minutes, aw.overtime_status, aw.in_progress, aw.break_minutes, ${pendingMinutes()} AS pending_minutes,
                 (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())) AS incomplete
-         FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
+         FROM page JOIN attendance_records ar ON ar.id = page.id JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN attendance_photos p ON p.id = ar.photo_id
          LEFT JOIN tracking_sessions s ON s.id = ar.session_id LEFT JOIN ${workJoin()}
-         WHERE ${where} ORDER BY ar.shift_date DESC, ar.recorded_at DESC LIMIT $10 OFFSET $11`,
+         ORDER BY ar.shift_date DESC, ar.recorded_at DESC, ar.id DESC`,
         [...params, query.limit, query.offset],
       );
       // Exception counts over every record matching the filters (not just this page). A record can
