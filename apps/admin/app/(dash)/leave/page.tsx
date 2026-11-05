@@ -137,7 +137,7 @@ export default function LeavePage() {
 /** Holidays for all workplaces or one. Weekly offs are the days a shift does not run (set on Shifts). */
 function Holidays() {
   const qc = useQueryClient();
-  const year = new Date().getFullYear();
+  const year = Number(todayISO().slice(0, 4));
   const wps = useWorkplaces();
   const list = useQuery({ queryKey: ['holidays', year], queryFn: () => get<any[]>(`/holidays${qs({ from: todayISO(), to: `${year + 1}-12-31` })}`) });
   const [f, setF] = useState({ date: '', name: '', workplaceId: '' });

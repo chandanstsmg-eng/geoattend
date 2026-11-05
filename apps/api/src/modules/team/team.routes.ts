@@ -12,6 +12,7 @@ import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { hashPassword } from '../../lib/password.js';
 import { revokeAllForUser } from '../../lib/auth.js';
 import { audit } from '../../lib/audit.js';
+import { emailTaken } from '../../lib/tenancy.js';
 
 const SELECT = `
   SELECT u.id, u.email, u.full_name, u.is_active, u.last_login_at, ap.access, ap.site_ids, ap.away_until, ap.phone,
@@ -68,7 +69,7 @@ mount(teamRouter, '/api/v1/team', 'team', [
       const password = tempPassword();
       const hash = await hashPassword(password);
       const id = await tx(async (db) => {
-        if (await one('SELECT 1 FROM users WHERE lower(email) = lower($1)', [body.email], db)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
+        if (await emailTaken(body.email)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
         const u = await one(`INSERT INTO users (email, password_hash, role, full_name, must_change_password, org_id) VALUES ($1,$2,'ADMIN',$3,true,$4) RETURNING id`, [body.email, hash, body.fullName, user.orgId], db);
         await q(`INSERT INTO administrator_profiles (user_id, phone, access, site_ids) VALUES ($1,$2,$3,$4)`, [u.id, body.phone || null, body.access, body.access === 'OWNER' ? [] : body.siteIds], db);
         await audit({ actor: user, action: 'team.add', resourceType: 'user', resourceId: u.id, after: { ...body }, req }, db);

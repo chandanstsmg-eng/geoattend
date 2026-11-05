@@ -77,6 +77,7 @@ export default function HistoryScreen() {
             {a.evidence_accuracy_m != null ? ` (±${Math.round(a.evidence_accuracy_m)} m)` : ''}
             {a.away_minutes > 0 ? ` · away ${a.away_minutes} min` : ''}
           </Muted>
+          {a.pending_minutes != null ? <Muted>{hm(a.pending_minutes)} waiting for your manager. Not counted yet.</Muted> : null}
           {a.worked_minutes != null ? (
             <View style={st.worked}>
               <Text style={st.workedText}>

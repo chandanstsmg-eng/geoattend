@@ -12,6 +12,7 @@ import { assertPayrollMonthOpen } from '../payroll/guard.js';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { getPool, one, q, tx } from '../../db/pool.js';
+import { orgToday } from '../../lib/dates.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
@@ -162,6 +163,8 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
         await assertPayrollMonthOpen(user.orgId, before.shift_date, db);
         if (!before.ended_at) throw conflict('OVERTIME_RUNNING', 'This overtime is still running. It can be approved once the employee ends it.');
         if (body.decision === 'APPROVE' && !(await one(`SELECT ${overtimeCounts()} AS counts FROM overtime_entries o WHERE o.id = $1`, [params.id], db)).counts) {
+          const status = (await one(`SELECT ar.verification_status AS s FROM attendance_records ar WHERE ar.id = $1`, [before.attendance_id], db))?.s;
+          if (status === 'PENDING_VERIFICATION') throw conflict('ATTENDANCE_PENDING', "This shift's attendance is still waiting for verification. Verify it first, then decide the overtime.");
           throw conflict('ATTENDANCE_VOIDED', "This shift's attendance was voided, so its overtime cannot be approved.");
         }
         const minutes = body.decision === 'APPROVE' ? (body.minutes ?? before.claimed_minutes) : null;
@@ -251,7 +254,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
     access: 'employee',
     query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM').optional() }),
     handler: async ({ query, user }) => {
-      const month = query.month ?? DateTime.now().toFormat('yyyy-MM');
+      const month = query.month ?? (await orgToday(user.orgId)).slice(0, 7);
       const rows = await q(
         `SELECT o.id, o.shift_date, o.note, o.started_at, o.ended_at, CASE WHEN o.ended_at IS NULL THEN 'RUNNING' ELSE o.status END AS status,
                 o.approved_minutes, o.decision_note, o.decided_at, ${CLAIMED} AS claimed_minutes, sh.name AS shift_name, w.name AS workplace_name, ${overtimeCounts()} AS counts

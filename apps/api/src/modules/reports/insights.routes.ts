@@ -6,19 +6,20 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
+import { dayStartSql, orgToday } from '../../lib/dates.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { isoDate, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
-import { roster, withLeaveAndNoShow } from './reports.routes.js';
-import { employeeSite, siteFilter } from '../../lib/tenancy.js';
+import { attended, isPending, roster, withLeaveAndNoShow } from './reports.routes.js';
+import { attendanceCounts, employeeSite, siteFilter } from '../../lib/tenancy.js';
 
 const DAYS = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
 
 /** The day at a glance, plus everything that still needs a decision. */
 export async function daySummary(orgId: string, date: string) {
   const rows = await withLeaveAndNoShow(orgId, date, await roster(orgId, date, null, true));
-  const today = DateTime.now().toISODate()!;
+  const today = await orgToday(orgId);
   const past = date < today;
   const absent = rows.filter((r) => !r.attendance_id && !r.on_leave && !r.holiday && (past || r.no_show || r.ended_at));
   const openSessions = rows.filter((r) => r.session_id && !r.ended_at);
@@ -30,7 +31,8 @@ export async function daySummary(orgId: string, date: string) {
   );
   const counts = {
     scheduled: rows.length,
-    present: rows.filter((r) => r.attendance_id).length,
+    present: rows.filter(attended).length,
+    pendingVerification: rows.filter(isPending).length,
     late: rows.filter((r) => r.is_late).length,
     onLeave: rows.filter((r) => r.on_leave && !r.attendance_id).length,
     holiday: rows.filter((r) => r.holiday && !r.attendance_id).length,
@@ -42,6 +44,7 @@ export async function daySummary(orgId: string, date: string) {
     ...absent.map((r) => ({ type: 'ABSENT', employeeId: r.employee_id, name: r.full_name, text: `${r.full_name}: no attendance and no leave (${r.shift_name})` })),
     ...reviews.map((r) => ({ type: r.kind, employeeId: null, name: r.full_name, text: `${r.full_name}: ${r.kind === 'DISPUTE' ? 'disputes a record' : 'asks to be marked present'} — “${r.reason}”` })),
     ...openSessions.map((r) => ({ type: 'OPEN_SESSION', employeeId: r.employee_id, name: r.full_name, text: `${r.full_name}: shift still running` })),
+    ...rows.filter(isPending).map((r) => ({ type: 'PENDING_VERIFICATION', employeeId: r.employee_id, name: r.full_name, text: `${r.full_name}: record sent late from the phone, waiting for verification` })),
   ];
   return { date, counts, toDecide };
 }
@@ -49,7 +52,7 @@ export async function daySummary(orgId: string, date: string) {
 /** Past days of `month` (YYYY-MM) that had rostered shifts but were never confirmed (Daily close). */
 export async function unconfirmedDays(orgId: string, month: string) {
   const first = DateTime.fromISO(`${month}-01`);
-  const last = DateTime.min(first.endOf('month').startOf('day'), DateTime.now().minus({ days: 1 }).startOf('day'));
+  const last = DateTime.min(first.endOf('month').startOf('day'), DateTime.fromISO(await orgToday(orgId)).minus({ days: 1 }));
   const closed = new Set((await q(`SELECT close_date FROM day_closes WHERE org_id = $1 AND close_date BETWEEN $2 AND $3`, [orgId, first.toISODate(), last.toISODate()])).map((r) => r.close_date));
   const days: string[] = [];
   for (let d = first; d <= last; d = d.plus({ days: 1 })) {
@@ -81,7 +84,7 @@ mount(insightsRouter, '/api/v1/insights', 'insights', [
     ownerOnly: true,
     body: z.object({ date: isoDate, note: z.string().trim().max(500).optional() }),
     handler: async ({ body, user, req }) => {
-      if (body.date > DateTime.now().toISODate()!) throw badRequest('FUTURE_DAY', 'You can only confirm today or earlier days.');
+      if (body.date > (await orgToday(user.orgId))) throw badRequest('FUTURE_DAY', 'You can only confirm today or earlier days.');
       const summary = await daySummary(user.orgId, body.date);
       const row = await one(
         `INSERT INTO day_closes (org_id, close_date, closed_by, note, summary) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING *`,
@@ -123,18 +126,18 @@ mount(insightsRouter, '/api/v1/insights', 'insights', [
     query: z.object({ days: z.coerce.number().int().min(7).max(90).default(30) }),
     handler: async ({ query, user }) => {
       const { workforce } = await getSettings(user.orgId);
-      const since = DateTime.now().minus({ days: query.days }).toISODate()!;
+      const since = DateTime.fromISO(await orgToday(user.orgId)).minus({ days: query.days }).toISODate()!;
       const rows = await q(
         `WITH emp AS (SELECT u.id, u.full_name, ep.employee_code FROM users u JOIN employee_profiles ep ON ep.user_id = u.id
                       WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND u.is_active AND ${siteFilter(employeeSite('u.id'), '$4')})
          SELECT e.id, e.full_name, e.employee_code,
-           (SELECT count(*)::int FROM attendance_records ar WHERE ar.employee_id = e.id AND ar.is_late AND ar.shift_date >= $2 AND ar.verification_status <> 'VOIDED') AS late,
-           (SELECT array_agg(EXTRACT(ISODOW FROM ar.shift_date)::int) FROM attendance_records ar WHERE ar.employee_id = e.id AND ar.is_late AND ar.shift_date >= $2 AND ar.verification_status <> 'VOIDED') AS late_days,
-           (SELECT count(*)::int FROM notifications n WHERE n.employee_id = e.id AND n.audience = 'ADMIN' AND n.type = 'NO_SHOW' AND n.created_at >= $2::date) AS no_shows,
-           (SELECT count(*)::int FROM absence_intervals a WHERE a.employee_id = e.id AND a.prolonged_at IS NOT NULL AND a.started_at >= $2::date) AS prolonged,
-           (SELECT count(*)::int FROM notifications n WHERE n.employee_id = e.id AND n.type = 'TRACKING_INTERRUPTED' AND n.created_at >= $2::date) AS interrupted,
+           (SELECT count(*)::int FROM attendance_records ar WHERE ar.employee_id = e.id AND ar.is_late AND ar.shift_date >= $2 AND ${attendanceCounts()}) AS late,
+           (SELECT array_agg(EXTRACT(ISODOW FROM ar.shift_date)::int) FROM attendance_records ar WHERE ar.employee_id = e.id AND ar.is_late AND ar.shift_date >= $2 AND ${attendanceCounts()}) AS late_days,
+           (SELECT count(*)::int FROM notifications n WHERE n.employee_id = e.id AND n.audience = 'ADMIN' AND n.type = 'NO_SHOW' AND n.created_at >= ${dayStartSql('$2', '$1')}) AS no_shows,
+           (SELECT count(*)::int FROM absence_intervals a WHERE a.employee_id = e.id AND a.prolonged_at IS NOT NULL AND a.started_at >= ${dayStartSql('$2', '$1')}) AS prolonged,
+           (SELECT count(*)::int FROM notifications n WHERE n.employee_id = e.id AND n.type = 'TRACKING_INTERRUPTED' AND n.created_at >= ${dayStartSql('$2', '$1')}) AS interrupted,
            (SELECT count(*)::int FROM attendance_work aw WHERE aw.employee_id = e.id AND aw.shift_date >= $2 AND aw.ended_early_minutes >= $3) AS left_early,
-           (SELECT count(*)::int FROM notifications n WHERE n.employee_id = e.id AND n.type IN ('MOCK_LOCATION_FLAGGED', 'SHARED_DEVICE', 'FACE_MISMATCH') AND n.created_at >= $2::date) AS integrity
+           (SELECT count(*)::int FROM notifications n WHERE n.employee_id = e.id AND n.type IN ('MOCK_LOCATION_FLAGGED', 'SHARED_DEVICE', 'FACE_MISMATCH') AND n.created_at >= ${dayStartSql('$2', '$1')}) AS integrity
          FROM emp e`,
         [user.orgId, since, workforce.leftEarlyMinutes > 0 ? workforce.leftEarlyMinutes : 1e6, user.sites], // 0 = "left early" flag switched off
       );

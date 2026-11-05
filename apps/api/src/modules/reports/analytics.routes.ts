@@ -19,6 +19,8 @@
  *   expected           rostered shifts on past days and today, excluding approved leave and holidays
  *                      (today: only shifts with an outcome — checked in, no-show or over)
  *   attendanceRate     shifts with attendance ÷ expected shifts (null when nothing was expected)
+ *   pending            records waiting for verification: left out of present, expected, hours and
+ *                      overtime alike, and shown on their own until a person decides
  *   previous           the same summary for the equally long period just before `from`
  *                      (only with compare=true; never estimated)
  *   todayStatus        each employee rostered today counted once: on time, late, not checked in yet,
@@ -34,8 +36,9 @@ import { isoDate, mount, route } from '../../lib/http.js';
 import { employeeSite, overtimeCounts, siteFilter, SUPERVISOR_SITES } from '../../lib/tenancy.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { getSettings } from '../settings/settings.service.js';
-import { defaultDate, roster, withLeaveAndNoShow } from './reports.routes.js';
-import { computeHours, loadWorkRecords, splitRecords } from './hours.js';
+import { attended, defaultDate, isPending, roster, withLeaveAndNoShow } from './reports.routes.js';
+import { computeHours, loadPendingHours, loadWorkRecords, splitRecords } from './hours.js';
+import { dayEndSql } from '../../lib/dates.js';
 
 const MAX_TREND_DAYS = 62;
 const ACTIVITY_TYPES = [
@@ -54,7 +57,7 @@ export const dashboardQuery = z.object({
   compare: z.enum(['true', 'false']).default('false'),
 });
 
-type DayOutcome = { date: string; scheduled: number; expected: number; present: number; late: number; absent: number; leave: number; incomplete: number };
+type DayOutcome = { date: string; scheduled: number; expected: number; present: number; pending: number; late: number; absent: number; leave: number; incomplete: number };
 
 /** One day's roster outcome. Past days: no attendance = absent; today: only no-shows and finished shifts. */
 function dayOutcome(rows: any[], date: string, today: string): DayOutcome {
@@ -62,8 +65,9 @@ function dayOutcome(rows: any[], date: string, today: string): DayOutcome {
     date,
     scheduled: rows.length,
     // Today, a shift only counts once it has an outcome — one that has not started yet is not missed.
-    expected: rows.filter((r) => !r.on_leave && !r.holiday && (date < today || r.attendance_id || r.no_show || r.ended_at)).length,
-    present: rows.filter((r) => r.attendance_id).length,
+    expected: rows.filter((r) => !isPending(r) && !r.on_leave && !r.holiday && (date < today || r.attendance_id || r.no_show || r.ended_at)).length,
+    present: rows.filter(attended).length,
+    pending: rows.filter(isPending).length,
     late: rows.filter((r) => r.is_late).length,
     absent: rows.filter((r) => !r.attendance_id && !r.on_leave && !r.holiday && (date < today || r.no_show || r.ended_at)).length,
     leave: rows.filter((r) => r.on_leave && !r.attendance_id).length,
@@ -84,6 +88,7 @@ function summarize(days: DayOutcome[], split: Array<{ total: number; overtime: n
     late: sum('late'),
     onTime: present - sum('late'),
     absent: sum('absent'),
+    pending: sum('pending'),
     attendanceRate: expected ? Math.min(1, present / expected) : null,
     punctualityRate: present ? (present - sum('late')) / present : null,
     totalMinutes,
@@ -171,7 +176,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     const rows = await dayRows(date);
     if (date === today) todayRows = rows;
     for (const r of rows) {
-      if (r.on_leave || r.holiday) continue;
+      if (r.on_leave || r.holiday || isPending(r)) continue;
       inc(expectedByWp, r.workplace_id);
       if (r.attendance_id) inc(presentByWp, r.workplace_id);
       if (r.is_late) inc(lateByWp, r.workplace_id);
@@ -226,7 +231,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
 
   const totalMinutes = split.reduce((n, r) => n + r.total, 0);
   const overtimeMinutes = split.reduce((n, r) => n + r.overtime, 0);
-  const summary = { from: days[0] ?? from, to: trendTo, ...summarize(trend, split) };
+  const pendingMinutes = (await loadPendingHours(user, { from, to, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
+  const summary = { from: days[0] ?? from, to: trendTo, ...summarize(trend, split), pendingMinutes };
 
   // The equally long period just before, judged by exactly the same rules (opt-in: it doubles the work).
   let previous: (typeof summary) | null = null;
@@ -236,16 +242,18 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     const pFrom = DateTime.fromISO(pTo).minus({ days: len - 1 }).toISODate()!;
     const pDays: DayOutcome[] = [];
     for (const date of isoDays(pFrom, pTo)) pDays.push(dayOutcome(await dayRows(date), date, today));
-    previous = { from: pFrom, to: pTo, ...summarize(pDays, splitRecords(await workFor(pFrom, pTo), settings.workforce, pFrom, pTo)) };
+    const pPending = (await loadPendingHours(user, { from: pFrom, to: pTo, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
+    previous = { from: pFrom, to: pTo, ...summarize(pDays, splitRecords(await workFor(pFrom, pTo), settings.workforce, pFrom, pTo)), pendingMinutes: pPending };
   }
 
   // Each employee rostered today counted once, in the most advanced state of their shifts.
   const byEmpToday = new Map<string, any[]>();
   for (const r of todayRows) byEmpToday.set(r.employee_id, [...(byEmpToday.get(r.employee_id) ?? []), r]);
-  const breakdown = { onTime: 0, late: 0, notCheckedIn: 0, absent: 0, onLeave: 0 };
+  const breakdown = { onTime: 0, late: 0, notCheckedIn: 0, absent: 0, onLeave: 0, pendingVerification: 0 };
   for (const rows of byEmpToday.values()) {
-    const att = rows.filter((r) => r.attendance_id);
+    const att = rows.filter(attended);
     if (att.length) att.some((r) => r.is_late) ? breakdown.late++ : breakdown.onTime++;
+    else if (rows.some(isPending)) breakdown.pendingVerification++;
     else if (rows.every((r) => r.on_leave || r.holiday)) breakdown.onLeave++;
     else if (rows.some((r) => !r.on_leave && !r.holiday && (r.no_show || r.ended_at))) breakdown.absent++;
     else breakdown.notCheckedIn++;
@@ -350,7 +358,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     `SELECT n.id, n.type, n.severity, n.title, n.body, n.created_at, n.employee_id, u.full_name AS employee_name, w.name AS workplace_name, n.is_simulated
      FROM notifications n LEFT JOIN users u ON u.id = n.employee_id LEFT JOIN workplaces w ON w.id = n.workplace_id
      WHERE n.audience = 'ADMIN' AND n.org_id = $1 AND n.type = ANY($6::text[]) AND ${inScope(`COALESCE(n.workplace_id, ${employeeSite('n.employee_id')})`)}
-       AND ($5 OR NOT n.is_simulated) AND n.created_at < $7::date + 1 AND ($8::uuid IS NULL OR n.employee_id = $8)
+       AND ($5 OR NOT n.is_simulated) AND n.created_at < ${dayEndSql('$7', '$1')} AND ($8::uuid IS NULL OR n.employee_id = $8)
      ORDER BY n.created_at DESC LIMIT 25`,
     [...P, ACTIVITY_TYPES, to, emp],
   );

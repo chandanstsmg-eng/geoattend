@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/lib/api';
 import { Select } from './ui';
+import { daysAgoISO, todayISO } from '@/lib/format';
 
 export function useWorkplaces() {
   return useQuery({ queryKey: ['workplaces'], queryFn: () => get<any[]>('/workplaces') });
@@ -30,14 +31,19 @@ export function SupervisorSelect({ value, onChange, allLabel = 'All supervisors'
   );
 }
 
-const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+/** First and last day of the month before a business date, from the calendar date alone. */
+const previousMonth = (today: string) => {
+  const last = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1, 0));
+  const to = last.toISOString().slice(0, 10);
+  return { from: `${to.slice(0, 7)}-01`, to };
+};
 export const RANGE_PRESETS = [
-  { key: 'today', label: 'Today', range: () => ({ from: iso(new Date()), to: iso(new Date()) }) },
-  { key: '7d', label: 'Last 7 days', range: () => ({ from: iso(new Date(Date.now() - 6 * 86400_000)), to: iso(new Date()) }) },
-  { key: '14d', label: 'Last 14 days', range: () => ({ from: iso(new Date(Date.now() - 13 * 86400_000)), to: iso(new Date()) }) },
-  { key: '30d', label: 'Last 30 days', range: () => ({ from: iso(new Date(Date.now() - 29 * 86400_000)), to: iso(new Date()) }) },
-  { key: 'month', label: 'This month', range: () => { const n = new Date(); return { from: iso(new Date(n.getFullYear(), n.getMonth(), 1)), to: iso(n) }; } },
-  { key: 'lastMonth', label: 'Last month', range: () => { const n = new Date(); return { from: iso(new Date(n.getFullYear(), n.getMonth() - 1, 1)), to: iso(new Date(n.getFullYear(), n.getMonth(), 0)) }; } },
+  { key: 'today', label: 'Today', range: () => ({ from: todayISO(), to: todayISO() }) },
+  { key: '7d', label: 'Last 7 days', range: () => ({ from: daysAgoISO(6), to: todayISO() }) },
+  { key: '14d', label: 'Last 14 days', range: () => ({ from: daysAgoISO(13), to: todayISO() }) },
+  { key: '30d', label: 'Last 30 days', range: () => ({ from: daysAgoISO(29), to: todayISO() }) },
+  { key: 'month', label: 'This month', range: () => ({ from: `${todayISO().slice(0, 7)}-01`, to: todayISO() }) },
+  { key: 'lastMonth', label: 'Last month', range: () => previousMonth(todayISO()) },
 ] as const;
 
 export type DateRangeValue = { preset: string; from: string; to: string };

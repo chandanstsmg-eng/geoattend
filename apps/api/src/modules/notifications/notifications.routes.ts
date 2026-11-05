@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { NOTIFICATION_TYPES } from '@geoattend/shared';
 import { one, q } from '../../db/pool.js';
+import { dayEndSql, dayStartSql } from '../../lib/dates.js';
 import { config } from '../../config.js';
 import { idParams, isoDate, mount, paging, route } from '../../lib/http.js';
 import { addClient } from './live-hub.js';
@@ -41,7 +42,7 @@ mount(notificationsRouter, '/api/v1/notifications', 'notifications', [
     handler: async ({ query, user }) => {
       // $9 = company, $10 = supervisor's sites; limit/offset follow.
       const where = `n.audience = 'ADMIN' AND n.org_id = $9 AND ${notificationSites('$10')} AND ($1::text IS NULL OR n.type = $1) AND ($2::text IS NULL OR n.severity = $2) AND ($3::uuid IS NULL OR n.employee_id = $3)
-        AND ($4::uuid IS NULL OR n.workplace_id = $4) AND ($5::date IS NULL OR n.created_at >= $5::date) AND ($6::date IS NULL OR n.created_at < $6::date + 1)
+        AND ($4::uuid IS NULL OR n.workplace_id = $4) AND ($5::date IS NULL OR n.created_at >= ${dayStartSql('$5', '$9')}) AND ($6::date IS NULL OR n.created_at < ${dayEndSql('$6', '$9')})
         AND ($7::boolean IS NULL OR (nr.user_id IS NULL) = $7)`;
       const params = [query.type ?? null, query.severity ?? null, query.employeeId ?? null, query.workplaceId ?? null, query.from ?? null, query.to ?? null, query.unread === undefined ? null : query.unread === 'true', user.id, user.orgId, user.sites];
       const items = await q(

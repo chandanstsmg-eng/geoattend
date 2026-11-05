@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { Banner, Body, Button, Card, ErrorState, H2, Loading, Muted, Row, Screen } from '../../components/ui';
 import { errorMessage } from '../../lib/api/client';
-import { fmtDate, fmtDateTime, fmtDays, fmtTime } from '../../lib/format';
+import { fmtDate, fmtDateTime, fmtDays, fmtTime, localISODate } from '../../lib/format';
 import { startShift } from '../../lib/start-shift';
 import { useAssignment, useStatus } from '../../lib/hooks';
 
@@ -26,7 +26,7 @@ export default function ShiftDetailsScreen() {
   const open = statusQ.data && statusQ.data.session.shiftId === shift.id ? statusQ.data : null;
   const cur = shift.current;
   // The roster entry covering today (else the next one): who manages it and what to work on.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   const range = shift.ranges.find((r) => String(r.from).slice(0, 10) <= today && (!r.to || String(r.to).slice(0, 10) >= today)) ?? shift.ranges.find((r) => String(r.from).slice(0, 10) > today);
 
   return (

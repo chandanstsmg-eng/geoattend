@@ -18,6 +18,9 @@
  *   overtime = approved overtime + weekly excess
  *   regular  = total − overtime
  * Days = distinct work dates (the shift's local start date, so an overnight shift is one day).
+ *
+ * A record waiting for verification is not in any of these figures. Its time is reported apart as
+ * pending_minutes until a person approves the record, which moves it into the totals.
  */
 import { DateTime } from 'luxon';
 import { q } from '../../db/pool.js';
@@ -56,6 +59,9 @@ export interface EmployeeHours {
   scheduled_minutes: number;
   incomplete: number;
   unmeasured: number;
+  /** Time on records waiting for verification. Not part of any total above. */
+  pending_minutes: number;
+  pending_records: number;
 }
 
 export const roundTo = (m: number, step: number) => (step > 0 ? Math.round(m / step) * step : m);
@@ -90,7 +96,7 @@ export function computeHours(records: WorkRecord[], policy: HoursPolicy, from: s
   for (const r of splitRecords(records, policy, from, to)) {
     let t = by.get(r.employee_id);
     if (!t) {
-      t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code ?? null, days: 0, total_minutes: 0, regular_minutes: 0, overtime_minutes: 0, scheduled_minutes: 0, incomplete: 0, unmeasured: 0, dates: new Set() };
+      t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code ?? null, days: 0, total_minutes: 0, regular_minutes: 0, overtime_minutes: 0, scheduled_minutes: 0, incomplete: 0, unmeasured: 0, pending_minutes: 0, pending_records: 0, dates: new Set() };
       by.set(r.employee_id, t);
     }
     t.dates.add(r.shift_date);
@@ -104,6 +110,26 @@ export function computeHours(records: WorkRecord[], policy: HoursPolicy, from: s
   return [...by.values()]
     .map(({ dates, ...t }) => ({ ...t, days: dates.size }))
     .sort((a, b) => a.full_name.localeCompare(b.full_name) || a.employee_id.localeCompare(b.employee_id));
+}
+
+export interface PendingHours {
+  employee_id: string;
+  full_name: string;
+  employee_code: string | null;
+  minutes: number;
+  records: number;
+}
+
+/** Adds pending time to per-employee totals; someone with only pending records appears with official figures of 0. */
+export function withPendingHours(rows: EmployeeHours[], pending: PendingHours[]): EmployeeHours[] {
+  const by = new Map(rows.map((r) => [r.employee_id, { ...r }]));
+  for (const p of pending) {
+    const row = by.get(p.employee_id) ?? { employee_id: p.employee_id, full_name: p.full_name, employee_code: p.employee_code, days: 0, total_minutes: 0, regular_minutes: 0, overtime_minutes: 0, scheduled_minutes: 0, incomplete: 0, unmeasured: 0, pending_minutes: 0, pending_records: 0 };
+    row.pending_minutes = p.minutes;
+    row.pending_records = p.records;
+    by.set(p.employee_id, row);
+  }
+  return [...by.values()].sort((a, b) => a.full_name.localeCompare(b.full_name) || a.employee_id.localeCompare(b.employee_id));
 }
 
 /** Hours with two decimals, from minutes (for CSV and tables). */
@@ -123,6 +149,23 @@ export interface RecordFilter {
  * where the work happened (the attendance workplace), like sessions on the overview: a worker
  * rostered at another site counts for that site's supervisor.
  */
+export async function loadPendingHours(user: Pick<AuthUser, 'orgId' | 'sites'>, f: RecordFilter): Promise<PendingHours[]> {
+  return q(
+    `SELECT ar.employee_id, u.full_name, ep.employee_code, COALESCE(SUM(aw.worked_minutes), 0)::int AS minutes, count(*)::int AS records
+     FROM attendance_records ar
+     JOIN attendance_work_all aw ON aw.attendance_id = ar.id
+     JOIN users u ON u.id = ar.employee_id
+     LEFT JOIN employee_profiles ep ON ep.user_id = u.id
+     WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+       AND ar.shift_date BETWEEN $3::date AND $4::date
+       AND ($5::uuid IS NULL OR ar.workplace_id = $5) AND ($6::uuid IS NULL OR ar.employee_id = $6)
+       AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
+       AND ($8 OR (NOT ar.is_simulated AND NOT u.is_demo))
+     GROUP BY ar.employee_id, u.full_name, ep.employee_code`,
+    [user.orgId, user.sites, f.from, f.to, f.workplaceId ?? null, f.employeeId ?? null, f.supervisorId ?? null, !!f.includeSimulated],
+  );
+}
+
 export async function loadWorkRecords(user: Pick<AuthUser, 'orgId' | 'sites'>, f: RecordFilter): Promise<WorkRecord[]> {
   const start = weekOf(f.from);
   const rows = await q(

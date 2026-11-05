@@ -211,6 +211,11 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
                           </span>
                         )}
                       </div>
+                    ) : r.pending_minutes != null ? (
+                      <div className="flex flex-col items-start">
+                        <span className="text-amber-800">{minutes(r.pending_minutes)}</span>
+                        <span className="text-xs text-amber-800">pending, not counted</span>
+                      </div>
                     ) : (
                       <span className="text-gray-400" aria-label="None">—</span>
                     )}

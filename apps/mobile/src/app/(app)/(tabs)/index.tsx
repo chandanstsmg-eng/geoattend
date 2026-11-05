@@ -14,7 +14,7 @@ import { Badge, Banner, Body, Button, Card, DemoBadge, ErrorState, H2, Loading, 
 import { errorMessage } from '../../../lib/api/client';
 import type { ShiftView } from '../../../lib/api/types';
 import { useAuth } from '../../../lib/auth';
-import { fmtDate, fmtDays, fmtTime } from '../../../lib/format';
+import { fmtDate, fmtDays, fmtTime, localISODate } from '../../../lib/format';
 import { useAssignment, useStatus, useTrackingSnapshot } from '../../../lib/hooks';
 import { colors, font, space } from '../../../lib/theme';
 import { startShift } from '../../../lib/start-shift';
@@ -216,7 +216,7 @@ function MyRules({ shift, radiusM }: { shift: ShiftView; radiusM: number }) {
 
 /** "30 Oct", "30 Oct – 5 Nov" or "from 30 Oct" for the rostered dates that matter now; null when open-ended from the past. */
 function rosterDates(shift: ShiftView): string | null {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   const r = (shift.ranges ?? []).filter((x) => !x.to || x.to >= today).sort((x, y) => x.from.localeCompare(y.from))[0];
   if (!r) return null;
   if (r.to === r.from) return fmtDate(r.from);

@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { config } from '../src/config.js';
 import { embeddedBinary, ensureDatabase } from '../src/db/postgres.js';
-import { clientEnvironment, prepareRestoreTarget } from '../src/db/restore-target.js';
+import { clientEnvironment, ensureTenantRole, prepareRestoreTarget } from '../src/db/restore-target.js';
 
 const [file, target] = process.argv.slice(2);
 if (!file || !target) {
@@ -17,6 +17,7 @@ if (!file || !target) {
 try {
   const liveUrl = await ensureDatabase();
   const url = await prepareRestoreTarget(liveUrl, target, { production: config.isProduction, confirm: process.env.RESTORE_CONFIRM });
+  await ensureTenantRole(url);
   const pgRestore = config.externalDatabaseUrl ? 'pg_restore' : await embeddedBinary('pg_restore');
   const client = clientEnvironment(url);
   execFileSync(pgRestore, ['--no-owner', '--exit-on-error', `--dbname=${client.url}`, file], { stdio: 'inherit', windowsHide: true, env: { ...process.env, PGPASSWORD: client.password } });

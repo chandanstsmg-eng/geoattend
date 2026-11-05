@@ -46,7 +46,7 @@ const createBody = shiftBody.extend({ arrivalGraceMinutes: shiftBody.shape.arriv
 const SELECT = `
   SELECT s.*, w.name AS workplace_name,
     (SELECT count(DISTINCT esa.employee_id)::int FROM employee_shift_assignments esa
-     WHERE esa.shift_id = s.id AND esa.effective_from <= CURRENT_DATE AND (esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE)) AS employee_count
+     WHERE esa.shift_id = s.id AND esa.effective_from <= (now() AT TIME ZONE s.timezone)::date AND (esa.effective_to IS NULL OR esa.effective_to >= (now() AT TIME ZONE s.timezone)::date)) AS employee_count
   FROM shifts s JOIN workplaces w ON w.id = s.workplace_id`;
 
 /** Keeps the definition being replaced for the days up to yesterday, so editing a shift never changes past days. A second edit the same day has nothing new to keep. */

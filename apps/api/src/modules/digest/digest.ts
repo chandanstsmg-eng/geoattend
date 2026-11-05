@@ -7,6 +7,7 @@
 import nodemailer from 'nodemailer';
 import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
+import { DEFAULT_TIMEZONE, dayEndSql, dayStartSql } from '../../lib/dates.js';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
 import { toCsv } from '../../lib/csv.js';
@@ -80,13 +81,14 @@ export async function composeDigest(orgId: string, date: string, when: string): 
     [orgId],
   );
   const alerts = await one(
-    `SELECT count(*)::int AS n FROM notifications WHERE org_id = $1 AND audience = 'ADMIN' AND severity = 'CRITICAL' AND created_at >= $2::date`,
+    `SELECT count(*)::int AS n FROM notifications WHERE org_id = $1 AND audience = 'ADMIN' AND severity = 'CRITICAL' AND created_at >= ${dayStartSql('$2', '$1')} AND created_at < ${dayEndSql('$2', '$1')}`,
     [orgId, date],
   );
   const names = (l: string[]) => (l.length ? ` (${l.slice(0, 5).join(', ')}${l.length > 5 ? ` +${l.length - 5}` : ''})` : '');
   const parts = [
     c.scheduled ? `Present ${c.present}/${c.scheduled}` : 'No shifts scheduled',
     c.late ? `Late ${c.late}` : null,
+    c.pendingVerification ? `Waiting for verification ${c.pendingVerification}` : null,
     c.onLeave ? `On leave ${c.onLeave}` : null,
     c.holiday ? `Holiday ${c.holiday}` : null,
     c.absent ? `Not in ${c.absent}${names(missing)}` : null,
@@ -136,10 +138,10 @@ export async function sweepDigests(now = new Date()) {
     try {
       const { digest } = await getSettings(orgId);
       const org = await orgInfo(orgId);
-      const local = DateTime.fromJSDate(now, { zone: org.timezone ?? 'UTC' });
+      const local = DateTime.fromJSDate(now, { zone: org.timezone ?? DEFAULT_TIMEZONE });
       const date = local.toISODate()!;
       for (const t of digest.times) {
-        const at = DateTime.fromISO(`${date}T${t}`, { zone: org.timezone ?? 'UTC' });
+        const at = DateTime.fromISO(`${date}T${t}`, { zone: org.timezone ?? DEFAULT_TIMEZONE });
         const late = local.diff(at, 'minutes').minutes;
         if (late < 0 || late > LATE_LIMIT_MIN) continue;
         const slot = `${date} ${t}`;
@@ -154,8 +156,8 @@ export async function sweepDigests(now = new Date()) {
         if (await claim(orgId, slot)) {
           const s = await monthlySummary(orgId, month, null, false);
           const csv = toCsv(
-            ['Employee ID', 'Employee', 'Workplace', 'Shifts', 'Present', 'Late', 'Paid leave', 'Unpaid leave', 'Holidays', 'Absent', 'Hours worked', 'Overtime hours', 'Left early'],
-            s.rows.map((r: any) => [r.employee_code, r.full_name, r.workplace_name, r.scheduled, r.present, r.late, r.paid_leave, r.unpaid_leave, r.holidays, r.absent, (r.worked_minutes / 60).toFixed(2), (r.overtime_minutes / 60).toFixed(2), r.left_early]),
+            ['Employee ID', 'Employee', 'Workplace', 'Shifts', 'Present', 'Late', 'Paid leave', 'Unpaid leave', 'Holidays', 'Absent', 'Hours worked', 'Overtime hours', 'Left early', 'Pending days (not counted)', 'Pending hours (not counted)'],
+            s.rows.map((r: any) => [r.employee_code, r.full_name, r.workplace_name, r.scheduled, r.present, r.late, r.paid_leave, r.unpaid_leave, r.holidays, r.absent, (r.worked_minutes / 60).toFixed(2), (r.overtime_minutes / 60).toFixed(2), r.left_early, r.pending_days, (r.pending_minutes / 60).toFixed(2)]),
           );
           const monthName = DateTime.fromISO(`${month}-01`).toFormat('LLLL yyyy');
           const result = await senders

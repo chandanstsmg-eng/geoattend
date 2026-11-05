@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { LEAVE_STATUSES, LEAVE_TYPES, LEAVE_TYPE_LABELS } from '@geoattend/shared';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
+import { orgToday } from '../../lib/dates.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
@@ -41,12 +42,12 @@ function fmtRange(start: string, end: string) {
 }
 
 /** Shared checks for a new leave request; returns the dates as ISO strings. */
-async function validate(employeeId: string, body: z.infer<typeof leaveBody>, db: Queryable, opts: { allowPastDays: number }) {
+async function validate(employeeId: string, body: z.infer<typeof leaveBody>, db: Queryable, opts: { allowPastDays: number; orgId: string }) {
   if (body.endDate < body.startDate) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
   if (body.halfDay && body.startDate !== body.endDate) throw badRequest('BAD_RANGE', 'A half day must start and end on the same date.');
   const days = DateTime.fromISO(body.endDate).diff(DateTime.fromISO(body.startDate), 'days').days + 1;
   if (days > 60) throw badRequest('TOO_LONG', 'A single request can cover at most 60 days.');
-  const earliest = DateTime.now().minus({ days: opts.allowPastDays }).toISODate()!;
+  const earliest = DateTime.fromISO(await orgToday(opts.orgId, null, new Date(), db)).minus({ days: opts.allowPastDays }).toISODate()!;
   if (body.startDate < earliest) throw badRequest('TOO_OLD', `Leave can start at most ${opts.allowPastDays} days in the past.`);
   const overlap = await one(
     `SELECT id, start_date, end_date FROM leave_requests
@@ -83,7 +84,7 @@ mount(leaveRouter, '/api/v1/leave', 'leave', [
       const outbox = new Outbox();
       const id = await tx(async (db) => {
         await q('SELECT pg_advisory_xact_lock(hashtext($1))', [`leave:${user.id}`], db); // serialise overlap checks per employee
-        await validate(user.id, body, db, { allowPastDays: 7 });
+        await validate(user.id, body, db, { allowPastDays: 7, orgId: user.orgId });
         const row = await one(
           `INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, half_day, reason, requested_by)
            VALUES ($1,$2,$3,$4,$5,$6,$1) RETURNING id`,
@@ -117,7 +118,7 @@ mount(leaveRouter, '/api/v1/leave', 'leave', [
       await tx(async (db) => {
         const l = await one('SELECT * FROM leave_requests WHERE id = $1 AND employee_id = $2 FOR UPDATE', [params.id, user.id], db);
         if (!l) throw notFound('Leave request');
-        const today = DateTime.now().toISODate()!;
+        const today = await orgToday(user.orgId, null, new Date(), db);
         if (l.status === 'APPROVED' && l.start_date <= today) throw conflict('LEAVE_STARTED', 'This leave has already started. Ask your administrator to change it.');
         if (l.status !== 'PENDING' && l.status !== 'APPROVED') throw conflict('LEAVE_CLOSED', 'This request is already closed.');
         await q(`UPDATE leave_requests SET status = 'CANCELLED', updated_at = now() WHERE id = $1`, [params.id], db);
@@ -174,7 +175,7 @@ mount(leaveRouter, '/api/v1/leave', 'leave', [
         if (!e) throw notFound('Employee');
         await assertInOrg('employee', body.employeeId, user.orgId, user.sites);
         await q('SELECT pg_advisory_xact_lock(hashtext($1))', [`leave:${body.employeeId}`], db);
-        await validate(body.employeeId, body, db, { allowPastDays: 62 });
+        await validate(body.employeeId, body, db, { allowPastDays: 62, orgId: user.orgId });
         const row = await one(
           `INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, half_day, reason, requested_by, status, decided_by, decided_at, decision_note)
            VALUES ($1,$2,$3,$4,$5,$6,$7,'APPROVED',$7,now(),'Recorded by administrator') RETURNING id`,

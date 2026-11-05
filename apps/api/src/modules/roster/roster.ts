@@ -8,6 +8,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
+import { orgToday } from '../../lib/dates.js';
+import { todayIn } from '../../lib/shift-window.js';
 import { badRequest, conflict, HttpError, notFound } from '../../lib/errors.js';
 import { isoDate, mount, route } from '../../lib/http.js';
 import { assertInOrg, employeeSite, siteFilter } from '../../lib/tenancy.js';
@@ -109,7 +111,7 @@ export async function addRosterEntry(db: Queryable, employeeId: string, body: z.
   if (!sh) throw notFound('Shift');
   await assertInOrg('workplace', sh.workplace_id, user.orgId, user.sites);
   if (!sh.is_active) throw badRequest('SHIFT_DISABLED', 'This shift is disabled.');
-  const from = body.effectiveFrom ?? (await one(`SELECT CURRENT_DATE::text AS d`, [], db)).d;
+  const from = body.effectiveFrom ?? todayIn(sh.timezone);
   const to = body.effectiveTo ?? null;
   if (to && to < from) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
   if (body.managerId) await assertManager(db, body.managerId, user.orgId, sh.workplace_id);
@@ -145,9 +147,9 @@ async function entries(user: AuthUser, from: string, to: string, workplaceId: st
   );
 }
 
-function weekRange(q0: { from?: string; to?: string }) {
-  // Default: the current week, Monday to Sunday.
-  const today = Math.floor(Date.now() / DAY_MS);
+async function weekRange(q0: { from?: string; to?: string }, orgId: string) {
+  // Default: the current week, Monday to Sunday, in the company's time zone.
+  const today = toDay(await orgToday(orgId));
   const from = q0.from ?? isoOf(today - (isoWeekday(today) - 1));
   const to = q0.to ?? isoOf(toDay(from) + 6);
   if (toDay(to) < toDay(from)) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
@@ -163,7 +165,7 @@ mount(rosterRouter, '/api/v1/roster', 'roster', [
     access: 'admin',
     query: z.object({ from: isoDate.optional(), to: isoDate.optional(), workplaceId: z.uuid().optional(), managerId: z.uuid().optional() }),
     handler: async ({ query: q0, user }) => {
-      const { from, to } = weekRange(q0);
+      const { from, to } = await weekRange(q0, user.orgId);
       return entries(user, from, to, q0.workplaceId ?? null, q0.managerId ?? null);
     },
   }),
@@ -174,7 +176,7 @@ mount(rosterRouter, '/api/v1/roster', 'roster', [
     access: 'admin',
     query: z.object({ from: isoDate.optional(), to: isoDate.optional(), workplaceId: z.uuid().optional() }),
     handler: async ({ query, user }) => {
-      const range = weekRange(query);
+      const range = await weekRange(query, user.orgId);
       const from = range.from;
       const to = isoOf(Math.min(toDay(range.to), toDay(from) + 62)); // at most 9 weeks of columns
       const rows = await entries(user, from, to, query.workplaceId ?? null, null);

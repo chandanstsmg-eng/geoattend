@@ -33,7 +33,7 @@ export async function sweepNoShows(now = new Date()) {
      JOIN users u ON u.id = esa.employee_id AND u.role = 'EMPLOYEE' AND u.is_active
      JOIN shifts sh ON sh.id = esa.shift_id AND sh.is_active
      JOIN workplaces w ON w.id = sh.workplace_id AND w.is_active
-     WHERE esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE - 1`,
+     WHERE esa.effective_to IS NULL OR esa.effective_to >= (now() AT TIME ZONE sh.timezone)::date - 1`,
   );
 
   const due: Candidate[] = [];

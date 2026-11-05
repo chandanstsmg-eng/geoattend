@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarOff, Check, ClipboardCheck, Hourglass, ScanFace, Smartphone, X } from 'lucide-react';
 import { LEAVE_TYPE_LABELS, type LeaveType } from '@geoattend/shared';
 import { get, post } from '@/lib/api';
-import { ago, fmtDate, fmtTime, metres } from '@/lib/format';
+import { ago, fmtDate, fmtTime, metres, fmtDateTime } from '@/lib/format';
 import { LinkButton, Badge, Button, Card, EmptyState, Field, InlineError, Modal, PageHeader, QueryState, Textarea } from '@/components/ui';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 
@@ -132,7 +132,7 @@ export default function ApprovalsPage() {
                         </>
                       }
                     >
-                      Phone time {v.evidence_client_time ? new Date(v.evidence_client_time).toLocaleString() : 'not available'}{v.received_at ? `, received ${new Date(v.received_at).toLocaleString()}` : ''}.{' '}
+                      Phone time {v.evidence_client_time ? fmtDateTime(v.evidence_client_time) : 'not available'}{v.received_at ? `, received ${fmtDateTime(v.received_at)}` : ''}.{' '}
                       {v.evidence_distance_m != null ? `${Math.round(v.evidence_distance_m)} m from the centre (±${Math.round(v.evidence_accuracy_m)} m, area ${v.radius_m_at_record} m).` : 'No location.'}{' '}
                       {(v.risk_flags ?? []).join(', ')}
                     </Item>
