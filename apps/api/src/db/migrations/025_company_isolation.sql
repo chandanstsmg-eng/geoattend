@@ -32,8 +32,10 @@ $$;
 GRANT USAGE ON SCHEMA public TO geoattend_tenant;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO geoattend_tenant;
 
--- How each table belongs to a company. Reads use a set test (one pass over the small parent table);
--- writes additionally check every reference to another company-owned table, one key lookup each.
+-- How each table belongs to a company: its own column, or one key lookup into its parent. Measured on
+-- 2,900 and 171,000 records, a lookup stays close to unrestricted speed at both sizes; `IN (SELECT ...)`
+-- made the planner compute the whole attendance view on small tables (20 times slower).
+-- Writes additionally check every reference to another company-owned table, one key lookup each.
 DO $$
 DECLARE
   t RECORD;
@@ -58,39 +60,39 @@ BEGIN
       ('users',                     'org_id = app_org()'),
       ('workplaces',                'org_id = app_org()'),
       -- through the employee
-      ('absence_intervals',         'employee_id IN (SELECT id FROM users)'),
-      ('attendance_photos',         'employee_id IN (SELECT id FROM users)'),
-      ('attendance_records',        'employee_id IN (SELECT id FROM users)'),
-      ('broadcast_recipients',      'employee_id IN (SELECT id FROM users)'),
-      ('employee_face_profiles',    'employee_id IN (SELECT id FROM users)'),
-      ('employee_faces',            'employee_id IN (SELECT id FROM users)'),
-      ('employee_pay',              'employee_id IN (SELECT id FROM users)'),
-      ('employee_shift_assignments','employee_id IN (SELECT id FROM users)'),
-      ('geofence_events',           'employee_id IN (SELECT id FROM users)'),
-      ('leave_requests',            'employee_id IN (SELECT id FROM users)'),
-      ('location_updates',          'employee_id IN (SELECT id FROM users)'),
-      ('overtime_entries',          'employee_id IN (SELECT id FROM users)'),
-      ('pay_adjustments',           'employee_id IN (SELECT id FROM users)'),
-      ('payslips',                  'employee_id IN (SELECT id FROM users)'),
-      ('permission_status_events',  'employee_id IN (SELECT id FROM users)'),
-      ('review_requests',           'employee_id IN (SELECT id FROM users)'),
-      ('session_breaks',            'employee_id IN (SELECT id FROM users)'),
-      ('task_photos',               'employee_id IN (SELECT id FROM users)'),
-      ('tracking_sessions',         'employee_id IN (SELECT id FROM users)'),
-      ('workplace_assignments',     'employee_id IN (SELECT id FROM users)'),
+      ('absence_intervals',         'EXISTS (SELECT 1 FROM users o WHERE o.id = absence_intervals.employee_id)'),
+      ('attendance_photos',         'EXISTS (SELECT 1 FROM users o WHERE o.id = attendance_photos.employee_id)'),
+      ('attendance_records',        'EXISTS (SELECT 1 FROM users o WHERE o.id = attendance_records.employee_id)'),
+      ('broadcast_recipients',      'EXISTS (SELECT 1 FROM users o WHERE o.id = broadcast_recipients.employee_id)'),
+      ('employee_face_profiles',    'EXISTS (SELECT 1 FROM users o WHERE o.id = employee_face_profiles.employee_id)'),
+      ('employee_faces',            'EXISTS (SELECT 1 FROM users o WHERE o.id = employee_faces.employee_id)'),
+      ('employee_pay',              'EXISTS (SELECT 1 FROM users o WHERE o.id = employee_pay.employee_id)'),
+      ('employee_shift_assignments','EXISTS (SELECT 1 FROM users o WHERE o.id = employee_shift_assignments.employee_id)'),
+      ('geofence_events',           'EXISTS (SELECT 1 FROM users o WHERE o.id = geofence_events.employee_id)'),
+      ('leave_requests',            'EXISTS (SELECT 1 FROM users o WHERE o.id = leave_requests.employee_id)'),
+      ('location_updates',          'EXISTS (SELECT 1 FROM users o WHERE o.id = location_updates.employee_id)'),
+      ('overtime_entries',          'EXISTS (SELECT 1 FROM users o WHERE o.id = overtime_entries.employee_id)'),
+      ('pay_adjustments',           'EXISTS (SELECT 1 FROM users o WHERE o.id = pay_adjustments.employee_id)'),
+      ('payslips',                  'EXISTS (SELECT 1 FROM users o WHERE o.id = payslips.employee_id)'),
+      ('permission_status_events',  'EXISTS (SELECT 1 FROM users o WHERE o.id = permission_status_events.employee_id)'),
+      ('review_requests',           'EXISTS (SELECT 1 FROM users o WHERE o.id = review_requests.employee_id)'),
+      ('session_breaks',            'EXISTS (SELECT 1 FROM users o WHERE o.id = session_breaks.employee_id)'),
+      ('task_photos',               'EXISTS (SELECT 1 FROM users o WHERE o.id = task_photos.employee_id)'),
+      ('tracking_sessions',         'EXISTS (SELECT 1 FROM users o WHERE o.id = tracking_sessions.employee_id)'),
+      ('workplace_assignments',     'EXISTS (SELECT 1 FROM users o WHERE o.id = workplace_assignments.employee_id)'),
       -- through the user account
-      ('administrator_profiles',    'user_id IN (SELECT id FROM users)'),
-      ('device_registrations',      'user_id IN (SELECT id FROM users)'),
-      ('notice_acknowledgements',   'user_id IN (SELECT id FROM users)'),
-      ('refresh_tokens',            'user_id IN (SELECT id FROM users)'),
-      ('web_push_subscriptions',    'user_id IN (SELECT id FROM users)'),
+      ('administrator_profiles',    'EXISTS (SELECT 1 FROM users o WHERE o.id = administrator_profiles.user_id)'),
+      ('device_registrations',      'EXISTS (SELECT 1 FROM users o WHERE o.id = device_registrations.user_id)'),
+      ('notice_acknowledgements',   'EXISTS (SELECT 1 FROM users o WHERE o.id = notice_acknowledgements.user_id)'),
+      ('refresh_tokens',            'EXISTS (SELECT 1 FROM users o WHERE o.id = refresh_tokens.user_id)'),
+      ('web_push_subscriptions',    'EXISTS (SELECT 1 FROM users o WHERE o.id = web_push_subscriptions.user_id)'),
       -- through another owned record
-      ('device_status_history',     'device_id IN (SELECT id FROM device_registrations)'),
-      ('notification_deliveries',   'notification_id IN (SELECT id FROM notifications)'),
-      ('notification_reads',        'notification_id IN (SELECT id FROM notifications)'),
-      ('session_state_transitions', 'session_id IN (SELECT id FROM tracking_sessions)'),
-      ('shift_revisions',           'shift_id IN (SELECT id FROM shifts)'),
-      ('shifts',                    'workplace_id IN (SELECT id FROM workplaces)')
+      ('device_status_history',     'EXISTS (SELECT 1 FROM device_registrations o WHERE o.id = device_status_history.device_id)'),
+      ('notification_deliveries',   'EXISTS (SELECT 1 FROM notifications o WHERE o.id = notification_deliveries.notification_id)'),
+      ('notification_reads',        'EXISTS (SELECT 1 FROM notifications o WHERE o.id = notification_reads.notification_id)'),
+      ('session_state_transitions', 'EXISTS (SELECT 1 FROM tracking_sessions o WHERE o.id = session_state_transitions.session_id)'),
+      ('shift_revisions',           'EXISTS (SELECT 1 FROM shifts o WHERE o.id = shift_revisions.shift_id)'),
+      ('shifts',                    'EXISTS (SELECT 1 FROM workplaces o WHERE o.id = shifts.workplace_id)')
     ) AS x(tbl, owned)
   LOOP
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO geoattend_tenant', t.tbl);

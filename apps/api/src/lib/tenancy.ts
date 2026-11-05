@@ -66,6 +66,13 @@ export const overtimeCounts = (o = 'o') => `NOT EXISTS (SELECT 1 FROM attendance
 /** SQL: this attendance record counts towards official figures. Voided and pending records stay in history only. */
 export const attendanceCounts = (ar = 'ar') => `${ar}.verification_status NOT IN ('VOIDED', 'PENDING_VERIFICATION')`;
 
+/**
+ * SQL join to a record's worked time, one record at a time. A plain join to the view lets the planner
+ * compute the view for the whole company first: under row-level security it did so for about 20,000
+ * records, taking 424 ms instead of 5 for a page of 100. OFFSET 0 keeps the lookup per record.
+ */
+export const workJoin = (ar = 'ar', alias = 'aw', view = 'attendance_work') => `LATERAL (SELECT * FROM ${view} wj WHERE wj.attendance_id = ${ar}.id OFFSET 0) ${alias} ON true`;
+
 /** SQL: minutes of a record waiting for verification, shown apart from official time; NULL for any other record. */
 export const pendingMinutes = (ar = 'ar') => `CASE WHEN ${ar}.verification_status = 'PENDING_VERIFICATION' THEN (SELECT pw.worked_minutes FROM attendance_work_all pw WHERE pw.attendance_id = ${ar}.id) END`;
 

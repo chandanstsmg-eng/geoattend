@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { dropDatabase, ensureDatabase } from '../src/db/postgres.js';
-import { assertRestoreTarget, clientEnvironment, databaseName, prepareRestoreTarget, withDatabase } from '../src/db/restore-target.js';
+import { assertRestoreTarget, clientEnvironment, databaseName, ensureTenantRole, prepareRestoreTarget, withDatabase } from '../src/db/restore-target.js';
 
 const live = `geoattend_test_live_${crypto.randomBytes(3).toString('hex')}`;
 const made: string[] = [];
@@ -47,6 +47,16 @@ describe('restore target', () => {
     await l.connect();
     expect((await l.query('SELECT count(*)::int AS n FROM precious')).rows[0].n).toBe(1);
     await l.end();
+  });
+
+  it('makes sure the role in the dump\'s policies exists, and can run twice', async () => {
+    await ensureTenantRole(liveUrl);
+    await ensureTenantRole(liveUrl);
+    const c = new pg.Client({ connectionString: liveUrl });
+    await c.connect();
+    const r = (await c.query(`SELECT rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname = 'geoattend_tenant'`)).rows;
+    await c.end();
+    expect(r).toEqual([{ rolsuper: false, rolbypassrls: false, rolcanlogin: false }]);
   });
 
   it('needs explicit confirmation on a production system', () => {

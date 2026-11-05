@@ -25,7 +25,7 @@
 import { DateTime } from 'luxon';
 import { q } from '../../db/pool.js';
 import type { AuthUser } from '../../lib/auth.js';
-import { SUPERVISOR_SITES, siteFilter } from '../../lib/tenancy.js';
+import { SUPERVISOR_SITES, siteFilter, workJoin } from '../../lib/tenancy.js';
 
 export interface WorkRecord {
   employee_id: string;
@@ -153,7 +153,7 @@ export async function loadPendingHours(user: Pick<AuthUser, 'orgId' | 'sites'>, 
   return q(
     `SELECT ar.employee_id, u.full_name, ep.employee_code, COALESCE(SUM(aw.worked_minutes), 0)::int AS minutes, count(*)::int AS records
      FROM attendance_records ar
-     JOIN attendance_work_all aw ON aw.attendance_id = ar.id
+     JOIN ${workJoin('ar', 'aw', 'attendance_work_all')}
      JOIN users u ON u.id = ar.employee_id
      LEFT JOIN employee_profiles ep ON ep.user_id = u.id
      WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
@@ -173,7 +173,7 @@ export async function loadWorkRecords(user: Pick<AuthUser, 'orgId' | 'sites'>, f
             aw.worked_minutes, aw.overtime_minutes, aw.scheduled_minutes, aw.in_progress,
             (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())) AS incomplete
      FROM attendance_records ar
-     JOIN attendance_work aw ON aw.attendance_id = ar.id
+     JOIN ${workJoin()}
      JOIN users u ON u.id = ar.employee_id
      LEFT JOIN employee_profiles ep ON ep.user_id = u.id
      JOIN workplaces w ON w.id = ar.workplace_id

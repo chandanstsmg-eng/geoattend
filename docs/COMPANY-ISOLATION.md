@@ -27,6 +27,7 @@ The second layer exists for the day the first has a bug.
 - **A new view** must set `security_invoker = true`, or it reads as its owner and sees every company. The same test checks this.
 - **New routes** get all this from `mount()`. Do not register routes on the router directly.
 - **Never call `getPool().query()`**: it skips the company setting. Use `q`, `one` or `tx`.
+- **Join the attendance views through `workJoin()`**, not directly. A plain join made the attendance list 85 times slower at about 20,000 records.
 
 ## Deployment requirements
 
@@ -39,7 +40,7 @@ The second layer exists for the day the first has a bug.
   ```
 
 - The API must connect directly or through a pooler in **session** mode. Transaction pooling (PgBouncer's default for many hosted databases) would mix up the per-connection company setting, and PgBouncer also refuses the startup option that pins connections to UTC.
-- A logical restore needs the role to exist first. `npm run db:restore` creates it.
+- A logical restore needs the role to exist first. `npm run db:restore` creates it. This has **not** been run end to end: the embedded database has no `pg_dump` or `pg_restore`, so `npm run db:backup` and `npm run db:restore` need the PostgreSQL client tools installed. `npm run db:backup:online` does not, and is what has been used and verified. Try a logical restore on the test server.
 
 ## Known limits
 

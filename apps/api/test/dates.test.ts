@@ -309,6 +309,10 @@ describe('the code base', () => {
     expect(offenders(/new Date\(\)\.toISOString\(\)\.slice\(0, 10\)|DateTime\.now\(\)\.to(ISODate|Format)|new Date\(\)\.get(FullYear|Month|Date)\(\)/)).toEqual([]);
   });
 
+  it('never joins the attendance views directly, which is slow under row-level security', () => {
+    expect(offenders(/JOIN attendance_work(_all)? /)).toEqual([]);
+  });
+
   it('never queries the pool directly, which would skip the company setting', () => {
     expect(offenders(/getPool\(\)\.query\(/, ['/app.ts', '/server.ts'])).toEqual([]); // health checks: SELECT 1
   });

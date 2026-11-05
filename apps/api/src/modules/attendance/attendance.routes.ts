@@ -5,7 +5,7 @@ import { config } from '../../config.js';
 import { HttpError, notFound } from '../../lib/errors.js';
 import { idParams, isoDate, mount, paging, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
-import { assertInOrg, employeeSite, siteFilter, attendanceCounts, pendingMinutes } from '../../lib/tenancy.js';
+import { assertInOrg, employeeSite, siteFilter, attendanceCounts, pendingMinutes, workJoin } from '../../lib/tenancy.js';
 import { createDownloadUrl, deleteObject, detectImageType, readLocalObject, requestOrigin, verifyToken, writeLocalObject } from '../../lib/storage.js';
 import { readingSchema } from '../tracking/tracking.routes.js';
 import { assertApprovedDevice } from '../devices/devices.routes.js';
@@ -85,7 +85,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
                 (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())) AS incomplete
          FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN attendance_photos p ON p.id = ar.photo_id
-         LEFT JOIN tracking_sessions s ON s.id = ar.session_id LEFT JOIN attendance_work aw ON aw.attendance_id = ar.id
+         LEFT JOIN tracking_sessions s ON s.id = ar.session_id LEFT JOIN ${workJoin()}
          WHERE ${where} ORDER BY ar.shift_date DESC, ar.recorded_at DESC LIMIT $10 OFFSET $11`,
         [...params, query.limit, query.offset],
       );

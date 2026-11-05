@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { one, q } from '../../db/pool.js';
 import { DEFAULT_TIMEZONE, orgToday } from '../../lib/dates.js';
-import { pendingMinutes } from '../../lib/tenancy.js';
+import { pendingMinutes, workJoin } from '../../lib/tenancy.js';
 import { DateTime } from 'luxon';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { mount, route } from '../../lib/http.js';
@@ -127,7 +127,7 @@ mount(meRouter, '/api/v1/me', 'me', [
                 aw.worked_minutes, aw.scheduled_minutes, aw.ended_early_minutes, aw.in_progress,
                 aw.overtime_minutes, aw.overtime_claimed_minutes, aw.overtime_status, ${pendingMinutes()} AS pending_minutes
          FROM attendance_records ar JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id
-         LEFT JOIN attendance_work aw ON aw.attendance_id = ar.id
+         LEFT JOIN ${workJoin()}
          WHERE ar.employee_id = $1 ORDER BY ar.shift_date DESC, ar.recorded_at DESC LIMIT $2`,
         [user.id, query.limit],
       );
