@@ -176,11 +176,19 @@ describe('no duplicates', () => {
   it('two instances starting together: only one runs the job', async () => {
     const name = job();
     let runs = 0;
+    // The winner holds the job until both others have been refused: no timing involved, so a
+    // busy machine cannot let a late caller in after the winner has properly finished.
+    let release = () => {};
+    const held = new Promise<void>((r) => { release = r; });
     const work = async () => {
       runs++;
-      await new Promise((r) => setTimeout(r, 100));
+      await held;
     };
-    const outcomes = await Promise.all([runJob(name, work), runJob(name, work), runJob(name, work)]);
+    let refused = 0;
+    const outcomes = await Promise.all([1, 2, 3].map(() => runJob(name, work).then((o) => {
+      if (o === 'SKIPPED' && ++refused === 2) release();
+      return o;
+    })));
     expect(runs).toBe(1);
     expect(outcomes.sort()).toEqual(['OK', 'SKIPPED', 'SKIPPED']);
   });
