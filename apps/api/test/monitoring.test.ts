@@ -9,6 +9,7 @@ import { one, q, withOrg } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { config, productionConfigErrors } from '../src/config.js';
 import { errorText, redact } from '../src/lib/redact.js';
+import { DEFAULT_ORG_ID } from '../src/lib/tenancy.js';
 import { eachCompany, eachRecord, recoverInterruptedJobs, resumeJobs, runJob, stopJobs, throwIfAny } from '../src/modules/jobs/runner.js';
 import { drainJobs, JOBS, sweepOnce } from '../src/modules/jobs/sweeper.js';
 import { evaluateAlerts } from '../src/modules/ops/alerts.js';
@@ -326,6 +327,13 @@ describe('the monitoring API', () => {
     const page = (await ops(`/runs?limit=1&offset=1`)).body;
     expect(page.total).toBe(2);
     expect(page.items.map((r: any) => r.job)).toEqual([a]);
+  });
+
+  it('the original company, with its fixed id, can be filtered too', async () => {
+    const name = job();
+    await runJob(name, () => eachCompany(async (o) => { if (o === DEFAULT_ORG_ID) throw new Error('only the original company'); }));
+    expect((await ops(`/runs?company=${DEFAULT_ORG_ID}`).expect(200)).body.items.map((r: any) => r.job)).toEqual([name]);
+    expect((await ops(`/failures?company=${DEFAULT_ORG_ID}`).expect(200)).body.total).toBe(1);
   });
 
   it('refuses a bad filter, and SQL in one goes nowhere', async () => {

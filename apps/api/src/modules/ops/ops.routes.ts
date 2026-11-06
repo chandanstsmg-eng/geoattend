@@ -26,7 +26,8 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
 const filters = z.object({
   job: z.string().max(64).optional(),
   status: z.enum(['OK', 'FAILED', 'TIMED_OUT', 'INTERRUPTED']).optional(),
-  company: z.uuid().optional(),
+  // Not z.uuid(): that refuses the fixed id of the original company, which has no version digit.
+  company: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).optional(),
   from: date,
   to: date,
   limit: z.coerce.number().int().min(1).max(200).default(50),
