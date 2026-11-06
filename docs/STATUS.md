@@ -161,9 +161,9 @@ On branch `phase-d-mobile`. Audit: [MOBILE-AUDIT.md](MOBILE-AUDIT.md). Phone tes
 
 ## Background jobs and monitoring (5 Nov 2026)
 
-Branch `phase-f-jobs-monitoring`, stacked on `phase-e-dates-isolation`; neither is merged. Migration 028 has been run on copies only.
+Branch `phase-f-jobs-monitoring`, stacked on `phase-e-dates-isolation`; neither is merged. Migrations 028 and 029 have been run on copies only.
 
 - Every job run is recorded, with duration and companies, and jobs can be filtered by company, status and date on the `/operations` page, behind `OPS_TOKEN`.
 - Fixed: the failure record itself failed after 31 failures in a row; shutdown cut jobs off mid-way; one stuck outside call could stop every job; photo deletion failures showed as a good run; pending attendance records were never raised to owners.
-- New: job time limit, clean shutdown, separate worker, delivery claims, missing check-out and pending alerts, weekly summaries (off by default), health check of every part, operational alerts, backup manifests with verification and pruning.
+- New: job time limit, clean shutdown, separate worker, delivery claims, missing check-out and pending alerts, weekly summaries and reminders before a shift (both off by default), health check of every part, operational alerts, backup manifests with verification and pruning.
 - Real alert delivery, an outside monitor, and browser checks of the new page remain open. See [BACKGROUND-JOBS.md](BACKGROUND-JOBS.md) and [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).

@@ -46,6 +46,8 @@ export const alertsSchema = z.object({
   prolongedReminderCooldownMin: z.number().int().min(5).max(480),
   /** Alert when a scheduled employee has not started their shift this many minutes after it began (0 = off). */
   noShowAfterMinutes: z.number().int().min(0).max(240),
+  /** Remind an employee this many minutes before a shift starts (0 = off). */
+  shiftReminderMinutes: z.number().int().min(0).max(240).optional(),
   notifyOnReturn: z.boolean(),
   notifyOnArrival: z.boolean(),
   webPushTypes: z.array(z.enum(NOTIFICATION_TYPES)),
@@ -132,7 +134,7 @@ export const digestSchema = z.object({
   weeklyReport: z.boolean().optional(),
   /** On Mondays, e-mail each supervisor last week's summary for their own sites. */
   supervisorSummaries: z.boolean().optional(),
-  /** On Mondays, tell each employee their own week in the app. */
+  /** On Mondays, send each employee their own week as a phone push. */
   employeeSummaries: z.boolean().optional(),
 });
 
@@ -210,6 +212,7 @@ export const DEFAULT_SETTINGS: Settings = {
   alerts: {
     prolongedReminderCooldownMin: 30,
     noShowAfterMinutes: 15,
+    shiftReminderMinutes: 0,
     notifyOnReturn: true,
     notifyOnArrival: true,
     webPushTypes: ['BREAK_OVERDUE', 'PROLONGED_ABSENCE', 'TRACKING_INTERRUPTED', 'PERMISSION_REVOKED', 'DUPLICATE_SUBMISSION', 'MANUAL_REVIEW_REQUESTED', 'LATE_ARRIVAL', 'NO_SHOW', 'LEAVE_REQUESTED'],

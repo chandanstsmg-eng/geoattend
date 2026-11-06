@@ -34,3 +34,7 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('message', (m) => m === 'shutdown' && void shutdown('shutdown message')); // Windows has no SIGTERM to catch
 process.on('unhandledRejection', (err) => logger.error({ err }, 'unhandled rejection'));
+process.on('uncaughtException', (err) => {
+  logger.fatal({ err }, 'uncaught exception');
+  process.exit(1);
+});

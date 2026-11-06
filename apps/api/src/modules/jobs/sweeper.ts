@@ -29,6 +29,7 @@ import { onOvertime, sweepOvertime } from '../tracking/overtime.service.js';
 import { expireStaleIntents } from '../attendance/attendance.service.js';
 import { runRetention } from './retention.js';
 import { sweepNoShows } from './no-show.js';
+import { sweepShiftReminders } from './shift-reminders.js';
 import { sweepOverdueApprovals } from './escalation.js';
 import { sweepDigests } from '../digest/digest.js';
 import { sweepFaceChecks } from '../faces/faces.js';
@@ -204,6 +205,7 @@ export const JOBS: Array<{ name: string; run: (now: Date) => Promise<unknown>; e
   { name: 'absences', run: sweepAbsences },
   { name: 'overdue-breaks', run: sweepOverdueBreaks },
   { name: 'overtime', run: sweepOvertime },
+  { name: 'shift-reminders', run: sweepShiftReminders },
   { name: 'no-shows', run: sweepNoShows },
   { name: 'overdue-approvals', run: sweepOverdueApprovals },
   { name: 'digests', run: sweepDigests },

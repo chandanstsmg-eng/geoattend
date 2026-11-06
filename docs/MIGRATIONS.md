@@ -96,9 +96,15 @@ Rollback: [migrations/028_rollback.sql](migrations/028_rollback.sql). Details: [
 
 Adds `job_runs` and `ops_alerts`, two nullable columns on the job tables, and six indexes. No company data is touched, no existing row changes meaning, and the restricted login gets no access. The new tables start empty, so the indexes build instantly.
 
-## Applying 028
+## 029_shift_reminders
 
-It applies after 024 to 027, in its own transaction, when the API or worker starts. Take a backup first, and check afterwards that `SELECT max(version) FROM schema_migrations` is `028_job_monitoring`. To roll back, stop the API, run `docs/migrations/028_rollback.sql` first, then the steps below, and deploy the earlier code.
+Rollback: [migrations/029_rollback.sql](migrations/029_rollback.sql).
+
+Adds `employee_profiles.shift_reminders`, an employee's choice, true by default. No existing row changes meaning, and nothing is sent because of it: companies turn reminders on themselves.
+
+## Applying 028 and 029
+
+They apply after 024 to 027, each in its own transaction, when the API or worker starts. Take a backup first, and check afterwards that `SELECT max(version) FROM schema_migrations` is `029_shift_reminders`. To roll back, stop the API, run `docs/migrations/029_rollback.sql`, then `028_rollback.sql`, then the steps below, and deploy the earlier code.
 
 ## Applying 024 to 027
 

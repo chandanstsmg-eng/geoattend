@@ -1,11 +1,13 @@
 /** Phase F: what jobs do to attendance, notifications, summaries and photos, and what they must never do. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DateTime } from 'luxon';
 import { one, q, tx, withOrg } from '../src/db/pool.js';
 import { config } from '../src/config.js';
+import { resetMailer } from '../src/lib/mailer.js';
 import { JobFailures, runJob } from '../src/modules/jobs/runner.js';
 import { sweepExpiredWindows } from '../src/modules/jobs/sweeper.js';
 import { sweepOverdueApprovals } from '../src/modules/jobs/escalation.js';
@@ -280,6 +282,71 @@ describe('delivering notifications', () => {
     await due(id);
     await processDeliveries();
     expect(sent).toBe(1);
+  });
+});
+
+describe('e-mail over a real connection', () => {
+  // A small SMTP server on this machine. It proves what the code sends over the wire, not that a provider accepts it.
+  let server: net.Server;
+  let received: string[];
+  const smtp = config.email.smtpUrl;
+  beforeAll(async () => {
+    server = net.createServer((sock) => {
+      let data = false;
+      let body = '';
+      sock.write('220 local ESMTP\r\n');
+      sock.on('data', (chunk) => {
+        const text = chunk.toString();
+        if (data) {
+          body += text;
+          if (body.includes('\r\n.\r\n')) {
+            data = false;
+            received.push(body);
+            sock.write('250 queued\r\n');
+          }
+          return;
+        }
+        for (const line of text.split('\r\n').filter(Boolean)) {
+          if (/^DATA/i.test(line)) { data = true; body = ''; sock.write('354 go\r\n'); }
+          else if (/^QUIT/i.test(line)) { sock.write('221 bye\r\n'); sock.end(); }
+          else sock.write('250 ok\r\n');
+        }
+      });
+      sock.on('error', () => undefined);
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  });
+  afterAll(async () => {
+    config.email.smtpUrl = smtp;
+    resetMailer();
+    await new Promise((r) => server.close(r));
+  });
+  async function mail(to: string) {
+    await q(`DELETE FROM notification_deliveries`);
+    const n = await one(`INSERT INTO notifications (type, severity, title, body, org_id) VALUES ('NO_SHOW','WARNING','Shift not started','Body text',$1) RETURNING id`, [A.org]);
+    return (await one(`INSERT INTO notification_deliveries (notification_id, channel, target) VALUES ($1,'EMAIL',$2) RETURNING id`, [n.id, to])).id as string;
+  }
+
+  it('the delivery job sends a real SMTP message and records it', async () => {
+    received = [];
+    config.email.smtpUrl = `smtp://127.0.0.1:${(server.address() as net.AddressInfo).port}`;
+    resetMailer();
+    const id = await mail('owner@test.local');
+    await processDeliveries();
+    expect(received).toHaveLength(1);
+    expect(received[0]).toContain('owner@test.local');
+    expect(received[0]).toContain('[GeoAttend] Shift not started');
+    expect(await one(`SELECT status FROM notification_deliveries WHERE id = $1`, [id])).toEqual({ status: 'SENT' });
+  });
+
+  it('a mail server that refuses the connection is a recorded failure to retry, not a send', async () => {
+    config.email.smtpUrl = 'smtp://127.0.0.1:1';
+    resetMailer();
+    const id = await mail('owner@test.local');
+    await processDeliveries();
+    const r = await one(`SELECT status, attempts, last_error FROM notification_deliveries WHERE id = $1`, [id]);
+    expect(r).toMatchObject({ status: 'FAILED', attempts: 1 });
+    expect(r.last_error).toBeTruthy();
   });
 });
 

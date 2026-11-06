@@ -132,6 +132,7 @@ export const NOTIFICATION_TYPES = [
   'MISSING_CHECKOUT',
   'ATTENDANCE_PENDING',
   'WEEKLY_SUMMARY',
+  'SHIFT_REMINDER',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -178,6 +179,7 @@ export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
   MISSING_CHECKOUT: 'Missing check-out',
   ATTENDANCE_PENDING: 'Attendance waiting for verification',
   WEEKLY_SUMMARY: 'Your week',
+  SHIFT_REMINDER: 'Your shift starts soon',
 };
 
 export const LEAVE_TYPES = ['CASUAL', 'SICK', 'EARNED', 'UNPAID', 'OTHER'] as const;

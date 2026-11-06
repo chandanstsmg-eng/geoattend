@@ -28,6 +28,9 @@ Not done. These passed builds and API tests only.
 
 ## Phone checks (QA stage: before release)
 
+- A real push reaching a phone, including a shift reminder and the weekly summary, and the Shift reminders switch on the Account screen.
+
+
 See [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md). Nothing has been run on a real phone: Xiaomi, Oppo, Vivo and Samsung are all NOT VERIFIED. The Phase D APK must not be distributed, because its server address is a placeholder.
 
 ## External services

@@ -1,6 +1,6 @@
 # Background jobs
 
-Fourteen jobs run every 15 seconds (`SWEEPER_INTERVAL_MS`), in the order in [modules/jobs/sweeper.ts](../apps/api/src/modules/jobs/sweeper.ts). Retention and the backup check run hourly, alerts each minute. There is no queue to lose work from: each job finds its work from database state on every run.
+Fifteen jobs run every 15 seconds (`SWEEPER_INTERVAL_MS`), in the order in [modules/jobs/sweeper.ts](../apps/api/src/modules/jobs/sweeper.ts). Retention and the backup check run hourly, alerts each minute. There is no queue to lose work from: each job finds its work from database state on every run.
 
 By default the API runs them. To keep heavy work away from requests, set `JOBS_ENABLED=false` on the API and run `npm run worker`. Several workers are safe.
 
@@ -64,11 +64,14 @@ Alerts go to `ALERT_WEBHOOK_URL`, or by e-mail to `OPS_ALERT_EMAILS`. With neith
 
 | Event | What happens |
 |---|---|
-| No-show | Owner and site supervisor alerted, employee reminded, once per shift |
+| Before a shift | If the company set a lead time (Settings, off by default), the employee gets one reminder, by the shift's time zone. Not on leave or holidays, not after starting, not after the start time, and not if they turned reminders off |
+| No-show | Owner and site supervisor alerted, employee reminded unless they turned reminders off, once per shift |
 | Late arrival | Alert when the attendance is recorded, not by a job |
 | Missing check-out | The window closes, the session closes, `MISSING_CHECKOUT` is raised if attendance was marked |
 | Record sent late from a phone | `ATTENDANCE_PENDING` when it arrives. **No job ever approves it** |
 | Waiting over a day | Leave, requests, new phones, pending records, photo checks, corrections and overtime are raised to owners, once each |
+
+**Employees have no inbox.** Everything meant for an employee goes out as a phone push and nowhere else, so with `EXPO_PUSH_ENABLED` off, or no phone registered, they see nothing. Expo's receipts are not read, so "sent" means Expo accepted it, not that a phone showed it.
 
 ## Summaries
 
@@ -78,7 +81,7 @@ Alerts go to `ALERT_WEBHOOK_URL`, or by e-mail to `OPS_ALERT_EMAILS`. With neith
 | Monthly CSV | From 09:00 on the 1st, catching up to the 3rd | E-mail recipients | On |
 | Weekly CSV | From 09:00 on Monday, catching up to Wednesday | E-mail recipients | **Off** |
 | Supervisor weekly CSV | Same | Each supervisor, their own sites only | **Off** |
-| Employee weekly summary | Same | Each employee, in the app | **Off** |
+| Employee weekly summary | Same | Each employee, by phone push | **Off** |
 
 Times use the company's main workplace time zone. A supervisor's rows are chosen by each employee's first site in the period.
 
