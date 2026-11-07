@@ -41,7 +41,6 @@ import type { Me } from '@/lib/me';
 import { AwayDialog, isAway, useSetAway } from '@/components/away-control';
 import { SosBanner } from '@/components/sos-banner';
 import { cx, EmptyState, ErrorState, Menu, Spinner } from '@/components/ui';
-import { MapsProvider } from '@/components/maps/google';
 import { Lockup, Mark } from '@/components/brand';
 
 type NavItem = { href: string; label: string; icon: typeof Bell; owner?: boolean };
@@ -478,9 +477,7 @@ export default function DashLayout({ children }: { children: ReactNode }) {
   if (me.data.user.mustChangePassword) return <ChangePassword />;
   return (
     <LiveProvider>
-      <MapsProvider>
-        <Shell me={me.data}>{children}</Shell>
-      </MapsProvider>
+      <Shell me={me.data}>{children}</Shell>
     </LiveProvider>
   );
 }

@@ -5,19 +5,22 @@
  * to look at. The table of today's people comes last, because it is what you scroll to, not what you open with.
  */
 import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 import { qs } from '@/lib/api';
 import { fmtClock, fmtLongDate } from '@/lib/format';
-import { Button, ErrorState, PageHeader, SectionHeading } from '@/components/ui';
+import { Button, ErrorState, PageHeader, SectionHeading, WhenVisible } from '@/components/ui';
 import { DateRangeSelect, defaultRange, SupervisorSelect, useSupervisors, WorkplaceSelect, type DateRangeValue } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 import { GettingStarted } from '@/components/getting-started';
 import type { BoardTab, RosterRow } from '@/components/attendance-board';
 import { absDelta, Kpi, pctDelta, StatStrip, StatStripSkeleton } from '@/components/charts';
-import { WorkforceMap } from '@/components/live-map';
 import { RightNow } from '@/components/right-now';
 import { ActivityFeed, AttendanceTrend, AttentionPanel, EmployeesByLocation, ExportMenu, HoursChart, LocationTable, RefreshButton, StaffingChart, SupervisorTable, TodayBoard, useOverview, WorkforceToday, WorkplaceModal } from './shared';
+
+// The map and Google's script load only when this section is about to be seen.
+const WorkforceMap = dynamic(() => import('@/components/live-map').then((m) => m.WorkforceMap), { ssr: false, loading: () => <div className="h-[240px] animate-pulse bg-gray-100" /> });
 
 export function OwnerOverview() {
   const [welcome, setWelcome] = useState(false);
@@ -132,7 +135,9 @@ export function OwnerOverview() {
                 </Link>
               </header>
               {d ? (
+                <WhenVisible className="min-h-[240px]">
                 <WorkforceMap sessions={sessions} workplaces={d.byWorkspace} selected={null} onSelect={(id) => { const x = sessions.find((y: any) => y.id === id); if (x) setEmployee(x.employee_id); }} search={false} className={sessions.length < 5 ? 'h-[240px]' : 'h-[340px] lg:h-[400px]'} />
+                </WhenVisible>
               ) : (
                 <div className="h-[340px] animate-pulse bg-gray-100" />
               )}

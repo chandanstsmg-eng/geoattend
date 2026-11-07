@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
-import { one, q } from '../../db/pool.js';
+import { one, q, qPrepared } from '../../db/pool.js';
 import { dayEndSql, dayStartSql, orgTimezoneSql, orgToday } from '../../lib/dates.js';
 import { isoDate, mount, route } from '../../lib/http.js';
 import { dateChunks, streamCsv, toCsv } from '../../lib/csv.js';
@@ -28,7 +28,9 @@ export const attended = (r: { attendance_id?: string | null; verification_status
  * employed then (joined_on, left_on) and workspaces not yet disabled.
  */
 export async function roster(orgId: string, date: string, workplaceId: string | null, includeSimulated = true, sites: string[] | null = null) {
-  return q(
+  // Prepared because a 30-day report runs this up to 60 times, and planning it took longer than running it.
+  return qPrepared(
+    'roster',
     `SELECT u.id AS employee_id, u.full_name, ep.employee_code, u.is_demo,
             w.id AS workplace_id, w.name AS workplace_name, sh.id AS shift_id, sh.name AS shift_name,
             COALESCE(rev.start_time, sh.start_time) AS start_time, COALESCE(rev.end_time, sh.end_time) AS end_time, COALESCE(rev.timezone, sh.timezone) AS timezone,

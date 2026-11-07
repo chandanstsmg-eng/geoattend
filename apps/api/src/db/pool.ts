@@ -173,6 +173,17 @@ export async function q<T extends pg.QueryResultRow = any>(text: string, params:
   return withClient(async (client) => (await client.query<T>(text, params as any[])).rows);
 }
 
+/**
+ * The same as `q`, for a query that runs many times per request and costs more to plan than to run:
+ * each connection keeps the plan. Nothing about the company is baked into it: row security reads
+ * app.org_id when the query runs, and PostgreSQL replans when the role changes. Needs a direct or
+ * session-mode connection, which the company setting requires anyway (docs/COMPANY-ISOLATION.md).
+ * `text` must be the same every time for a given `name`.
+ */
+export async function qPrepared<T extends pg.QueryResultRow = any>(name: string, text: string, params: unknown[]): Promise<T[]> {
+  return withClient(async (client) => (await client.query<T>({ name, text, values: params as any[] })).rows);
+}
+
 export async function one<T extends pg.QueryResultRow = any>(text: string, params: unknown[] = [], db?: Queryable): Promise<T | null> {
   const rows = await q<T>(text, params, db);
   return rows[0] ?? null;

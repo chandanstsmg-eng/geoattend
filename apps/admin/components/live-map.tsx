@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Maximize2, Search, X } from 'lucide-react';
 import { ControlPosition, MapControl, useMap } from '@vis.gl/react-google-maps';
-import { AdvancedMarker, GeofenceCircle, Map, MAP_ID, MapSetupNotice, mapsConfigured, Pin, PlaceSearch, useMapsRefused } from './maps/google';
+import { AdvancedMarker, GeofenceCircle, Map, MAP_ID, MapSetupNotice, MapsProvider, mapsConfigured, Pin, PlaceSearch, useMapsRefused } from './maps/google';
 import { SchematicMap, SiteOverview } from './maps/schematic';
 import { BODY_STYLE, MARKER_STYLE, initialsOf, kindFor } from './maps/markers';
 import { Button, Select, cx } from './ui';
@@ -307,6 +307,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
 
   return (
     <div className={cx('relative', className)}>
+      <MapsProvider>
       <Map
         className="h-full w-full"
         defaultCenter={center}
@@ -329,6 +330,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
         <Markers located={located} selected={selected} onSelect={onSelect} />
         <Controls workplaces={workplaces} located={located} search={search} />
       </Map>
+      </MapsProvider>
     </div>
   );
 }

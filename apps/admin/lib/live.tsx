@@ -24,6 +24,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     // Back off 3 s → 6 → 12 → … → 60 s while the API is down, so a stopped API
     // does not flood both terminals with 502s; reset once the stream says hello.
     let delay = 3000;
+    let connectedBefore = false;
 
     // Coalesce bursts (e.g. a batch upload of 50 readings) into one refetch per key.
     const invalidate = (...keys: string[]) => {
@@ -41,8 +42,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       es.addEventListener('hello', () => {
         setState('live');
         delay = 3000;
-        // After a reconnect, anything may have changed.
-        invalidate('live', 'overview', 'notifications', 'unread', 'attendance', 'absences', 'demo', 'overtime');
+        // After a reconnect, anything may have changed. The first connection has nothing to catch up on:
+        // refreshing then fetched everything the page had only just loaded.
+        if (connectedBefore) invalidate('live', 'overview', 'notifications', 'unread', 'attendance', 'absences', 'demo', 'overtime');
+        connectedBefore = true;
       });
       es.addEventListener('session.updated', () => {
         setLast(Date.now());

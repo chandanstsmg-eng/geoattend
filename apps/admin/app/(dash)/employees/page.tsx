@@ -6,6 +6,7 @@ import { Plus, Upload, X } from 'lucide-react';
 import { Kpi, StatStrip, StatStripSkeleton } from '@/components/charts';
 import { ImportEmployees } from '@/components/import-employees';
 import { useMe } from '@/lib/me';
+import { useDebounced } from '@/lib/use-debounced';
 import { get, post, qs } from '@/lib/api';
 import { ago } from '@/lib/format';
 import { Badge, Button, Card, cx, DemoTag, EmptyState, Field, InlineError, Input, Modal, PageHeader, Pagination, QueryState, rowLink, SearchInput, Select, SortTh, Table, Td, Th, Toolbar, type SortDir } from '@/components/ui';
@@ -27,7 +28,8 @@ export default function EmployeesPage() {
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const { isOwner } = useMe();
-  const list = useQuery({ queryKey: ['employees', search, workplaceId, status, supervisorId], queryFn: () => get<any[]>(`/employees${qs({ search, workplaceId, status, supervisorId })}`) });
+  const term = useDebounced(search);
+  const list = useQuery({ queryKey: ['employees', term, workplaceId, status, supervisorId], queryFn: () => get<any[]>(`/employees${qs({ search: term, workplaceId, status, supervisorId })}`), placeholderData: (p) => p });
   // Directory figures over everyone the caller may see (independent of the table filters).
   const everyone = useEmployees();
   const all = everyone.data ?? [];
@@ -50,7 +52,7 @@ export default function EmployeesPage() {
     const val = (e: any) => (sort.key === 'name' ? e.full_name.toLowerCase() : sort.key === 'code' ? String(e.employee_code ?? '') : sort.key === 'workplace' ? (e.workplace_name ?? '~').toLowerCase() : e.last_login_at ?? '');
     return keep.sort((a, b) => (val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0) * (sort.dir === 'asc' ? 1 : -1));
   }, [list.data, gap, sort]);
-  useEffect(() => setOffset(0), [search, workplaceId, status, supervisorId, gap]);
+  useEffect(() => setOffset(0), [term, workplaceId, status, supervisorId, gap]);
   const quick = (key: typeof gap) => () => setGap(gap === key ? '' : key);
 
   return (

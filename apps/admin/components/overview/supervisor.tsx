@@ -5,18 +5,21 @@
  * is selected. Filtering by employee, workplace and date narrows every section together.
  */
 import { useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { ArrowRight, CalendarRange, ClipboardCheck, Inbox } from 'lucide-react';
 import { qs } from '@/lib/api';
 import { fmtClock, fmtLongDate, hrsNum } from '@/lib/format';
-import { Button, ErrorState, LinkButton, PageHeader, SectionHeading } from '@/components/ui';
+import { Button, ErrorState, LinkButton, PageHeader, SectionHeading, WhenVisible } from '@/components/ui';
 import { DateRangeSelect, defaultRange, EmployeeSelect, WorkplaceSelect, type DateRangeValue } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 import type { BoardTab, RosterRow } from '@/components/attendance-board';
 import { ChartCard, HBarList, Kpi, pctDelta, SERIES_COLORS, StatStrip, StatStripSkeleton } from '@/components/charts';
-import { WorkforceMap } from '@/components/live-map';
 import { RightNow } from '@/components/right-now';
 import { ActivityFeed, AttendanceTrend, AttentionPanel, EmployeesByLocation, ExportMenu, LocationTable, RefreshButton, TodayBoard, useOverview, WorkforceToday, WorkplaceModal } from './shared';
+
+// The map and Google's script load only when this section is about to be seen.
+const WorkforceMap = dynamic(() => import('@/components/live-map').then((m) => m.WorkforceMap), { ssr: false, loading: () => <div className="h-[240px] animate-pulse bg-gray-100" /> });
 
 const HOURS = [{ key: 'hours', label: 'Hours', color: SERIES_COLORS[0] }];
 
@@ -123,7 +126,9 @@ export function SupervisorOverview() {
                 </Link>
               </header>
               {d ? (
+                <WhenVisible className="min-h-[240px]">
                 <WorkforceMap sessions={sessions} workplaces={d.byWorkspace} selected={null} onSelect={(id) => { const x = sessions.find((y: any) => y.id === id); if (x) setEmployee(x.employee_id); }} search={false} className={sessions.length < 5 ? 'h-[240px]' : 'h-[340px] lg:h-[400px]'} />
+                </WhenVisible>
               ) : (
                 <div className="h-[340px] animate-pulse bg-gray-100" />
               )}

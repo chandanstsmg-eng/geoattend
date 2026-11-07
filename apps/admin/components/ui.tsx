@@ -272,6 +272,19 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cx('animate-pulse rounded bg-gray-100', className)} aria-hidden />;
 }
 
+/** Renders its children only once they are about to scroll into view, for anything heavy low on a page. */
+export function WhenVisible({ children, className }: { children: ReactNode; className?: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    if (seen || !box.current) return;
+    const io = new IntersectionObserver(([e]) => e?.isIntersecting && setSeen(true), { rootMargin: '400px' });
+    io.observe(box.current);
+    return () => io.disconnect();
+  }, [seen]);
+  return <div ref={box} className={seen ? undefined : className}>{seen ? children : null}</div>;
+}
+
 /** The heading of a dashboard section: states what the section answers, with its controls on the right. */
 export function SectionHeading({ title, description, actions, className }: { title: string; description?: ReactNode; actions?: ReactNode; className?: string }) {
   return (

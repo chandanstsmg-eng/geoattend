@@ -7,6 +7,7 @@ import { ago, fmtDateTime } from '@/lib/format';
 import { Badge, Button, Callout, ConfirmButton, cx, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, SearchInput, Select, Tabs, Textarea, Toolbar } from '@/components/ui';
 import { WorkplaceSelect, useWorkplaces } from '@/components/filters';
 import { useMe } from '@/lib/me';
+import { useDebounced } from '@/lib/use-debounced';
 
 type Status = 'live' | 'archived';
 
@@ -119,7 +120,8 @@ export default function AnnouncementsPage() {
   const [compose, setCompose] = useState(false);
   const [open, setOpen] = useState<any | null>(null);
   const [editing, setEditing] = useState<any | null>(null);
-  const list = useQuery({ queryKey: ['broadcasts', status, search, workplaceId], queryFn: () => get<any[]>(`/broadcasts${qs({ status, search, workplaceId })}`), placeholderData: (p) => p });
+  const term = useDebounced(search);
+  const list = useQuery({ queryKey: ['broadcasts', status, term, workplaceId], queryFn: () => get<any[]>(`/broadcasts${qs({ status, search: term, workplaceId })}`), placeholderData: (p) => p });
   const canManage = (a: any) => canPublish && (isOwner || a.created_by === me?.user.id);
 
   return (
