@@ -4,7 +4,7 @@ Work that is built and passes automated tests, but has **not** been checked the 
 
 ## Open production blockers
 
-Phases E and F are merged for development only. None of these is done, and production must wait for all of them.
+Phases E, F and G are merged for development only. None of these is done, and production must wait for all of them.
 
 | Blocker | Status | What it needs |
 |---|---|---|
@@ -14,6 +14,18 @@ Phases E and F are merged for development only. None of these is done, and produ
 | Real SMTP, push and WhatsApp delivery | NOT VERIFIED | Real credentials and a real delivery to a person. No test against a local server or a simulated provider counts |
 | Physical Android devices | NOT VERIFIED | Real phones, following [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md) |
 | Real production browser testing | NOT VERIFIED | The browser checks below, on the production domain, including Firefox and Safari |
+| Google Maps with the real key | NOT VERIFIED | The real key on the production domain. The key refuses every test address, so only the diagram fallback has been seen |
+| Attendance workflows by hand | NOT VERIFIED | A person walking through the critical rows in the table below |
+
+## Known gaps in the interface
+
+Open after Phase G. Neither hides or alters a record, but both can mislead a supervisor.
+
+| Gap | Effect | What it needs |
+|---|---|---|
+| Supervisor approval pagination | Pending records in Approvals and the Reviews list stop at 200 rows with no notice. Approvals shows the oldest 200, so newer ones wait until those are cleared. Reviews shows the newest 200, so older ones are hidden | Paging, or at least a notice, on both lists |
+| Supervisor employee filter | On the supervisor overview, the employee filter does not narrow pending approvals or the attention counts. Pending approvals says "whole team". The Right now tiles count that employee, but open a map of the whole team | Filtering those counts by employee in the API, and an employee filter on the map |
+| Roster prepared statement | A migration that changes the type of a column the roster query returns gives "cached plan must not change result type" on open connections until they recycle. It also needs a direct or session-mode database connection, which company isolation already requires. Its speed is measured on 42 employees only | Restart the API after such a migration. Measure at real company sizes |
 
 ## Browser checks (Phase G)
 

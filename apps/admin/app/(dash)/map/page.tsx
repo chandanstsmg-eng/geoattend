@@ -92,6 +92,7 @@ export default function LiveMapPage() {
     const p = new URLSearchParams(window.location.search);
     setWanted(p.get('employee'));
     if (p.get('workplaceId')) setWorkplaceId(p.get('workplaceId')!);
+    if (p.get('supervisorId')) setSupervisorId(p.get('supervisorId')!);
     if (STATUS_FILTERS.some((f) => f.value === p.get('status'))) setStatus(p.get('status')!);
   }, []);
   useEffect(() => {
@@ -157,7 +158,7 @@ export default function LiveMapPage() {
           ) : live.isLoading || wps.isLoading ? (
             <div className="h-[calc(100dvh-15rem)] min-h-[380px] animate-pulse bg-gray-100" />
           ) : (
-            <WorkforceMap sessions={sessions} workplaces={workplaces} selected={selected} onSelect={(id) => { setSelected(id); setPanel(true); }} className="h-[calc(100dvh-15rem)] max-h-[860px] min-h-[380px] w-full" />
+            <WorkforceMap sessions={sessions} workplaces={workplaces} pending={live.isPlaceholderData} selected={selected} onSelect={(id) => { setSelected(id); setPanel(true); }} className="h-[calc(100dvh-15rem)] max-h-[860px] min-h-[380px] w-full" />
           )}
           <div className="border-t border-gray-200 px-4 py-3">
             <MapLegend />

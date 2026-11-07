@@ -229,20 +229,20 @@ export function useOverview({ range, workplaceId, supervisorId = '', employeeId 
   const previous = d?.previous?.expected ? d.previous : null; // no comparison against an empty period
   // Days with nobody rostered (weekly off, holidays) have no rate: they are left out rather than drawn as 0%.
   const trend = useMemo(() => (d?.trend ?? []).map((t: any) => ({ ...t, rate: t.expected ? Math.round((t.present / t.expected) * 100) : 0 })), [d]);
-  const download = (path: string) => window.location.assign(`/api/v1/reports/${path}${qs({ from: range.from, to: range.to, workplaceId, includeSimulated: String(sim.include) })}`);
+  const download = (path: string) => window.location.assign(`/api/v1/reports/${path}${qs({ from: range.from, to: range.to, workplaceId, supervisorId, employeeId, includeSimulated: String(sim.include) })}`);
   const refresh = () => { dash.refetch(); live.refetch(); today.refetch(); approvals.refetch(); };
-  return { dash, live, today, d, sessions, now, previous, trend, download, refresh, waiting: approvals.data?.total ?? null, prevLabel: d?.previous ? `${fmtDate(d.previous.from)} – ${fmtDate(d.previous.to)}` : '' };
+  return { dash, live, today, d, sessions, now, previous, trend, download, refresh, waiting: approvals.data?.total ?? null, waitingFailed: approvals.isError, prevLabel: d?.previous ? `${fmtDate(d.previous.from)} – ${fmtDate(d.previous.to)}` : '' };
 }
 
 /** Same export for both roles; the API decides what each may download. */
-export function ExportMenu({ range, workplaceId, download }: { range: DateRangeValue; workplaceId: string; download: (path: string) => void }) {
+export function ExportMenu({ range, workplaceId, supervisorId = '', employeeId = '', download }: { range: DateRangeValue; workplaceId: string; supervisorId?: string; employeeId?: string; download: (path: string) => void }) {
   return (
     <Menu
       label="Export report"
       triggerClassName="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3.5 text-sm font-medium text-gray-800 shadow-xs hover:border-gray-400 hover:bg-gray-50 sm:h-9.5"
       trigger={<><Download className="h-4 w-4" aria-hidden /> Export</>}
       items={[
-        { heading: `${fmtDate(range.from)} – ${fmtDate(range.to)}${workplaceId ? ' · selected workplace' : ''}` },
+        { heading: `${fmtDate(range.from)} – ${fmtDate(range.to)}${workplaceId ? ' · selected workplace' : ''}${supervisorId ? ' · selected supervisor' : ''}${employeeId ? ' · selected employee' : ''}` },
         { label: 'Hours summary (CSV)', icon: <Download />, onSelect: () => download('hours.csv') },
         { label: 'Overtime (CSV)', icon: <Download />, onSelect: () => download('overtime.csv') },
         'separator',
@@ -313,8 +313,9 @@ const HOME = [{ key: 'homeWorkers', label: 'Employees based here', color: SERIES
 /** Where people are based. The live picture is on the map; this is the structure of the workforce. */
 export function EmployeesByLocation({ d, onOpen, className }: { d: any; onOpen: (w: any) => void; className?: string }) {
   const rows = [...d.byWorkspace].sort((a: any, b: any) => b.homeWorkers - a.homeWorkers);
+  const based = rows.reduce((n: number, w: any) => n + w.homeWorkers, 0);
   return (
-    <ChartCard title="Employees by location" subtitle={`${d.kpis.totalWorkers} active employees across ${rows.length} workplace${rows.length === 1 ? '' : 's'}`} empty={!rows.length} className={className}>
+    <ChartCard title="Employees by location" subtitle={`${based} employee${based === 1 ? '' : 's'} based across ${rows.length} workplace${rows.length === 1 ? '' : 's'}`} empty={!rows.length} className={className}>
       <HBarList data={rows} label="Employees based at each workplace" series={HOME} format={(v) => String(v)} name={(r) => r.name} onSelect={onOpen} max={8} />
     </ChartCard>
   );

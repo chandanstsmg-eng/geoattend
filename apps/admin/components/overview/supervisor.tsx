@@ -59,7 +59,7 @@ export function SupervisorOverview() {
             <EmployeeSelect value={employeeId} onChange={setEmployeeId} />
             <DateRangeSelect value={range} onChange={setRange} />
             {filtered && <Button variant="ghost" onClick={() => { setWorkplaceId(''); setEmployeeId(''); }}>Reset</Button>}
-            <ExportMenu range={range} workplaceId={workplaceId} download={o.download} />
+            <ExportMenu range={range} workplaceId={workplaceId} employeeId={employeeId} download={o.download} />
             <RefreshButton busy={o.dash.isFetching} onClick={o.refresh} />
           </>
         }
@@ -86,7 +86,7 @@ export function SupervisorOverview() {
               <Kpi label="Assigned employees" value={k.totalWorkers} sub={`at ${k.activeWorkspaces} workplace${k.activeWorkspaces === 1 ? '' : 's'}`} href="/employees" />
               <Kpi label="Active now" value={k.checkedIn} sub={`${k.liveLocated} with a fresh location`} href={`/map${qs({ workplaceId })}`} title="Open shifts with attendance recorded" />
               <Kpi label="Today’s attendance" value={b.onTime + b.late} sub={`of ${k.scheduledToday} rostered`} onClick={() => toBoard('in')} />
-              <Kpi label="Pending approvals" value={o.waiting ?? '—'} tone={o.waiting ? 'warn' : undefined} sub={o.waiting == null ? 'could not be loaded' : employeeId ? 'whole team' : s.pending ? `${s.pending} records not counted yet` : 'waiting for you'} href="/approvals" />
+              <Kpi label="Pending approvals" value={o.waiting ?? '—'} tone={o.waiting ? 'warn' : undefined} sub={o.waitingFailed ? 'could not be loaded' : o.waiting == null ? 'loading' : employeeId ? 'whole team' : s.pending ? `${s.pending} records not counted yet` : 'waiting for you'} href="/approvals" />
               <Kpi label="Exceptions today" value={exceptions} tone={exceptions ? 'warn' : undefined} sub={k.incomplete ? `late, no-show, no location · ${k.incomplete} missing check-out this period` : 'late, no-show, no location'} href="/attendance" />
             </StatStrip>
           )}

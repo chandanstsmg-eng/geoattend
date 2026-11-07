@@ -3,7 +3,7 @@
  * permission-required and manual-review). Text comes from the server's guidance;
  * the app never decides eligibility itself.
  */
-import { attendanceStatus } from '../../lib/attendance-status';
+import { attendanceStatus, shownGuidance } from '../../lib/attendance-status';
 import { useState } from 'react';
 import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
@@ -16,12 +16,12 @@ import { Badge, Body, Button, Card, DemoBadge, Muted, Row } from '../ui';
 import { CancelReviewButton, EndBreakButton, FreshFixButton, RequestReviewButton, openCaptureFlow } from './actions';
 
 function Hero({ status, tone, title, children }: { status: SessionStatus; tone?: Tone; title?: string; children?: React.ReactNode }) {
-  const g = status.guidance;
+  const g = shownGuidance(status);
   const t = toneColors[tone ?? g.tone];
   return (
     <View style={[st.hero, { backgroundColor: t.bg, borderColor: t.border }]} accessibilityRole="summary">
       <View style={{ flexDirection: 'row', gap: space.sm, alignItems: 'center' }}>
-        <Badge label={status.session.stateLabel} tone={tone ?? g.tone} />
+        <Badge label={g.badge} tone={tone ?? g.tone} />
         <DemoBadge show={status.session.isSimulated} />
       </View>
       <Text style={[st.heroTitle, { color: t.fg }]}>{title ?? g.title}</Text>

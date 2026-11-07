@@ -1,20 +1,20 @@
 import { StyleSheet, Text, View } from 'react-native';
 import type { SessionStatus } from '../lib/api/types';
-import { attendanceStatus } from '../lib/attendance-status';
+import { attendanceStatus, shownGuidance } from '../lib/attendance-status';
 import { fmtDistance, fmtTime } from '../lib/format';
 import { colors, font, radius, space, toneColors } from '../lib/theme';
 import { Badge, DemoBadge } from './ui';
 
 /** Big status card rendered from the server's guidance text. */
 export function StatusCard({ status }: { status: SessionStatus }) {
-  const g = status.guidance;
+  const g = shownGuidance(status);
   const t = toneColors[g.tone];
   const s = status.session;
   const v = status.attendance ? attendanceStatus(status.attendance.verificationStatus) : null;
   return (
     <View accessible style={[st.card, { borderColor: t.border, backgroundColor: t.bg }]} accessibilityRole="summary" accessibilityLabel={`${g.title}. ${g.message}${status.attendance ? `. Checked in at ${fmtTime(status.attendance.recordedAt)}. ${v!.label}` : ''}`}>
       <View style={st.top}>
-        <Badge label={s.stateLabel} tone={g.tone} />
+        <Badge label={g.badge} tone={g.tone} />
         <DemoBadge show={s.isSimulated} />
       </View>
       <Text style={[st.title, { color: t.fg }]}>{g.title}</Text>

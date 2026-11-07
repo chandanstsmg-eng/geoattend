@@ -60,7 +60,7 @@ function fitTo(map: google.maps.Map, pts: google.maps.LatLngLiteral[]) {
   map.fitBounds(b, 56);
 }
 
-function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[]; located: any[]; search: boolean }) {
+function Controls({ workplaces, located, search, pending }: { workplaces: MapWorkplace[]; located: any[]; search: boolean; pending: boolean }) {
   const map = useMap();
   const [found, setFound] = useState<google.maps.LatLngLiteral | null>(null);
   const [searching, setSearching] = useState(false);
@@ -71,7 +71,8 @@ function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[];
   const view = workplaces.map((w) => w.id).join();
   const [fitted, setFitted] = useState<string | null>(null);
   useEffect(() => {
-    if (!map || fitted === view || !(located.length || workplaces.length)) return;
+    // `pending`: these are still the previous filter's people, so wait for the new ones.
+    if (!map || pending || fitted === view || !(located.length || workplaces.length)) return;
     // Prefer fresh positions, then any last-known positions, then the workplaces themselves.
     const live = located.filter((s) => !s.is_stale && !s.ended_at);
     const people = live.length ? live : located;
@@ -81,7 +82,7 @@ function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[];
     fitTo(map, [...people.map((s) => ({ lat: s.last_latitude, lng: s.last_longitude })), ...sites.map((w) => ({ lat: w.latitude, lng: w.longitude }))]);
     setFitted(view);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, located.length, view]);
+  }, [map, located.length, view, pending]);
   return (
     <>
       <MapControl position={ControlPosition.TOP_LEFT}>
@@ -251,7 +252,7 @@ export function MapLegend({ className }: { className?: string }) {
   );
 }
 
-export function WorkforceMap({ sessions, workplaces, selected, onSelect, className, search = true }: { sessions: any[]; workplaces: MapWorkplace[]; selected: string | null; onSelect: (id: string) => void; className?: string; search?: boolean }) {
+export function WorkforceMap({ sessions, workplaces, selected, onSelect, className, search = true, pending = false }: { sessions: any[]; workplaces: MapWorkplace[]; selected: string | null; onSelect: (id: string) => void; className?: string; search?: boolean; pending?: boolean }) {
   const located = useMemo(() => sessions.filter((s) => s.last_latitude != null), [sessions]);
   const first = workplaces[0];
   const center = first ? { lat: first.latitude, lng: first.longitude } : located[0] ? { lat: located[0].last_latitude, lng: located[0].last_longitude } : null;
@@ -283,7 +284,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
             {w && <Button size="sm" variant="ghost" onClick={() => setSchematicWp('')}>Back to all</Button>}
           </div>
         )}
-        {!w ? (
+        {!w && workplaces.length ? (
           <SiteOverview
             sites={workplaces.map((x) => {
               const here = open.filter((s) => s.workplace_id === x.id);
@@ -328,7 +329,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
           </AdvancedMarker>
         ))}
         <Markers located={located} selected={selected} onSelect={onSelect} />
-        <Controls workplaces={workplaces} located={located} search={search} />
+        <Controls workplaces={workplaces} located={located} search={search} pending={pending} />
       </Map>
       </MapsProvider>
     </div>

@@ -170,4 +170,4 @@ Branch `phase-f-jobs-monitoring`, stacked on `phase-e-dates-isolation`; neither 
 
 ## Phase G: UI/UX and performance
 
-On branch `phase-g-ui-performance`, not merged. Audit, baseline and outcome: [PHASE-G-AUDIT.md](PHASE-G-AUDIT.md). No migration and no new dependency. The phone screens changed in this phase have not run on a phone, and real Google Maps has not been seen: see [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).
+Merged into `production-remediation` for development only, not deployed. Audit, baseline and outcome: [PHASE-G-AUDIT.md](PHASE-G-AUDIT.md). No migration and no new dependency. The phone screens changed in this phase have not run on a phone, and real Google Maps has not been seen: see [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).

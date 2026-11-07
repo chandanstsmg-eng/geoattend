@@ -124,9 +124,9 @@ API, 25 calls each, sample data of 42 employees:
 | F7 silent list limits | Absences page through everything. Overtime, leave, tasks and announcements say when a limit is reached. **Open:** reviews and approvals |
 | F8 overtime bulk approve | Fixed: only rows on screen, after a confirmation |
 | F9 thumbnail audit noise | Fixed |
-| F10 overview tiles | Fixed: tiles open the matching filter and count what it lists |
+| F10 overview tiles | Fixed: tiles open the matching filter and count what it lists. **Limit:** a supervisor filtered to one employee sees that person's count, but the map lists the whole team, because the map has no employee filter |
 | F11 supervisors on owner pages | Fixed: "Not available" |
-| M1 pending looks confirmed | Fixed in the app. Not run on a phone |
+| M1 pending looks confirmed | Fixed in the app, including the server's "Present" wording, which the first fix missed. Not run on a phone |
 | M2 offline cold start | **Partly:** SOS is reachable. Continue and End shift stay unreachable on purpose; see below |
 | M3 stale Home | Fixed. Not run on a phone |
 | M4 unreachable screens | Fixed for announcements and tasks. Earnings stays hidden while payroll is off |
@@ -134,3 +134,51 @@ API, 25 calls each, sample data of 42 employees:
 **M2 needs a decision.** Opening `/shift` with no cached assignment makes the end-of-shift selfie rule read nothing, so the selfie would be skipped. Fixing it properly means persisting the assignment, which changes the inputs to the verification rules, so it was left for a decision rather than changed in a UI phase.
 
 **One calculation changed.** A workplace's attendance rate counted today's shifts that had not started as missed, which disagreed with the headline rate and with the definition at the top of `analytics.routes.ts`. It now uses the same rule. Closed days are unaffected: figures for past days are identical between the original and final code.
+
+## Review before merging
+
+A second independent review read the final diff before integration. It found no security, company isolation, payroll or attendance history problem. It did find ten issues that tests had not caught. Nine were fixed before the merge and one is recorded under "Known gaps" in [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md):
+
+| Issue | Result |
+|---|---|
+| A pending record still read "Present, Attendance recorded" on the phone, because the server's wording follows the session | Fixed in the app, with tests |
+| Filtering to one employee showed every staffed workplace as "Short by N" and raised a red coverage alert | Fixed in the API, with a test |
+| "Employees by location" showed "1 active employees" under a full chart when filtered | Fixed |
+| The map could stay zoomed on the previous filter's people | Fixed. Not seen on real Google Maps |
+| Overview export ignored the employee and supervisor filters | Fixed |
+| Tile links dropped the supervisor filter | Fixed for owners. See the limit on F10 |
+| Pending approvals said "could not be loaded" while still loading | Fixed |
+| The Shifts link on the holidays section was a dead end for supervisors | Fixed |
+| The diagram went empty if a session had no workplace in the list | Fixed |
+| Thumbnails scrolled to after the two-minute link expired stayed broken | Fixed: one renewal a minute at most, only after a real failure |
+| Prepared statement: operational limits | Open, see "Known gaps" |
+
+## Changes people will notice
+
+Nothing was removed outright, but these were replaced or reduced:
+
+- Owner overview: "Present today" became "Working now", which has a different meaning. On-time and late counts stay in Workforce today. The Absences figure now opens Attendance.
+- Supervisor overview: sparklines and the "No comparison shown" note are gone. "Rostered today" and "Checked in" merged into "On shift now".
+- Reports: the Workplace comparison chart became the location table. The filter bar no longer sticks on phones.
+- Map filters: "Location unavailable" and "Stale location" merged into "No fresh location". Overtime has its own filter.
+- Absences: raw coordinates became an "Open on map" link, and the list pages 50 at a time.
+- Supervisors opening owner pages by URL see "Not available", where they used to see controls that failed on save.
+- Overtime bulk approve covers only rows on screen, after a confirmation.
+
+## Business rule: workplace attendance rate
+
+Attendance rate = shifts with counted attendance ÷ expected shifts, for the whole company and for each workplace alike.
+
+| Shift | Expected? | Present? |
+|---|---|---|
+| Past day, attended | Yes | Yes |
+| Past day, not attended | Yes | No |
+| Today, attended | Yes | Yes |
+| Today, marked no-show, or the shift is over with no attendance | Yes | No |
+| Today, not started and no outcome yet | **No** (this is the change) | No |
+| Approved leave or a holiday | No | No |
+| Pending verification | No, shown on its own until a person decides | No |
+
+Voided records do not count as attendance, as before. The rule is in `dayOutcome` for the headline and in the per-workplace loop in `analytics.routes.ts`, and `workforce.test.ts` holds the two together: the workplaces' expected shifts must add up to the headline figure.
+
+**Effect.** The change only affects a period that includes today. Early in the day a workplace now shows a rate based on the shifts that have an outcome so far, rather than a low rate caused by shifts that have not begun. Payroll, hours, overtime and exports do not use this figure.

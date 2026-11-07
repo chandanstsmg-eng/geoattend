@@ -293,7 +293,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     const assigned = assignedToday.get(w.id)?.size ?? 0;
     const absent = new Set(absentToday.filter((r) => r.workplace_id === w.id).map((r) => r.employee_id)).size;
     const h = byWpHours.get(w.id);
-    const shortage = w.min_staff != null ? Math.max(0, w.min_staff - assigned) : 0;
+    // With one employee selected, `assigned` counts that person only, which says nothing about staffing.
+    const shortage = w.min_staff != null && !emp ? Math.max(0, w.min_staff - assigned) : 0;
     return {
       id: w.id,
       name: w.name,

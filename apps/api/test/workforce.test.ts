@@ -318,6 +318,14 @@ describe('attendance totals, CSV exports and scope', () => {
     }
   });
 
+  it('does not report a workplace as short of staff when the view is one employee', async () => {
+    const one = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false&employeeId=${empB1.id}`).expect(200)).body;
+    expect(one.byWorkspace.find((w: any) => w.id === siteB)).toMatchObject({ minStaff: 3, shortage: 0 });
+    expect(one.byWorkspace.some((w: any) => w.status === 'SHORT')).toBe(false);
+    const all = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`).expect(200)).body;
+    expect(all.byWorkspace.find((w: any) => w.id === siteB).shortage).toBe(Math.max(0, 3 - all.byWorkspace.find((w: any) => w.id === siteB).assignedToday));
+  });
+
   it('builds the dashboard from the same figures, scoped per role', async () => {
     const o = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`).expect(200)).body;
     const hours = (await owner.agent.get(`/api/v1/reports/hours?from=${d1}&to=${d3}`).expect(200)).body.rows;

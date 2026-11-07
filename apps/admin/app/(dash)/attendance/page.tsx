@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ImageOff, Plus } from 'lucide-react';
@@ -26,10 +26,10 @@ function LateChip({ minutes: m }: { minutes: number }) {
 const INFO_FLAGS = new Set(['SIMULATED', 'BACKGROUND_LOCATION_UNAVAILABLE']);
 
 /** 32 px selfie; a placeholder when there is no viewable photo. */
-function Selfie({ url, name }: { url?: string; name: string }) {
+function Selfie({ url, name, onExpired }: { url?: string; name: string; onExpired: () => void }) {
   if (!url) return <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-gray-500"><ImageOff className="h-3.5 w-3.5" /></span>;
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt={`Check-in photo of ${name}`} className="h-8 w-8 shrink-0 rounded-full border border-gray-200 object-cover" referrerPolicy="no-referrer" loading="lazy" />;
+  return <img src={url} alt={`Check-in photo of ${name}`} className="h-8 w-8 shrink-0 rounded-full border border-gray-200 object-cover" referrerPolicy="no-referrer" loading="lazy" onError={onExpired} />;
 }
 
 const REVIEW: Record<string, { tone: 'amber' | 'green' | 'red'; label: string }> = {
@@ -155,6 +155,9 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
     staleTime: 4 * 60_000,
   });
   const thumbUrls: Record<string, string> = (thumbs.data as any)?.urls ?? {};
+  // Each request is audited, so at most one a minute, and only when a link has really failed.
+  const renewed = useRef(0);
+  const renewThumbs = () => { if (Date.now() - renewed.current > 60_000) { renewed.current = Date.now(); thumbs.refetch(); } };
 
   const sm = list.data?.summary;
   return (
@@ -223,7 +226,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
                       <Td className="whitespace-nowrap tabular">{fmtDate(r.shift_date)}</Td>
                       <Td>
                         <div className="flex items-center gap-2.5">
-                          <Selfie url={thumbUrls[r.id]} name={r.full_name} />
+                          <Selfie url={thumbUrls[r.id]} name={r.full_name} onExpired={renewThumbs} />
                           <div className="min-w-0">
                             <span className="flex flex-wrap items-center gap-1.5">
                               <span className="font-medium text-gray-900">{r.full_name}</span>

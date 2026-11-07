@@ -59,7 +59,7 @@ export function OwnerOverview() {
             <SupervisorSelect value={supervisorId} onChange={setSupervisorId} />
             <DateRangeSelect value={range} onChange={setRange} />
             {filtered && <Button variant="ghost" onClick={() => { setWorkplaceId(''); setSupervisorId(''); }}>Reset</Button>}
-            <ExportMenu range={range} workplaceId={workplaceId} download={o.download} />
+            <ExportMenu range={range} workplaceId={workplaceId} supervisorId={supervisorId} download={o.download} />
             <RefreshButton busy={o.dash.isFetching} onClick={o.refresh} />
           </>
         }
@@ -70,7 +70,7 @@ export function OwnerOverview() {
         <ErrorState error={o.dash.error} onRetry={() => o.dash.refetch()} />
       ) : (
         <>
-          <RightNow sessions={sessions} rows={rows} now={o.now} loading={o.live.isLoading || o.today.isLoading} error={o.live.error ?? o.today.error} onRetry={o.refresh} onNotArrived={() => toBoard('not-started')} workplaceId={workplaceId} />
+          <RightNow sessions={sessions} rows={rows} now={o.now} loading={o.live.isLoading || o.today.isLoading} error={o.live.error ?? o.today.error} onRetry={o.refresh} onNotArrived={() => toBoard('not-started')} workplaceId={workplaceId} supervisorId={supervisorId} />
           {d && <AttentionPanel a={d.attention} d={d} onEmployee={setEmployee} className="mt-4" />}
 
           <SectionHeading title="Your workforce" description="Who you have, and who is working today" />
@@ -97,7 +97,7 @@ export function OwnerOverview() {
               <Kpi label="Overtime" value={(s.overtimeMinutes / 60).toFixed(1)} unit="h" delta={p ? pctDelta(s.overtimeMinutes, p.overtimeMinutes, 'down', `Previous period ${prevLabel}`) : null} sub={pending?.count ? `${pending.count} waiting approval` : 'approved'} href="/overtime" title="Approved overtime, plus time over the weekly limit where Settings sets one. Claims waiting approval never count." />
               <Kpi label="Late arrivals" value={s.late} tone={s.late ? 'warn' : undefined} delta={p ? absDelta(s.late, p.late, 'down', '', `Previous period ${prevLabel}`) : null} sub={s.present ? `${Math.round((s.late / s.present) * 100)}% of check-ins` : 'in this period'} spark={trend.map((t: any) => t.late)} href="/attendance?late=true" />
               <Kpi label="Absences" value={s.absent} tone={s.absent ? 'bad' : undefined} delta={p ? absDelta(s.absent, p.absent, 'down', '', `Previous period ${prevLabel}`) : null} sub="rostered shifts missed" spark={trend.map((t: any) => t.absent)} title="Rostered shifts without attendance (past days; today only no-shows and finished shifts)" href="/attendance" />
-              <Kpi label="Pending approvals" value={o.waiting ?? '—'} tone={o.waiting ? 'warn' : undefined} sub={o.waiting == null ? 'could not be loaded' : s.pending ? `${s.pending} records not counted yet` : 'all decisions'} href="/approvals" title="Everything waiting in Approvals. Pending attendance is not counted until a person decides." />
+              <Kpi label="Pending approvals" value={o.waiting ?? '—'} tone={o.waiting ? 'warn' : undefined} sub={o.waitingFailed ? 'could not be loaded' : o.waiting == null ? 'loading' : s.pending ? `${s.pending} records not counted yet` : 'all decisions'} href="/approvals" title="Everything waiting in Approvals. Pending attendance is not counted until a person decides." />
             </StatStrip>
           )}
           {d && !p && d.previous && <p className="mt-2 text-xs text-gray-500">No comparison shown: there were no rostered shifts in the previous period ({prevLabel}).</p>}

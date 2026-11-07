@@ -17,6 +17,24 @@ export function attendanceStatus(status: string | null | undefined) {
   return (status && KNOWN[status]) || { label: 'Being checked', tone: 'warning' as Tone, counted: false };
 }
 
+/**
+ * The server's guidance follows the session, and the session is PRESENT even when the record behind
+ * it is still waiting for a person. So a record that does not count must not borrow that wording.
+ */
+export function shownGuidance(status: {
+  guidance: { tone: Tone; title: string; message: string };
+  session: { stateLabel: string };
+  attendance?: { verificationStatus?: string | null } | null;
+}) {
+  const g = status.guidance;
+  const same = { ...g, badge: status.session.stateLabel };
+  if (!status.attendance) return same;
+  const v = attendanceStatus(status.attendance.verificationStatus);
+  if (v.counted || !(g.tone === 'success' || g.title.startsWith('Present'))) return same;
+  const why = status.attendance.verificationStatus === 'VOIDED' ? 'This check-in does not count towards your attendance.' : 'A manager must confirm this check-in before it counts.';
+  return { tone: v.tone, title: v.label, message: g.tone === 'success' ? why : `${g.message} ${why}`, badge: 'Checked in' };
+}
+
 /** "7 h 45 min", or "40 min" under an hour. */
 export const hoursMinutes = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`);
 

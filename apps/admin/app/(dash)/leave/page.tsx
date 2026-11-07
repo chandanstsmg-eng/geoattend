@@ -157,7 +157,7 @@ function Holidays() {
       actions={isOwner && <Button size="sm" loading={national.isPending} onClick={() => national.mutate()}>Add national holidays {year}</Button>}
     >
       <p className="mb-3 text-sm text-gray-600">
-        On a holiday nobody is expected: no no-show alerts, and the day is not counted as absent. Weekly offs are the days a shift does not run (set them on <Link className="text-primary-700 underline" href="/shifts">Shifts</Link>).
+        On a holiday nobody is expected: no no-show alerts, and the day is not counted as absent. Weekly offs are the days a shift does not run (set them on {isOwner ? <Link className="text-primary-700 underline" href="/shifts">Shifts</Link> : 'Shifts'}).
       </p>
       {isOwner && <form className="mb-4 grid gap-2 sm:grid-cols-[10rem_1fr_14rem_auto]" onSubmit={(e) => { e.preventDefault(); add.mutate(); }}>
         <Input type="date" aria-label="Holiday date" required value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />

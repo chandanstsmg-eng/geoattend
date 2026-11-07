@@ -46,8 +46,8 @@ function Cell({ label, value, hint, tone, href, onClick }: { label: string; valu
   return href ? <Link href={href} className={cls}>{inner}</Link> : <button type="button" onClick={onClick} className={cls}>{inner}</button>;
 }
 
-export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotArrived, workplaceId }: { sessions: any[]; rows: RosterRow[]; now: number; loading: boolean; error: unknown; onRetry: () => void; onNotArrived: () => void; workplaceId: string }) {
-  const mapHref = (status: string) => `/map${qs({ workplaceId, status })}`;
+export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotArrived, workplaceId, supervisorId = '' }: { sessions: any[]; rows: RosterRow[]; now: number; loading: boolean; error: unknown; onRetry: () => void; onNotArrived: () => void; workplaceId: string; supervisorId?: string }) {
+  const mapHref = (status: string) => `/map${qs({ workplaceId, supervisorId, status })}`;
   if (error) return <section className="rounded-lg border border-gray-200 bg-white shadow-card"><ErrorState error={error} onRetry={onRetry} /></section>;
   if (loading) return <div aria-busy className="h-[132px] animate-pulse rounded-lg border border-gray-200 bg-white" />;
 
