@@ -194,7 +194,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
         </Select>
         {/* The detailed export is owner-only on the server. */}
         {isOwner && (
-          <LinkButton className="sm:ml-auto" href={`/api/v1/reports/attendance.csv${qs({ from: f.from, to: f.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: 'true' })}`} title="Download these records as CSV (includes simulated records, marked SIMULATED)" size="sm" variant="ghost"><Download className="h-4 w-4" aria-hidden /> Export CSV</LinkButton>
+          <LinkButton className="sm:ml-auto" href={`/api/v1/reports/attendance.csv${qs({ from: f.from, to: f.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: 'true' })}`} title="Every status in this date range, for the workplace and employee chosen. The other filters do not apply to the file. Simulated records are included and marked SIMULATED." size="sm" variant="ghost"><Download className="h-4 w-4" aria-hidden /> CSV, all statuses</LinkButton>
         )}
       </Toolbar>
       <QueryState query={list} isEmpty={(d: any) => d.items.length === 0} empty={<EmptyState title="No attendance records in this range">Widen the dates or clear a filter.</EmptyState>}>

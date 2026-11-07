@@ -46,7 +46,7 @@ export default function AbsencesPage() {
           </label>
           {/* The detailed exports are owner-only on the server. */}
           {isOwner && (
-            <LinkButton className="sm:ml-auto" href={`/api/v1/reports/absences.csv${qs({ from: f.from, to: f.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: 'true' })}`} size="sm" variant="ghost"><Download className="h-4 w-4" aria-hidden /> CSV</LinkButton>
+            <LinkButton className="sm:ml-auto" href={`/api/v1/reports/absences.csv${qs({ from: f.from, to: f.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: 'true' })}`} size="sm" variant="ghost" title="Every status in this date range, for the workplace and employee chosen. The status filters do not apply to the file."><Download className="h-4 w-4" aria-hidden /> CSV, all statuses</LinkButton>
           )}
         </Toolbar>
         <QueryState query={list} isEmpty={(d: any) => d.items.length === 0} empty={<EmptyState title="No absences in this range" />}>
