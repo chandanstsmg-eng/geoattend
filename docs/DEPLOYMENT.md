@@ -10,6 +10,8 @@ What must exist outside this repository, and what has really been tested: [EXTER
 * `NODE_ENV=production`, `COOKIE_SECURE=true`, `DEMO_MODE=false` (the API refuses to start otherwise).
 * Strong, unique `JWT_SECRET` and `STORAGE_SIGNING_KEY` (≥ 32 random characters) from a secret manager.
 * PostgreSQL 15+ (PostGIS recommended) with TLS (`?sslmode=require`), automated backups and point-in-time recovery.
+* Two database logins: `DATABASE_URL` (owner, not a superuser) and `APP_DATABASE_URL` (the restricted `geoattend_tenant`). The API refuses to start otherwise. Connect directly or through a pooler in **session** mode, never transaction mode. See [COMPANY-ISOLATION.md](COMPANY-ISOLATION.md).
+* Set `OPS_TOKEN` and have your monitoring read `/health/jobs`. See [BACKGROUND-JOBS.md](BACKGROUND-JOBS.md).
 * A **private** S3-compatible bucket (block all public access) for photos; credentials limited to that bucket.
 * `CORS_ORIGINS` = the dashboard origin only. `TRUST_PROXY` = the number of proxy hops (e.g. `1`) so client IPs and `https` are detected correctly. The API refuses to start in production if any required setting is missing, a placeholder, or points at localhost.
 * Restrict database and object-storage ports to the private network.
@@ -73,6 +75,7 @@ Production: use your provider's automated backups plus periodic logical dumps:
 
 ```
 pg_dump --format=custom --no-owner "$DATABASE_URL" > geoattend-$(date +%F).dump
+psql "$ADMIN_URL" -c "CREATE ROLE geoattend_tenant NOLOGIN NOBYPASSRLS"   # only on a server that does not have it yet
 createdb geoattend_restore && pg_restore --no-owner --dbname=geoattend_restore geoattend-YYYY-MM-DD.dump
 ```
 

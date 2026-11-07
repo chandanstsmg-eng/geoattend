@@ -126,7 +126,7 @@ export async function transition(
 export async function employeeAssignment(employeeId: string, db?: Queryable) {
   const workplace = await one(
     `SELECT w.* FROM workplace_assignments wa JOIN workplaces w ON w.id = wa.workplace_id
-     WHERE wa.employee_id = $1 AND wa.effective_to IS NULL AND wa.effective_from <= CURRENT_DATE`,
+     WHERE wa.employee_id = $1 AND wa.effective_to IS NULL AND wa.effective_from <= (now() AT TIME ZONE w.timezone)::date`,
     [employeeId],
     db,
   );
@@ -138,7 +138,7 @@ export async function employeeAssignment(employeeId: string, db?: Queryable) {
      JOIN shifts sh ON sh.id = esa.shift_id
      JOIN workplaces w ON w.id = sh.workplace_id
      LEFT JOIN users m ON m.id = esa.manager_id
-     WHERE esa.employee_id = $1 AND (esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE - 1)
+     WHERE esa.employee_id = $1 AND (esa.effective_to IS NULL OR esa.effective_to >= (now() AT TIME ZONE sh.timezone)::date - 1)
      ORDER BY sh.start_time, esa.effective_from`,
     [employeeId],
     db,

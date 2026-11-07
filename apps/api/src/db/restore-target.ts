@@ -38,6 +38,25 @@ export async function prepareRestoreTarget(liveUrl: string, target: string, opts
   return url;
 }
 
+/**
+ * A dump's row-level security policies name the role requests run as (migration 025). It belongs to the
+ * server, not the database, so a dump does not carry it and pg_restore would stop at the first policy.
+ */
+export async function ensureTenantRole(url: string) {
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
+  try {
+    await client.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'geoattend_tenant') THEN
+        CREATE ROLE geoattend_tenant LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+      END IF;
+    EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
+    END $$`);
+  } finally {
+    await client.end();
+  }
+}
+
 /** Connection settings for pg_dump / pg_restore, so the password is not on the command line. */
 export function clientEnvironment(url: string) {
   const u = new URL(url);

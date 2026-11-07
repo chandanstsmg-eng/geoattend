@@ -1,7 +1,8 @@
 /**
  * Periodic background work, driven by the database (no in-memory timers per
- * employee, so restarts lose nothing and multiple API instances are safe —
- * each step re-checks state under a row lock before acting):
+ * employee, so restarts lose nothing). runner.ts runs each job once across all
+ * API instances, one company at a time on the restricted login, and each step
+ * re-checks state under a row lock before acting:
  *
  *  - stale location updates  → TRACKING_INTERRUPTED (never "left the workplace")
  *  - away beyond threshold   → PROLONGED_ABSENCE (+ cooldown-limited reminders)
@@ -13,8 +14,9 @@
  *  - retention (hourly)
  */
 import { TRACKING_STATES } from '@geoattend/shared';
-import { q, tx } from '../../db/pool.js';
 import { logger } from '../../lib/logger.js';
+import { q, tx } from '../../db/pool.js';
+import { eachCompany, eachRecord, recoverInterruptedJobs, runJob, throwIfAny } from './runner.js';
 import { config } from '../../config.js';
 import { getSettings } from '../settings/settings.service.js';
 import { notify } from '../notifications/notify.js';
@@ -44,14 +46,12 @@ export function likelyCause(s: { last_battery_level?: number | null; last_batter
   return `${generic}${battery ? ` ${battery}, network ${s.last_network ?? 'unknown'}.` : ''}`;
 }
 
-/** Companies with at least one open session; each is swept with its own settings. */
+/** Companies with at least one open session, the only ones these sweeps need to visit. */
 async function orgsWithOpenSessions(): Promise<string[]> {
   return (await q(`SELECT DISTINCT u.org_id FROM tracking_sessions s JOIN users u ON u.id = s.employee_id WHERE s.ended_at IS NULL`)).map((r) => r.org_id);
 }
 
-export async function sweepStale(realNow = new Date()) {
-  for (const orgId of await orgsWithOpenSessions()) await sweepStaleOrg(orgId, realNow);
-}
+export const sweepStale = (realNow = new Date()) => eachCompany((orgId) => sweepStaleOrg(orgId, realNow), orgsWithOpenSessions);
 
 async function sweepStaleOrg(orgId: string, realNow: Date) {
   const settings = await getSettings(orgId);
@@ -63,8 +63,8 @@ async function sweepStaleOrg(orgId: string, realNow: Date) {
        AND COALESCE(last_location_at, started_at) < $2::timestamptz + make_interval(secs => sim_clock_offset_sec) - make_interval(secs => $3)`,
     [TRACKING_STATES, realNow, settings.tracking.staleAfterSec, orgId],
   );
-  for (const { id } of candidates) {
-    await tx(async (db) => {
+  const failures = await eachRecord(candidates, ({ id }) =>
+    tx(async (db) => {
       const s = await lockSession(db, id);
       if (!s || s.ended_at || !TRACKING_STATES.includes(s.state)) return;
       const now = new Date(realNow.getTime() + s.sim_clock_offset_sec * 1000);
@@ -91,12 +91,15 @@ async function sweepStaleOrg(orgId: string, realNow: Date) {
         dedupeKey: `stale:${id}:${changedAt}`,
         simulated: s.is_simulated,
       });
-    });
-  }
+    }),
+  );
   outbox.flush();
+  throwIfAny(failures);
 }
 
-export async function sweepAbsences(realNow = new Date()) {
+export const sweepAbsences = (realNow = new Date()) => eachCompany(() => absencesForCompany(realNow), orgsWithOpenSessions);
+
+async function absencesForCompany(realNow: Date) {
   const outbox = new Outbox();
   const due = await q(
     `SELECT a.id, a.session_id FROM absence_intervals a JOIN tracking_sessions s ON s.id = a.session_id
@@ -104,8 +107,8 @@ export async function sweepAbsences(realNow = new Date()) {
        AND a.started_at + make_interval(mins => a.threshold_minutes) <= $1::timestamptz + make_interval(secs => s.sim_clock_offset_sec)`,
     [realNow],
   );
-  for (const row of due) {
-    await tx(async (db) => {
+  const failures = await eachRecord(due, (row) =>
+    tx(async (db) => {
       const s = await lockSession(db, row.session_id);
       if (!s || s.ended_at) return;
       const now = new Date(realNow.getTime() + s.sim_clock_offset_sec * 1000);
@@ -154,58 +157,70 @@ export async function sweepAbsences(realNow = new Date()) {
           });
         }
       }
-    });
-  }
+    }),
+  );
   outbox.flush();
+  throwIfAny(failures);
 }
 
-export async function sweepExpiredWindows(now = new Date()) {
+export const sweepExpiredWindows = (now = new Date()) => eachCompany((orgId) => expiredWindowsForCompany(orgId, now), orgsWithOpenSessions);
+
+async function expiredWindowsForCompany(orgId: string, now: Date) {
   const outbox = new Outbox();
-  for (const orgId of await orgsWithOpenSessions()) {
-    const settings = await getSettings(orgId);
-    const due = await q(
-      // Overtime is not bound to the window (sweepOvertime ends it if the phone goes quiet).
-      `SELECT id FROM tracking_sessions WHERE ended_at IS NULL AND scheduled_end_at + make_interval(mins => $2) < $1 AND employee_id IN (SELECT id FROM users WHERE org_id = $3)
-         AND state <> 'ON_OVERTIME' AND resume_state IS DISTINCT FROM 'ON_OVERTIME'`,
-      [now, settings.tracking.endGraceMinutes, orgId],
-    );
-    for (const { id } of due) {
-      await tx(async (db) => {
-        const s = await lockSession(db, id);
-        if (!s || s.ended_at || onOvertime(s)) return;
-        await finalizeLocked(db, outbox, s, { actor: 'SYSTEM', actorId: null, authorization: 'EXPIRED', reason: 'shift window ended' });
-      });
-    }
-  }
+  const settings = await getSettings(orgId);
+  const due = await q(
+    // Overtime is not bound to the window (sweepOvertime ends it if the phone goes quiet).
+    `SELECT id FROM tracking_sessions WHERE ended_at IS NULL AND scheduled_end_at + make_interval(mins => $2) < $1 AND employee_id IN (SELECT id FROM users WHERE org_id = $3)
+       AND state <> 'ON_OVERTIME' AND resume_state IS DISTINCT FROM 'ON_OVERTIME'`,
+    [now, settings.tracking.endGraceMinutes, orgId],
+  );
+  const failures = await eachRecord(due, ({ id }) =>
+    tx(async (db) => {
+      const s = await lockSession(db, id);
+      if (!s || s.ended_at || onOvertime(s)) return;
+      await finalizeLocked(db, outbox, s, { actor: 'SYSTEM', actorId: null, authorization: 'EXPIRED', reason: 'shift window ended' });
+    }),
+  );
   outbox.flush();
+  throwIfAny(failures);
 }
 
-let lastRetention = 0;
+const sweepStaleIntents = () =>
+  eachCompany(async () => {
+    const outbox = new Outbox();
+    try {
+      await expireStaleIntents(outbox);
+    } finally {
+      outbox.flush();
+    }
+  });
+
+/** In order. Each job runs on its own: one failing never stops the ones after it. */
+export const JOBS: Array<{ name: string; run: (now: Date) => Promise<unknown>; everyMs?: number }> = [
+  { name: 'expired-windows', run: sweepExpiredWindows },
+  { name: 'stale-tracking', run: sweepStale },
+  { name: 'absences', run: sweepAbsences },
+  { name: 'overdue-breaks', run: sweepOverdueBreaks },
+  { name: 'overtime', run: sweepOvertime },
+  { name: 'no-shows', run: sweepNoShows },
+  { name: 'overdue-approvals', run: sweepOverdueApprovals },
+  { name: 'digests', run: sweepDigests },
+  { name: 'face-checks', run: () => sweepFaceChecks() },
+  { name: 'stale-intents', run: sweepStaleIntents },
+  { name: 'deliveries', run: () => processDeliveries() },
+  { name: 'retention', run: () => runRetention(), everyMs: 3600_000 },
+];
+
 let running = false;
 
 export async function sweepOnce(now = new Date()) {
   if (running) return;
   running = true;
   try {
-    await sweepExpiredWindows(now);
-    await sweepStale(now);
-    await sweepAbsences(now);
-    await sweepOverdueBreaks(now);
-    await sweepOvertime(now);
-    await sweepNoShows(now);
-    await sweepOverdueApprovals(now);
-    await sweepDigests(now);
-    await sweepFaceChecks();
-    const outbox = new Outbox();
-    await expireStaleIntents(outbox);
-    outbox.flush();
-    await processDeliveries();
-    if (Date.now() - lastRetention > 3600_000) {
-      lastRetention = Date.now();
-      await runRetention();
-    }
+    await recoverInterruptedJobs();
+    for (const job of JOBS) await runJob(job.name, () => job.run(now), { everyMs: job.everyMs });
   } catch (err) {
-    logger.error({ err }, 'sweeper run failed');
+    logger.error({ err }, 'sweeper run failed'); // the job tables are unreachable: the database is down
   } finally {
     running = false;
   }

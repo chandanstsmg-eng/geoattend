@@ -51,6 +51,8 @@ function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string
                   <Th className="text-right">Hours</Th>
                   <Th className="text-right">Overtime h</Th>
                   <Th className="text-right">Left early</Th>
+                  <Th className="text-right">Pending days</Th>
+                  <Th className="text-right">Pending h</Th>
                 </tr>
               </thead>
               <tbody>
@@ -68,6 +70,8 @@ function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string
                     <Td className="text-right tabular">{hours(r.worked_minutes)}</Td>
                     <Td className="text-right tabular">{r.overtime_minutes ? hours(r.overtime_minutes) : '—'}</Td>
                     <Td className="text-right tabular">{r.left_early || '—'}</Td>
+                    <Td className={cx('text-right tabular', r.pending_days && 'text-amber-800')}>{r.pending_days || '—'}</Td>
+                    <Td className={cx('text-right tabular', r.pending_minutes && 'text-amber-800')}>{r.pending_minutes ? hours(r.pending_minutes) : '—'}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -128,6 +132,7 @@ function HoursSummary({ params }: { params: Filters }) {
                   <SortTh k="hours" sort={sort} onSort={setSort} className="text-right">Total Hours Worked</SortTh>
                   <SortTh k="overtime" sort={sort} onSort={setSort} className="text-right">Overtime h</SortTh>
                   <Th className="text-right">Incomplete shifts</Th>
+                  <Th className="text-right">Pending h (not counted)</Th>
                 </tr>
               </thead>
               <tbody>
@@ -138,6 +143,7 @@ function HoursSummary({ params }: { params: Filters }) {
                     <Td className="text-right tabular">{hoursText(r.total_minutes)}</Td>
                     <Td className="text-right tabular">{r.overtime_minutes ? hoursText(r.overtime_minutes) : '—'}</Td>
                     <Td className={cx('text-right tabular', r.incomplete && 'text-amber-800')}>{r.incomplete || '—'}</Td>
+                    <Td className={cx('text-right tabular', r.pending_minutes > 0 && 'text-amber-800')}>{r.pending_minutes ? hoursText(r.pending_minutes) : '—'}</Td>
                   </tr>
                 ))}
               </tbody>

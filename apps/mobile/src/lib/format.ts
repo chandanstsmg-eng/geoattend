@@ -51,3 +51,8 @@ export function fmtDays(days: number[]): string {
   if (days.length === 7) return 'Every day';
   return days.map((d) => DAYS[d] ?? d).join(', ');
 }
+
+/** Today on the phone's calendar. toISOString() would give the UTC date, which is yesterday until 05:30 in India. */
+export function localISODate(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

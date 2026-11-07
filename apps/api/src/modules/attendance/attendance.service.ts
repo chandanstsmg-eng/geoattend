@@ -18,6 +18,7 @@
 import type pg from 'pg';
 import { classifyReading, distanceMeters } from '@geoattend/shared';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
+import { eachRecord, throwIfAny } from '../jobs/runner.js';
 import { HttpError, badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { createUploadUrl, inspectObject, newObjectKey, type PhotoType } from '../../lib/storage.js';
 import { config } from '../../config.js';
@@ -680,12 +681,12 @@ export async function expireStaleIntents(outbox: Outbox) {
      WHERE p.status IN ('PENDING_UPLOAD', 'UPLOADED') AND p.upload_expires_at < now() - interval '5 minutes'
        AND s.state = 'ATTENDANCE_SUBMISSION_PENDING' AND s.ended_at IS NULL`,
   );
-  for (const r of rows) {
-    await tx(async (c) => {
+  throwIfAny(await eachRecord(rows, (r) =>
+    tx(async (c) => {
       const s = await lockSession(c, r.session_id);
       if (!s || s.state !== 'ATTENDANCE_SUBMISSION_PENDING') return;
       await q(`UPDATE attendance_photos SET status = 'EXPIRED' WHERE session_id = $1 AND status IN ('PENDING_UPLOAD', 'UPLOADED')`, [s.id], c);
       await transition(c, outbox, s, 'ATTENDANCE_READY', 'attendance submission not completed in time', 'SYSTEM');
-    });
-  }
+    }),
+  ));
 }

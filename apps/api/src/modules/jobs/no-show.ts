@@ -7,6 +7,7 @@
 import { DateTime } from 'luxon';
 import { getPool, q } from '../../db/pool.js';
 import { instanceFor } from '../../lib/shift-window.js';
+import { eachCompany, eachRecord, throwIfAny, type Failure } from './runner.js';
 import { getSettings } from '../settings/settings.service.js';
 import { notify } from '../notifications/notify.js';
 import { Outbox } from '../notifications/live-hub.js';
@@ -24,7 +25,9 @@ interface Candidate {
   startsAt: Date;
 }
 
-export async function sweepNoShows(now = new Date()) {
+export const sweepNoShows = (now = new Date()) => eachCompany(() => noShowsForCompany(now));
+
+async function noShowsForCompany(now: Date) {
   const rows = await q(
     `SELECT esa.employee_id, esa.effective_from, esa.effective_to, u.full_name, u.org_id,
             sh.id AS shift_id, sh.name AS shift_name, sh.start_time, sh.end_time, sh.timezone, sh.days_of_week,
@@ -33,7 +36,7 @@ export async function sweepNoShows(now = new Date()) {
      JOIN users u ON u.id = esa.employee_id AND u.role = 'EMPLOYEE' AND u.is_active
      JOIN shifts sh ON sh.id = esa.shift_id AND sh.is_active
      JOIN workplaces w ON w.id = sh.workplace_id AND w.is_active
-     WHERE esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE - 1`,
+     WHERE esa.effective_to IS NULL OR esa.effective_to >= (now() AT TIME ZONE sh.timezone)::date - 1`,
   );
 
   const due: Candidate[] = [];
@@ -63,15 +66,20 @@ export async function sweepNoShows(now = new Date()) {
   const done = new Set(started.map((s) => `${s.employee_id}|${s.shift_id}|${s.shift_date}`));
 
   const outbox = new Outbox();
+  const failures: Failure[] = [];
   const byDate = new Map<string, Candidate[]>();
   for (const d of due) byDate.set(d.shiftDate, [...(byDate.get(d.shiftDate) ?? []), d]);
   for (const [date, list] of byDate) {
     const onLeave = await approvedLeaveOn(date, list.map((d) => d.employeeId));
     const holidays = await holidaysOn(date, [...new Set(list.map((d) => d.workplaceId))]);
-    for (const d of list) {
-      if (done.has(`${d.employeeId}|${d.shiftId}|${d.shiftDate}`) || onLeave.has(d.employeeId) || holidays.has(d.workplaceId)) continue;
+    const absent = list.filter((d) => !done.has(`${d.employeeId}|${d.shiftId}|${d.shiftDate}`) && !onLeave.has(d.employeeId) && !holidays.has(d.workplaceId));
+    // Most of these were alerted on an earlier sweep: one query finds them, instead of an attempt each.
+    const keyOf = (d: Candidate) => `${d.employeeId}:${d.shiftId}:${d.shiftDate}`;
+    const sent = new Set((await q(`SELECT dedupe_key FROM notifications WHERE dedupe_key = ANY($1)`, [absent.flatMap((d) => [`no-show:${keyOf(d)}`, `no-show-employee:${keyOf(d)}`])])).map((r) => r.dedupe_key));
+    const unsent = absent.filter((d) => !sent.has(`no-show:${keyOf(d)}`) || !sent.has(`no-show-employee:${keyOf(d)}`));
+    failures.push(...await eachRecord(unsent, async (d) => {
       const lateBy = Math.round((now.getTime() - d.startsAt.getTime()) / 60_000);
-      const key = `${d.employeeId}:${d.shiftId}:${d.shiftDate}`;
+      const key = keyOf(d);
       await notify(getPool(), outbox, {
         type: 'NO_SHOW',
         severity: 'WARNING',
@@ -91,7 +99,8 @@ export async function sweepNoShows(now = new Date()) {
         data: { shiftId: d.shiftId, shiftDate: d.shiftDate },
         dedupeKey: `no-show-employee:${key}`,
       });
-    }
+    }));
   }
   outbox.flush();
+  throwIfAny(failures);
 }

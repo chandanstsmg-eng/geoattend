@@ -3,7 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { offsetMeters } from '@geoattend/shared';
 import { dropDatabase, ensureDatabase } from '../src/db/postgres.js';
-import { closePool, initPool, one, q } from '../src/db/pool.js';
+import { closePool, initPool, one, prepareTenantLogin, q } from '../src/db/pool.js';
 import { migrate } from '../src/db/migrate.js';
 import { hashPassword } from '../src/lib/password.js';
 import { DEFAULT_ORG_ID } from '../src/lib/tenancy.js';
@@ -27,6 +27,7 @@ export async function createTestDatabase() {
   const name =`geoattend_test_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const pool = initPool(await ensureDatabase(name));
   await migrate(pool);
+  await prepareTenantLogin();
   invalidateSettings();
   await testSettings(DEFAULT_ORG_ID);
   return {

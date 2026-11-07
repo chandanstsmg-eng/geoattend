@@ -143,8 +143,18 @@ On branch `phase-d-mobile`. Audit: [MOBILE-AUDIT.md](MOBILE-AUDIT.md). Phone tes
 
 - Saved locations are removed only on the server's answer. Ending a shift, losing the sign-in, a 403 or starting the next shift no longer discards them.
 - Check-ins and shift ends can be saved without a connection and are sent later. The server judges them on their evidence, flags them `OFFLINE_CAPTURE` or `OFFLINE_END`, and never accepts one earlier than the session start it recorded. Companies set the limit (`offlineAttendanceHours`, default 24; 0 turns it off).
-- A record sent late is `PENDING_VERIFICATION`, never `VERIFIED`. It counts provisionally, shown as pending, until a supervisor or owner approves it (`MANUAL_APPROVED`, with their name) or rejects it with a reason (an owner can override). The device's own time stays in `evidence_client_time`, and the time the server received it in `device_meta.receivedAt`. Before payroll is ever switched on, decide how pending records are treated: payroll does not look at this status yet.
+- A record sent late is `PENDING_VERIFICATION`, never `VERIFIED`. It is in history with its label but counts towards nothing (attendance, hours, overtime, payroll) until a supervisor or owner approves it (`MANUAL_APPROVED`, with their name) or rejects it with a reason (an owner can override). Its hours are shown apart as pending. The device's own time stays in `evidence_client_time`, and the time the server received it in `device_meta.receivedAt`.
 - Moving an employee to another shift takes effect from the assignment's date, and past attendance keeps its shift and figures. Editing a shift's own times takes effect from the day of the edit; to change times from a future date, assign people to a new shift from that date.
 - Starting a shift, breaks and overtime still need a connection.
 - A supervisor's face rejection applies at once; an owner can override it (migration 023).
 - **Not tested on a real phone.** Offline behaviour must not be claimed to customers until the device plan passes.
+
+## Dates and company isolation (5 Nov 2026)
+
+- Business dates follow [TIME-AND-DATES.md](TIME-AND-DATES.md). Every use of the database's own date and of the server's zone is gone, on the API, the dashboard and the phone. Before this, "today" stayed on yesterday until 05:30 IST in about twenty places.
+- Row-level security now backs up the application's company filters: [COMPANY-ISOLATION.md](COMPANY-ISOLATION.md). Requests and background jobs connect with a separate restricted login. Production refuses to start with an unsafe login.
+- Background jobs run one company at a time, and one failure no longer stops the rest. Leases, back-off, failure records and crash recovery: [BACKGROUND-JOBS.md](BACKGROUND-JOBS.md).
+- Load tested with 10 companies, 10,000 employees and 810,000 attendance records. Missing indexes had made the main reports time out; they do not now. The attendance list is paged before it is computed, long CSVs are streamed, and `/employees` honours a limit.
+- Each test run has its own throw-away database server and connects as a non-superuser, like production.
+- Records waiting for verification no longer count. `attendance_work` leaves them out, so hours, overtime and everything built on them are official figures; `attendance_work_all` keeps them for the separate pending hours. `hours.csv` and `overtime.csv` keep their agreed columns and official figures only; pending hours are on the hours and monthly reports, in `attendance.csv`, `monthly.csv` and `shift.csv`.
+- Physical Android testing stays NOT VERIFIED. The APK from Phase D must not be distributed: its server address is a placeholder.

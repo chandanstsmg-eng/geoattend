@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { one, q, type Queryable } from '../../db/pool.js';
+import { orgToday } from '../../lib/dates.js';
 import { conflict, notFound } from '../../lib/errors.js';
 import { assertInOrg, siteFilter } from '../../lib/tenancy.js';
 import { idParams, isoDate, mount, route } from '../../lib/http.js';
@@ -40,7 +41,7 @@ mount(holidaysRouter, '/api/v1/holidays', 'holidays', [
     access: 'admin',
     query: z.object({ from: isoDate.optional(), to: isoDate.optional(), workplaceId: z.uuid().optional() }),
     handler: async ({ query, user }) => {
-      const year = new Date().getFullYear();
+      const year = (await orgToday(user.orgId)).slice(0, 4);
       return q(
         `SELECT h.*, w.name AS workplace_name FROM holidays h LEFT JOIN workplaces w ON w.id = h.workplace_id
          WHERE h.org_id = $4 AND h.holiday_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR h.workplace_id IS NULL OR h.workplace_id = $3)

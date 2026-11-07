@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Badge, Card, ErrorState, H2, Loading, Muted, Screen } from '../../components/ui';
 import { api, errorMessage } from '../../lib/api/client';
 import type { Task } from '../../lib/api/types';
-import { fmtDate } from '../../lib/format';
+import { fmtDate, localISODate } from '../../lib/format';
 import { qk } from '../../lib/queryClient';
 import { colors, font, space } from '../../lib/theme';
 import { TASK_STATUS } from '../../lib/tasks';
@@ -16,7 +16,7 @@ export default function TasksScreen() {
   if (!q.data) return <Screen><ErrorState message={errorMessage(q.error)} onRetry={() => void q.refetch()} /></Screen>;
   const todo = q.data.filter((t) => t.status === 'OPEN' || t.status === 'REOPENED');
   const rest = q.data.filter((t) => !(t.status === 'OPEN' || t.status === 'REOPENED'));
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
 
   const row = (t: Task) => (
     <Pressable

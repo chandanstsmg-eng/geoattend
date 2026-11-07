@@ -2,22 +2,25 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { one, q } from '../../db/pool.js';
+import { dayEndSql, dayStartSql, orgTimezoneSql, orgToday } from '../../lib/dates.js';
 import { isoDate, mount, route } from '../../lib/http.js';
-import { toCsv } from '../../lib/csv.js';
+import { dateChunks, streamCsv, toCsv } from '../../lib/csv.js';
 import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
-import { employeeSite, overtimeCounts, siteFilter } from '../../lib/tenancy.js';
+import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, workJoin } from '../../lib/tenancy.js';
 import { badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
-import { computeHours, hoursText, loadWorkRecords } from './hours.js';
+import { computeHours, hoursText, loadPendingHours, loadWorkRecords, withPendingHours } from './hours.js';
 
-/** Default "today" = today in the company's first active workplace's time zone (UTC if none). */
-export async function defaultDate(orgId: string, workplaceId?: string | null) {
-  const w = await one(`SELECT timezone FROM workplaces WHERE org_id = $2 AND ($1::uuid IS NULL OR id = $1) ORDER BY is_active DESC, created_at LIMIT 1`, [workplaceId ?? null, orgId]);
-  return DateTime.now().setZone(w?.timezone ?? 'UTC').toISODate()!;
-}
+/** Default "today": the business date of the workplace, or of the company (lib/dates.ts). */
+export const defaultDate = (orgId: string, workplaceId?: string | null) => orgToday(orgId, workplaceId ?? null);
+
+/** A roster row whose attendance is waiting for verification: not present, not absent, not yet official. */
+export const isPending = (r: { verification_status?: string | null }) => r.verification_status === 'PENDING_VERIFICATION';
+/** A roster row with attendance that counts. */
+export const attended = (r: { attendance_id?: string | null; verification_status?: string | null }) => !!r.attendance_id && !isPending(r);
 
 /**
  * Every (employee, shift) pair of the company scheduled on `date`, with attendance and session outcome.
@@ -29,7 +32,9 @@ export async function roster(orgId: string, date: string, workplaceId: string | 
     `SELECT u.id AS employee_id, u.full_name, ep.employee_code, u.is_demo,
             w.id AS workplace_id, w.name AS workplace_name, sh.id AS shift_id, sh.name AS shift_name,
             COALESCE(rev.start_time, sh.start_time) AS start_time, COALESCE(rev.end_time, sh.end_time) AS end_time, COALESCE(rev.timezone, sh.timezone) AS timezone,
-            ar.id AS attendance_id, ar.recorded_at, ar.is_late, ar.late_by_minutes, ar.verification_status, ar.evidence_distance_m, ar.evidence_accuracy_m, ar.risk_flags,
+            ar.id AS attendance_id, ar.recorded_at, ar.late_by_minutes, ar.verification_status, ar.evidence_distance_m, ar.evidence_accuracy_m, ar.risk_flags,
+            -- Lateness is an official finding too, so a record still waiting for verification is not counted late.
+            (ar.is_late AND ar.verification_status <> 'PENDING_VERIFICATION') AS is_late, ${pendingMinutes()} AS pending_minutes,
             s.id AS session_id, s.state, s.started_at, s.ended_at, s.last_location_at, s.termination_reason,
             aw.worked_minutes, aw.scheduled_minutes, aw.ended_early_minutes, aw.in_progress,
             aw.overtime_id, aw.overtime_status, aw.overtime_claimed_minutes, aw.overtime_minutes AS overtime_approved_minutes,
@@ -46,7 +51,7 @@ export async function roster(orgId: string, date: string, workplaceId: string | 
      JOIN workplaces w ON w.id = sh.workplace_id AND (w.is_active OR $1::date < w.deactivated_on)
      LEFT JOIN attendance_records ar ON ar.employee_id = u.id AND ar.shift_id = sh.id AND ar.shift_date = $1 AND ar.verification_status <> 'VOIDED'
      LEFT JOIN tracking_sessions s ON s.employee_id = u.id AND s.shift_id = sh.id AND s.shift_date = $1
-     LEFT JOIN attendance_work aw ON aw.attendance_id = ar.id
+     LEFT JOIN ${workJoin()}
      WHERE esa.effective_from <= $1 AND (esa.effective_to IS NULL OR esa.effective_to >= $1)
        AND COALESCE(rev.is_active, sh.is_active)
        AND (ep.joined_on IS NULL OR $1::date >= ep.joined_on)
@@ -113,11 +118,12 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
       const r = shifts[0];
       let t = totals.get(employeeId);
       if (!t) {
-        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0 };
+        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0, pending_days: 0, pending_minutes: 0 };
         totals.set(employeeId, t);
       }
       t.scheduled++;
-      const attended = shifts.filter((s) => s.attendance_id);
+      const counted = shifts.filter(attended);
+      const waiting = shifts.filter(isPending);
       const decided = !isToday || shifts.some((s) => s.no_show || s.ended_at);
       const half = r.on_leave?.half_day ? 0.5 : 1;
       const addLeave = (days: number) => {
@@ -125,14 +131,16 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
         if (r.on_leave.leave_type === 'UNPAID') t.unpaid_leave += days;
         else t.paid_leave += days;
       };
-      if (attended.length) {
+      t.pending_minutes += waiting.reduce((n, s) => n + (s.pending_minutes ?? 0), 0);
+      if (counted.length) {
         // Working on a half-day leave counts as half a day present and half a day on leave.
         t.present += r.on_leave?.half_day ? 0.5 : 1;
         if (r.on_leave?.half_day) addLeave(0.5);
-        if (attended.some((s) => s.is_late)) t.late++;
-        if (attended.some((s) => s.left_early)) t.left_early++;
+        if (counted.some((s) => s.is_late)) t.late++;
+        if (counted.some((s) => s.left_early)) t.left_early++;
         t.missed_shifts += shifts.filter((s) => !s.attendance_id && !s.holiday && !s.on_leave && (!isToday || s.no_show || s.ended_at)).length;
-      } else if (shifts.some((s) => s.holiday)) t.holidays++;
+      } else if (waiting.length) t.pending_days++; // neither present nor absent until someone decides
+      else if (shifts.some((s) => s.holiday)) t.holidays++;
       else if (r.on_leave) {
         addLeave(half);
         if (half < 1 && decided) t.absent += 0.5;
@@ -154,11 +162,25 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
   return { month, from: first.toISODate(), to, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
 }
 
-function sendCsv(res: any, name: string, csv: string) {
+/** A stored time as it read on the wall at the workplace, for people reading an export. */
+const wallClock = (v: Date | string | null | undefined, zone: string) => (v ? DateTime.fromJSDate(new Date(v), { zone }).toFormat('yyyy-MM-dd HH:mm') : '');
+
+function csvHeaders(res: any, name: string) {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   res.setHeader('Cache-Control', 'no-store');
+}
+
+function sendCsv(res: any, name: string, csv: string) {
+  csvHeaders(res, name);
   res.send(csv);
+}
+
+/** Only the period that holds records is read, however wide the range asked for. */
+async function narrowedRange(sql: string, params: unknown[], from: string, to: string) {
+  const r = await one(sql, params);
+  if (!r?.first) return null;
+  return { from: r.first > from ? r.first as string : from, to: r.last < to ? r.last as string : to };
 }
 
 const rangeQuery = z.object({
@@ -176,14 +198,24 @@ const hoursQuery = z.object({
   employeeId: z.uuid().optional(),
   supervisorId: z.uuid().optional(),
   includeSimulated: z.enum(['true', 'false']).default('false'),
+  /** Optional: a page of the list. Totals are always worked out over the whole period first. */
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).default(0),
 });
+
+const pageOf = <T>(rows: T[], q0: { limit?: number; offset?: number }) => (q0.limit ? rows.slice(q0.offset ?? 0, (q0.offset ?? 0) + q0.limit) : rows);
+
+/** Someone listed only for pending time has no official figures, so is left out of the two official exports. */
+const official = (r: { days: number }) => r.days > 0;
 
 /** Per-employee days, hours and overtime for the caller's scope (supervisors: their workplaces). */
 async function hoursFor(user: AuthUser, query: z.infer<typeof hoursQuery>) {
   if (query.to < query.from) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
   const { workforce } = await getSettings(user.orgId);
-  const records = await loadWorkRecords(user, { ...query, includeSimulated: query.includeSimulated === 'true' });
-  return { rows: computeHours(records, workforce, query.from, query.to), policy: { roundingMinutes: workforce.roundingMinutes, weeklyRegularHours: workforce.weeklyRegularHours } };
+  const filter = { ...query, includeSimulated: query.includeSimulated === 'true' };
+  const records = await loadWorkRecords(user, filter);
+  const rows = withPendingHours(computeHours(records, workforce, query.from, query.to), await loadPendingHours(user, filter));
+  return { rows, policy: { roundingMinutes: workforce.roundingMinutes, weeklyRegularHours: workforce.weeklyRegularHours } };
 }
 
 export const reportsRouter = Router();
@@ -196,7 +228,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     query: hoursQuery,
     handler: async ({ query, user }) => {
       const { rows, policy } = await hoursFor(user, query);
-      return { from: query.from, to: query.to, policy, rows };
+      return { from: query.from, to: query.to, policy, total: rows.length, rows: pageOf(rows, query) };
     },
   }),
   route({
@@ -209,7 +241,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     handler: async ({ query, res, user, req }) => {
       const { rows } = await hoursFor(user, query);
       await audit({ actor: user, action: 'report.export', resourceType: 'hours_csv', after: { ...query, rows: rows.length }, req });
-      sendCsv(res, `attendance_summary_${query.from}_${query.to}.csv`, toCsv(['Employee Name', 'Total Days Worked', 'Total Hours Worked'], rows.map((r) => [r.full_name, r.days, hoursText(r.total_minutes)])));
+      sendCsv(res, `attendance_summary_${query.from}_${query.to}.csv`, toCsv(['Employee Name', 'Total Days Worked', 'Total Hours Worked'], rows.filter(official).map((r) => [r.full_name, r.days, hoursText(r.total_minutes)])));
     },
   }),
   route({
@@ -222,7 +254,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     handler: async ({ query, res, user, req }) => {
       const { rows } = await hoursFor(user, query);
       await audit({ actor: user, action: 'report.export', resourceType: 'overtime_csv', after: { ...query, rows: rows.length }, req });
-      sendCsv(res, `overtime_${query.from}_${query.to}.csv`, toCsv(['Employee Name', 'Total Overtime Hours'], rows.map((r) => [r.full_name, hoursText(r.overtime_minutes)])));
+      sendCsv(res, `overtime_${query.from}_${query.to}.csv`, toCsv(['Employee Name', 'Total Overtime Hours'], rows.filter(official).map((r) => [r.full_name, hoursText(r.overtime_minutes)])));
     },
   }),
   route({
@@ -254,7 +286,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         [wp, org, user.sites],
       );
       const late = await one(
-        `SELECT count(*)::int AS n FROM attendance_records WHERE shift_date = $1 AND is_late AND verification_status <> 'VOIDED' AND ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4')}`,
+        `SELECT count(*)::int AS n FROM attendance_records ar WHERE shift_date = $1 AND is_late AND ${attendanceCounts()} AND ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4')}`,
         [date, wp, org, user.sites],
       );
       const openReviews = await one(`SELECT count(*)::int AS n FROM review_requests WHERE status = 'OPEN' AND kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') AND ${inOrg('$1', '$2')}`, [org, user.sites]);
@@ -286,6 +318,8 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
           prolonged: live.prolonged,
           interrupted: live.interrupted,
           late: late.n,
+          pendingVerification: rows.filter(isPending).length,
+          pendingMinutes: rows.reduce((n, r) => n + (r.pending_minutes ?? 0), 0),
           manualReview: live.review,
           openReviews: openReviews.n,
           openSessions: live.open,
@@ -301,8 +335,11 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     summary: 'Per-employee month totals: present, late, leave, holidays, absent, hours, overtime',
     access: 'admin',
     ownerOnly: true,
-    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('true') }),
-    handler: async ({ query, user }) => monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true'),
+    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('true'), limit: z.coerce.number().int().min(1).max(500).optional(), offset: z.coerce.number().int().min(0).default(0) }),
+    handler: async ({ query, user }) => {
+      const s = await monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true');
+      return { ...s, total: s.rows.length, rows: pageOf(s.rows, query) };
+    },
   }),
   route({
     method: 'get',
@@ -319,8 +356,8 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         res,
         `monthly_${query.month}.csv`,
         toCsv(
-          ['Month', 'Employee ID', 'Employee', 'Workplace', 'Shifts scheduled', 'Present', 'Late', 'Leave (days)', 'Holidays', 'Absent', 'Hours worked', 'Overtime (hours)', 'Left early'],
-          s.rows.map((r) => [query.month, r.employee_code, r.full_name, r.workplace_name, r.scheduled, r.present, r.late, r.leave, r.holidays, r.absent, (r.worked_minutes / 60).toFixed(2), (r.overtime_minutes / 60).toFixed(2), r.left_early]),
+          ['Month', 'Employee ID', 'Employee', 'Workplace', 'Shifts scheduled', 'Present', 'Late', 'Leave (days)', 'Holidays', 'Absent', 'Hours worked', 'Overtime (hours)', 'Left early', 'Pending days (not counted)', 'Pending hours (not counted)'],
+          s.rows.map((r) => [query.month, r.employee_code, r.full_name, r.workplace_name, r.scheduled, r.present, r.late, r.leave, r.holidays, r.absent, (r.worked_minutes / 60).toFixed(2), (r.overtime_minutes / 60).toFixed(2), r.left_early, r.pending_days, (r.pending_minutes / 60).toFixed(2)]),
         ),
       );
     },
@@ -334,8 +371,10 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     query: rangeQuery.omit({ employeeId: true }),
     handler: async ({ query, user }) =>
       q(
-        `SELECT ar.shift_date, w.name AS workplace_name, count(*)::int AS attended, count(*) FILTER (WHERE ar.is_late)::int AS late,
-                count(*) FILTER (WHERE ar.verification_status = 'MANUAL_APPROVED')::int AS manual
+        `SELECT ar.shift_date, w.name AS workplace_name, count(*) FILTER (WHERE ${attendanceCounts()})::int AS attended,
+                count(*) FILTER (WHERE ar.is_late AND ${attendanceCounts()})::int AS late,
+                count(*) FILTER (WHERE ar.verification_status = 'MANUAL_APPROVED')::int AS manual,
+                count(*) FILTER (WHERE ar.verification_status = 'PENDING_VERIFICATION')::int AS pending_verification
          FROM attendance_records ar JOIN workplaces w ON w.id = ar.workplace_id
          WHERE w.org_id = $5 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4 OR NOT ar.is_simulated) AND ar.verification_status <> 'VOIDED'
          GROUP BY ar.shift_date, w.name ORDER BY ar.shift_date DESC, w.name`,
@@ -351,34 +390,36 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     raw: true,
     query: rangeQuery,
     handler: async ({ query, res, user, req }) => {
-      const rows = await q(
+      const { workforce } = await getSettings(user.orgId);
+      const rowsFor = (from: string, to: string) => q(
         `SELECT ar.shift_date, ep.employee_code, u.full_name, w.name AS workplace, sh.name AS shift, ar.recorded_at, ar.verification_status,
                 ar.is_late, ar.late_by_minutes, ROUND(ar.evidence_distance_m::numeric, 1) AS distance_m, ROUND(ar.evidence_accuracy_m::numeric, 1) AS accuracy_m,
                 ar.radius_m_at_record, array_to_string(ar.risk_flags, ' ') AS risk_flags,
                 (SELECT COALESCE(ROUND(SUM(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at))) / 60), 0)::int FROM absence_intervals a WHERE a.session_id = ar.session_id) AS away_minutes,
                 (SELECT count(*)::int FROM absence_intervals a WHERE a.session_id = ar.session_id AND a.prolonged_at IS NOT NULL) AS prolonged_absences,
                 s.ended_at AS shift_ended_at, ar.is_simulated, aw.worked_minutes, aw.scheduled_minutes, aw.ended_early_minutes,
-                aw.overtime_minutes, aw.overtime_claimed_minutes, aw.overtime_status
+                aw.overtime_minutes, aw.overtime_claimed_minutes, aw.overtime_status, sh.timezone, ${pendingMinutes()} AS pending_minutes
          FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN tracking_sessions s ON s.id = ar.session_id
-         LEFT JOIN attendance_work aw ON aw.attendance_id = ar.id
+         LEFT JOIN ${workJoin()}
          WHERE u.org_id = $6 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4::uuid IS NULL OR ar.employee_id = $4) AND ($5 OR NOT ar.is_simulated)
-         ORDER BY ar.shift_date, w.name, sh.name, u.full_name`,
-        [query.from, query.to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
+         ORDER BY ar.shift_date, w.name, sh.name, u.full_name, ar.id`,
+        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
       );
-      await audit({ actor: user, action: 'report.export', resourceType: 'attendance_csv', after: { ...query, rows: rows.length }, req });
-      const { workforce } = await getSettings(user.orgId);
-      sendCsv(
+      const range = await narrowedRange(
+        `SELECT min(ar.shift_date) AS first, max(ar.shift_date) AS last FROM attendance_records ar JOIN users u ON u.id = ar.employee_id WHERE u.org_id = $3 AND ar.shift_date BETWEEN $1 AND $2`,
+        [query.from, query.to, user.orgId], query.from, query.to,
+      );
+      csvHeaders(res, `attendance_${query.from}_${query.to}.csv`);
+      const sent = await streamCsv(
         res,
-        `attendance_${query.from}_${query.to}.csv`,
-        toCsv(
-          ['Date', 'Employee ID', 'Employee', 'Workplace', 'Shift', 'Recorded at (UTC, server)', 'Verification', 'Late', 'Late by (min)', 'Distance (m)', 'GPS accuracy (m)', 'Radius (m)', 'Risk flags', 'Away (min)', 'Prolonged absences', 'Shift ended at (UTC)', 'Worked (min)', 'Overtime worked (min)', 'Overtime status', 'Overtime approved (min)', 'Left early', 'Simulated'],
-          rows.map((r) => {
+          ['Date', 'Employee ID', 'Employee', 'Workplace', 'Shift', 'Recorded at (UTC, server)', 'Verification', 'Late', 'Late by (min)', 'Distance (m)', 'GPS accuracy (m)', 'Radius (m)', 'Risk flags', 'Away (min)', 'Prolonged absences', 'Shift ended at (UTC)', 'Worked (min)', 'Overtime worked (min)', 'Overtime status', 'Overtime approved (min)', 'Left early', 'Simulated', 'Recorded at (local)', 'Shift ended at (local)', 'Pending worked (min, not counted)'],
+        (range ? dateChunks(range.from, range.to) : []).map((c) => async () => (await rowsFor(c.from, c.to)).map((r) => {
             const f = workFlags(r, workforce);
-            return [r.shift_date, r.employee_code, r.full_name, r.workplace, r.shift, r.recorded_at, r.verification_status, r.is_late ? 'yes' : 'no', r.late_by_minutes, r.distance_m, r.accuracy_m, r.radius_m_at_record, r.risk_flags, r.away_minutes, r.prolonged_absences, r.shift_ended_at, r.worked_minutes ?? '', r.overtime_claimed_minutes || '', r.overtime_status ?? '', f.overtime_minutes || '', f.left_early ? 'yes' : '', r.is_simulated ? 'SIMULATED' : ''];
-          }),
-        ),
+            return [r.shift_date, r.employee_code, r.full_name, r.workplace, r.shift, r.recorded_at, r.verification_status, r.is_late ? 'yes' : 'no', r.late_by_minutes, r.distance_m, r.accuracy_m, r.radius_m_at_record, r.risk_flags, r.away_minutes, r.prolonged_absences, r.shift_ended_at, r.worked_minutes ?? '', r.overtime_claimed_minutes || '', r.overtime_status ?? '', f.overtime_minutes || '', f.left_early ? 'yes' : '', r.is_simulated ? 'SIMULATED' : '', wallClock(r.recorded_at, r.timezone), wallClock(r.shift_ended_at, r.timezone), r.pending_minutes ?? ''];
+          })),
       );
+      await audit({ actor: user, action: 'report.export', resourceType: 'attendance_csv', after: { ...query, rows: sent }, req });
     },
   }),
   route({
@@ -390,23 +431,26 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     raw: true,
     query: rangeQuery,
     handler: async ({ query, res, user, req }) => {
-      const rows = await q(
+      const rowsFor = (from: string, to: string) => q(
         `SELECT a.started_at, a.ended_at, a.status, a.threshold_minutes, a.prolonged_at, a.tracking_gap, ep.employee_code, u.full_name, w.name AS workplace,
-                ROUND(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at)) / 60)::int AS minutes, a.is_simulated
+                ROUND(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at)) / 60)::int AS minutes, a.is_simulated, w.timezone
          FROM absence_intervals a JOIN users u ON u.id = a.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id JOIN workplaces w ON w.id = a.workplace_id
-         WHERE u.org_id = $6 AND a.started_at >= $1::date AND a.started_at < $2::date + 1 AND ($3::uuid IS NULL OR a.workplace_id = $3) AND ($4::uuid IS NULL OR a.employee_id = $4) AND ($5 OR NOT a.is_simulated)
-         ORDER BY a.started_at`,
-        [query.from, query.to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
+         WHERE u.org_id = $6 AND a.started_at >= ${dayStartSql('$1', '$6')} AND a.started_at < ${dayEndSql('$2', '$6')} AND ($3::uuid IS NULL OR a.workplace_id = $3) AND ($4::uuid IS NULL OR a.employee_id = $4) AND ($5 OR NOT a.is_simulated)
+         ORDER BY a.started_at, a.id`,
+        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
       );
-      await audit({ actor: user, action: 'report.export', resourceType: 'absences_csv', after: { ...query, rows: rows.length }, req });
-      sendCsv(
+      const range = await narrowedRange(
+        `SELECT (min(a.started_at) AT TIME ZONE ${orgTimezoneSql('$3')})::date AS first, (max(a.started_at) AT TIME ZONE ${orgTimezoneSql('$3')})::date AS last
+         FROM absence_intervals a JOIN users u ON u.id = a.employee_id WHERE u.org_id = $3 AND a.started_at >= ${dayStartSql('$1', '$3')} AND a.started_at < ${dayEndSql('$2', '$3')}`,
+        [query.from, query.to, user.orgId], query.from, query.to,
+      );
+      csvHeaders(res, `absences_${query.from}_${query.to}.csv`);
+      const sent = await streamCsv(
         res,
-        `absences_${query.from}_${query.to}.csv`,
-        toCsv(
-          ['Employee ID', 'Employee', 'Workplace', 'Departed (UTC)', 'Returned / closed (UTC)', 'Status', 'Duration (min)', 'Threshold (min)', 'Prolonged at (UTC)', 'Tracking gap during absence', 'Simulated'],
-          rows.map((r) => [r.employee_code, r.full_name, r.workplace, r.started_at, r.ended_at, r.status, r.minutes, r.threshold_minutes, r.prolonged_at, r.tracking_gap ? 'yes' : 'no', r.is_simulated ? 'SIMULATED' : '']),
-        ),
+          ['Employee ID', 'Employee', 'Workplace', 'Departed (UTC)', 'Returned / closed (UTC)', 'Status', 'Duration (min)', 'Threshold (min)', 'Prolonged at (UTC)', 'Tracking gap during absence', 'Simulated', 'Departed (local)', 'Returned / closed (local)'],
+        (range ? dateChunks(range.from, range.to) : []).map((c) => async () => (await rowsFor(c.from, c.to)).map((r) => [r.employee_code, r.full_name, r.workplace, r.started_at, r.ended_at, r.status, r.minutes, r.threshold_minutes, r.prolonged_at, r.tracking_gap ? 'yes' : 'no', r.is_simulated ? 'SIMULATED' : '', wallClock(r.started_at, r.timezone), wallClock(r.ended_at, r.timezone)])),
       );
+      await audit({ actor: user, action: 'report.export', resourceType: 'absences_csv', after: { ...query, rows: sent }, req });
     },
   }),
   route({
@@ -424,8 +468,8 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         res,
         `shift_roster_${query.date}.csv`,
         toCsv(
-          ['Date', 'Workplace', 'Shift', 'Start', 'End', 'Time zone', 'Employee ID', 'Employee', 'Attendance', 'Recorded at (UTC)', 'Late', 'Late by (min)', 'Session state', 'Away (min)', 'Prolonged absences', 'Worked (min)', 'Overtime (min)', 'Left early'],
-          rows.map((r) => [query.date, r.workplace_name, r.shift_name, r.start_time?.slice(0, 5), r.end_time?.slice(0, 5), r.timezone, r.employee_code, r.full_name,r.attendance_id ? r.verification_status : r.holiday ? `HOLIDAY (${r.holiday})` : r.on_leave ? `ON LEAVE (${r.on_leave.leave_type}${r.on_leave.half_day ? ', half day' : ''})` : 'NOT RECORDED', r.recorded_at, r.is_late ? 'yes' : '', r.late_by_minutes ?? '', r.state ?? 'NOT STARTED', r.away_minutes ?? 0, r.prolonged_count ?? 0, r.worked_minutes ?? '', r.overtime_minutes || '', r.left_early ? 'yes' : '']),
+          ['Date', 'Workplace', 'Shift', 'Start', 'End', 'Time zone', 'Employee ID', 'Employee', 'Attendance', 'Recorded at (UTC)', 'Late', 'Late by (min)', 'Session state', 'Away (min)', 'Prolonged absences', 'Worked (min)', 'Overtime (min)', 'Left early', 'Recorded at (local)', 'Pending worked (min, not counted)'],
+          rows.map((r) => [query.date, r.workplace_name, r.shift_name, r.start_time?.slice(0, 5), r.end_time?.slice(0, 5), r.timezone, r.employee_code, r.full_name,r.attendance_id ? r.verification_status : r.holiday ? `HOLIDAY (${r.holiday})` : r.on_leave ? `ON LEAVE (${r.on_leave.leave_type}${r.on_leave.half_day ? ', half day' : ''})` : 'NOT RECORDED', r.recorded_at, r.is_late ? 'yes' : '', r.late_by_minutes ?? '', r.state ?? 'NOT STARTED', r.away_minutes ?? 0, r.prolonged_count ?? 0, r.worked_minutes ?? '', r.overtime_minutes || '', r.left_early ? 'yes' : '', wallClock(r.recorded_at, r.timezone), r.pending_minutes ?? '']),
         ),
       );
     },

@@ -164,12 +164,13 @@ describe('a check-in saved without a connection', () => {
     expect(await record(a.sessionId)).toBeFalsy();
   });
 
-  it('counts in the worked-time report', async () => {
+  it('keeps its worked time apart from the official report until a person decides', async () => {
     const a = await onShift(300, 300);
     await send(a, ago(295));
     await q(`UPDATE tracking_sessions SET ended_at = now(), state = 'SHIFT_COMPLETED', authorization_status = 'ENDED' WHERE id = $1`, [a.sessionId]);
-    const w = await one(`SELECT worked_minutes FROM attendance_work WHERE attendance_id = $1`, [(await record(a.sessionId)).id]);
-    expect(w.worked_minutes).toBeGreaterThan(200);
+    const id = (await record(a.sessionId)).id;
+    expect(await one(`SELECT 1 FROM attendance_work WHERE attendance_id = $1`, [id])).toBeNull();
+    expect((await one(`SELECT worked_minutes FROM attendance_work_all WHERE attendance_id = $1`, [id])).worked_minutes).toBeGreaterThan(200);
   });
 });
 
@@ -276,7 +277,7 @@ describe('a record sent late waits for a person', () => {
     expect(new Date(r.recorded_at).getTime()).toBeGreaterThan(new Date(r.evidence_client_time).getTime());
   });
 
-  it('shows in the supervisor\'s approvals with its evidence, and counts provisionally', async () => {
+  it('shows in the supervisor\'s approvals with its evidence, and does not count yet', async () => {
     const a = await late();
     const list = (await sup.agent.get('/api/v1/approvals').expect(200)).body;
     const v = list.verifications.find((x: any) => x.id === a.id);
@@ -284,7 +285,8 @@ describe('a record sent late waits for a person', () => {
     expect(v.received_at).toBeTruthy();
     expect(list.counts.verifications).toBeGreaterThanOrEqual(1);
     expect((await sup.agent.get('/api/v1/attendance?status=PENDING_VERIFICATION').expect(200)).body.items.some((x: any) => x.id === a.id)).toBe(true);
-    expect(await q(`SELECT 1 FROM attendance_work WHERE attendance_id = $1`, [a.id])).toHaveLength(1);
+    expect(await q(`SELECT 1 FROM attendance_work WHERE attendance_id = $1`, [a.id])).toHaveLength(0);
+    expect(await q(`SELECT 1 FROM attendance_work_all WHERE attendance_id = $1`, [a.id])).toHaveLength(1);
   });
 
   it('a supervisor approves it: approved by a person, not verified by the server', async () => {

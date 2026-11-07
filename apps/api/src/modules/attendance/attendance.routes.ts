@@ -5,7 +5,7 @@ import { config } from '../../config.js';
 import { HttpError, notFound } from '../../lib/errors.js';
 import { idParams, isoDate, mount, paging, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
-import { assertInOrg, employeeSite, siteFilter } from '../../lib/tenancy.js';
+import { assertInOrg, employeeSite, siteFilter, attendanceCounts, pendingMinutes, workJoin } from '../../lib/tenancy.js';
 import { createDownloadUrl, deleteObject, detectImageType, readLocalObject, requestOrigin, verifyToken, writeLocalObject } from '../../lib/storage.js';
 import { readingSchema } from '../tracking/tracking.routes.js';
 import { assertApprovedDevice } from '../devices/devices.routes.js';
@@ -79,14 +79,17 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       const rows = await q(
         // Check-out, worked time and approved overtime come from the same attendance_work view the
         // hours reports use, so the list and the exports always agree.
-        `SELECT ar.*, u.full_name, ep.employee_code, w.name AS workplace_name, sh.name AS shift_name,
+        // The page is chosen first, so worked time is only computed for the rows on it. The id breaks ties,
+        // so a record can never appear on two pages or on none.
+        `WITH page AS (SELECT ar.id FROM attendance_records ar WHERE ${where} ORDER BY ar.shift_date DESC, ar.recorded_at DESC, ar.id DESC LIMIT $10 OFFSET $11)
+         SELECT ar.*, u.full_name, ep.employee_code, w.name AS workplace_name, sh.name AS shift_name,
                 p.status AS photo_status, p.deleted_at AS photo_deleted_at,
-                s.ended_at AS checked_out_at, aw.worked_minutes, aw.overtime_minutes, aw.overtime_status, aw.in_progress, aw.break_minutes,
+                s.ended_at AS checked_out_at, aw.worked_minutes, aw.overtime_minutes, aw.overtime_status, aw.in_progress, aw.break_minutes, ${pendingMinutes()} AS pending_minutes,
                 (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())) AS incomplete
-         FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
+         FROM page JOIN attendance_records ar ON ar.id = page.id JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN attendance_photos p ON p.id = ar.photo_id
-         LEFT JOIN tracking_sessions s ON s.id = ar.session_id LEFT JOIN attendance_work aw ON aw.attendance_id = ar.id
-         WHERE ${where} ORDER BY ar.shift_date DESC, ar.recorded_at DESC LIMIT $10 OFFSET $11`,
+         LEFT JOIN tracking_sessions s ON s.id = ar.session_id LEFT JOIN ${workJoin()}
+         ORDER BY ar.shift_date DESC, ar.recorded_at DESC, ar.id DESC`,
         [...params, query.limit, query.offset],
       );
       // Exception counts over every record matching the filters (not just this page). A record can
@@ -94,11 +97,12 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       const summary = await one(
         `SELECT count(*)::int AS total,
                 count(*) FILTER (WHERE ar.verification_status = 'VERIFIED')::int AS verified,
-                count(*) FILTER (WHERE ar.is_late AND ar.verification_status <> 'VOIDED')::int AS late,
+                count(*) FILTER (WHERE ar.is_late AND ${attendanceCounts()})::int AS late,
                 count(*) FILTER (WHERE ar.verification_status <> 'VOIDED' AND (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())))::int AS missing_checkout,
                 count(*) FILTER (WHERE ar.verification_status <> 'VOIDED' AND cardinality(array_remove(array_remove(COALESCE(ar.risk_flags, '{}'::text[]), 'SIMULATED'), 'BACKGROUND_LOCATION_UNAVAILABLE')) > 0)::int AS location_exceptions,
                 count(*) FILTER (WHERE ar.verification_status = 'DISPUTED')::int AS disputed,
                 count(*) FILTER (WHERE ar.verification_status = 'PENDING_VERIFICATION')::int AS pending_verification,
+                COALESCE(SUM(${pendingMinutes()}), 0)::int AS pending_minutes,
                 count(*) FILTER (WHERE ar.session_id IS NULL AND ar.verification_status <> 'VOIDED')::int AS manual
          FROM attendance_records ar LEFT JOIN tracking_sessions s ON s.id = ar.session_id WHERE ${where}`,
         params,

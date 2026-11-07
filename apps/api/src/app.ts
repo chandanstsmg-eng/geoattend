@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -9,6 +10,7 @@ import { logger } from './lib/logger.js';
 import { HttpError } from './lib/errors.js';
 import { buildOpenApi } from './lib/openapi.js';
 import { getPool } from './db/pool.js';
+import { jobHealth } from './modules/jobs/runner.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { meRouter } from './modules/employees/me.routes.js';
 import { employeesRouter } from './modules/employees/employees.routes.js';
@@ -108,6 +110,18 @@ export function createApp() {
     }
   });
 
+  // For monitoring: job counts, nothing about any company. Absent unless OPS_TOKEN is set, and to anyone without it.
+  app.get('/health/jobs', async (req, res, next) => {
+    try {
+      const given = Buffer.from(req.headers.authorization ?? '');
+      const expected = Buffer.from(`Bearer ${config.opsToken}`);
+      if (!config.opsToken || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No such endpoint' } });
+      res.json(await jobHealth());
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/me', meRouter);
   app.use('/api/v1/employees', employeesRouter);
@@ -158,6 +172,12 @@ export function createApp() {
 
   // Errors: never leak internals.
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+    // An export that fails part way has already sent its headers. Cutting the connection tells the
+    // browser the download failed, instead of leaving a shorter file that looks complete.
+    if (res.headersSent) {
+      logger.error({ err, url: req.url?.split('?')[0] }, 'response failed part way through');
+      return res.destroy();
+    }
     if (err instanceof HttpError) {
       return res.status(err.status).json({ error: { code: err.code, message: err.message, ...(err.details !== undefined ? { details: err.details } : {}) } });
     }

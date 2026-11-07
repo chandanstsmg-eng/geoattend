@@ -3,11 +3,12 @@ import { DateTime } from 'luxon';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { one, q, tx, type Queryable } from '../../db/pool.js';
+import { localDaySql, orgToday } from '../../lib/dates.js';
 import { badRequest, conflict, HttpError, notFound } from '../../lib/errors.js';
 import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { hashPassword, passwordPolicyError } from '../../lib/password.js';
 import { revokeAllForUser, type AuthUser } from '../../lib/auth.js';
-import { assertInOrg, siteFilter } from '../../lib/tenancy.js';
+import { assertInOrg, siteFilter, emailTaken } from '../../lib/tenancy.js';
 import { audit } from '../../lib/audit.js';
 import { endSession } from '../tracking/tracking.service.js';
 import { addRosterEntry, rosterEntryBody } from '../roster/roster.js';
@@ -23,7 +24,7 @@ const SELECT_EMPLOYEE = `
                           ORDER BY esa.effective_from, sh.start_time)
             FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id JOIN workplaces sw ON sw.id = sh.workplace_id
             LEFT JOIN users mu ON mu.id = esa.manager_id
-            WHERE esa.employee_id = u.id AND (esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE)) AS shifts,
+            WHERE esa.employee_id = u.id AND (esa.effective_to IS NULL OR esa.effective_to >= (now() AT TIME ZONE sh.timezone)::date)) AS shifts,
          (SELECT json_build_object('id', s.id, 'state', s.state) FROM tracking_sessions s WHERE s.employee_id = u.id AND s.ended_at IS NULL LIMIT 1) AS open_session
   FROM users u
   JOIN employee_profiles ep ON ep.user_id = u.id
@@ -93,7 +94,7 @@ async function createEmployee(
   const password = body.password || tempPassword();
   const policy = passwordPolicyError(password);
   if (policy) throw badRequest('WEAK_PASSWORD', policy);
-  if (await one('SELECT 1 FROM users WHERE lower(email) = lower($1)', [body.email], db)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
+  if (await emailTaken(body.email)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
   if (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND org_id = $2', [body.employeeCode, actor.orgId], db)) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
   if (body.workplaceId) await assertInOrg('workplace', body.workplaceId, actor.orgId);
   const u = await one(
@@ -102,8 +103,8 @@ async function createEmployee(
     db,
   );
   await q(`INSERT INTO employee_profiles (user_id, employee_code, phone, department, designation, joined_on) VALUES ($1,$2,$3,$4,$5,$6)`, [u.id, body.employeeCode, body.phone ?? null, body.department ?? null, body.designation ?? null, body.joinedOn ?? null], db);
-  if (body.workplaceId) await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by) VALUES ($1,$2,$3)`, [u.id, body.workplaceId, actor.id], db);
-  if (body.shiftId) await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, created_by) VALUES ($1,$2,$3)`, [u.id, body.shiftId, actor.id], db);
+  if (body.workplaceId) await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by, effective_from) VALUES ($1,$2,$3,(SELECT ${localDaySql('w.timezone')} FROM workplaces w WHERE w.id = $2))`, [u.id, body.workplaceId, actor.id], db);
+  if (body.shiftId) await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, created_by, effective_from) VALUES ($1,$2,$3,(SELECT ${localDaySql('sh.timezone')} FROM shifts sh WHERE sh.id = $2))`, [u.id, body.shiftId, actor.id], db);
   await audit({ actor, action, resourceType: 'user', resourceId: u.id, after: { ...body, password: undefined }, req }, db);
   return { id: u.id as string, temporaryPassword: body.password ? undefined : password };
 }
@@ -121,6 +122,9 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       /** A supervisor's id, or "none" for workers nobody supervises yet. */
       supervisorId: z.union([z.uuid(), z.literal('none')]).optional(),
       status: z.enum(['active', 'inactive', 'all']).default('active'),
+      /** Optional: without it the whole list comes back, as the dashboard's pickers expect. */
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+      offset: z.coerce.number().int().min(0).default(0),
     }),
     handler: async ({ query, user }) =>
       q(
@@ -130,8 +134,8 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
            AND ($2::uuid IS NULL OR wa.workplace_id = $2)
            AND ($3 = 'all' OR ($3 = 'active') = u.is_active)
            AND ($6::text IS NULL OR ($6 = 'none' AND ep.supervisor_id IS NULL) OR ep.supervisor_id::text = $6)
-         ORDER BY u.full_name`,
-        [query.search?.trim() || null, query.workplaceId ?? null, query.status, user.orgId, user.sites, query.supervisorId ?? null],
+         ORDER BY u.full_name, u.id LIMIT $7 OFFSET $8`,
+        [query.search?.trim() || null, query.workplaceId ?? null, query.status, user.orgId, user.sites, query.supervisorId ?? null, query.limit ?? null, query.offset],
       ),
   }),
   route({
@@ -208,7 +212,7 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       const left = 'leftOn' in body ? body.leftOn : before.left_on;
       if (joined && left && left < joined) throw badRequest('BAD_DATES', 'The last working day cannot be before the joining date.');
       await tx(async (db) => {
-        if (body.email && (await one('SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2', [body.email, params.id], db))) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
+        if (body.email && (await emailTaken(body.email, params.id))) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
         if (body.employeeCode && (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND user_id <> $2 AND org_id = $3', [body.employeeCode, params.id, user.orgId], db))) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
         await q(`UPDATE users SET full_name = COALESCE($2, full_name), email = COALESCE($3, email), updated_at = now() WHERE id = $1`, [params.id, body.fullName ?? null, body.email ?? null], db);
         await q(
@@ -302,10 +306,11 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       await tx(async (db) => {
         if (body.workplaceId) await assertInOrg('workplace', body.workplaceId, user.orgId);
         // Assignments that started today are removed (never effective); older ones end yesterday. The audit log keeps the history.
-        await q(`DELETE FROM workplace_assignments WHERE employee_id = $1 AND effective_to IS NULL AND effective_from >= CURRENT_DATE`, [params.id], db);
-        await q(`UPDATE workplace_assignments SET effective_to = CURRENT_DATE - 1 WHERE employee_id = $1 AND effective_to IS NULL`, [params.id], db);
+        const today = await orgToday(user.orgId, body.workplaceId ?? before.workplace_id ?? null, new Date(), db);
+        await q(`DELETE FROM workplace_assignments WHERE employee_id = $1 AND effective_to IS NULL AND effective_from >= $2::date`, [params.id, today], db);
+        await q(`UPDATE workplace_assignments SET effective_to = $2::date - 1 WHERE employee_id = $1 AND effective_to IS NULL`, [params.id, today], db);
         if (body.workplaceId) {
-          await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by) VALUES ($1,$2,$3)`, [params.id, body.workplaceId, user.id], db);
+          await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by, effective_from) VALUES ($1,$2,$3,$4)`, [params.id, body.workplaceId, user.id, today], db);
         }
         // A supervisor who does not manage the new workplace stops being this worker's supervisor.
         await unlinkStaleSupervisors(db, user.orgId);
@@ -360,8 +365,8 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     handler: async ({ params, user, req }) => {
       const r = await tx(async (db) => {
         const a = await one(
-          `SELECT esa.*, sh.workplace_id FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id
-           WHERE esa.id = $1 AND esa.employee_id = $2 AND (esa.effective_to IS NULL OR esa.effective_to >= CURRENT_DATE) FOR UPDATE OF esa`,
+          `SELECT esa.*, sh.workplace_id, (now() AT TIME ZONE sh.timezone)::date AS today FROM employee_shift_assignments esa JOIN shifts sh ON sh.id = esa.shift_id
+           WHERE esa.id = $1 AND esa.employee_id = $2 AND (esa.effective_to IS NULL OR esa.effective_to >= (now() AT TIME ZONE sh.timezone)::date) FOR UPDATE OF esa`,
           [params.assignmentId, params.id],
           db,
         );
@@ -375,11 +380,11 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
           [params.id, a.shift_id, a.effective_from, a.effective_to],
           db,
         );
-        const started = (await one('SELECT $1::date < CURRENT_DATE AS v', [a.effective_from], db)).v;
+        const started = a.effective_from < a.today;
         if (!used || !started) {
           await q('DELETE FROM employee_shift_assignments WHERE id = $1', [a.id], db);
         } else {
-          await q('UPDATE employee_shift_assignments SET effective_to = GREATEST(effective_from, CURRENT_DATE - 1) WHERE id = $1', [a.id], db);
+          await q('UPDATE employee_shift_assignments SET effective_to = GREATEST(effective_from, $2::date - 1) WHERE id = $1', [a.id, a.today], db);
         }
         return a;
       });

@@ -9,7 +9,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { getPool, one, q, tx } from '../../db/pool.js';
-import { conflict, forbidden } from '../../lib/errors.js';
+import { conflict, forbidden, notFound } from '../../lib/errors.js';
 import { idParams, mount, route } from '../../lib/http.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { getSettings } from '../settings/settings.service.js';
@@ -270,7 +270,8 @@ mount(broadcastsRouter, '/api/v1/broadcasts', 'broadcasts', [
     access: 'employee',
     params: idParams,
     handler: async ({ user, params }) => {
-      await q(`UPDATE broadcast_recipients SET read_at = COALESCE(read_at, now()) WHERE broadcast_id = $1 AND employee_id = $2`, [params.id, user.id]);
+      const marked = await one(`UPDATE broadcast_recipients SET read_at = COALESCE(read_at, now()) WHERE broadcast_id = $1 AND employee_id = $2 RETURNING broadcast_id`, [params.id, user.id]);
+      if (!marked) throw notFound('Message');
       return { ok: true };
     },
   }),

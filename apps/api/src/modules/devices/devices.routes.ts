@@ -14,6 +14,7 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { getPool, one, q, tx } from '../../db/pool.js';
+import { orgToday } from '../../lib/dates.js';
 import { HttpError, conflict, notFound } from '../../lib/errors.js';
 import { idParams, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
@@ -46,7 +47,7 @@ export async function checkDeviceAtLogin(u: { id: string; full_name: string; is_
         body: `${u.full_name} tried to sign in on the phone registered to ${sharedWith.full_name}. ${enforce ? 'The sign-in was refused.' : 'The sign-in was allowed (alert-only mode).'} One person marking attendance for another usually looks like this.`,
         employeeId: u.id,
         data: { deviceId, registeredTo: sharedWith.id },
-        dedupeKey: `shared-device:${u.id}:${deviceId}:${new Date().toISOString().slice(0, 10)}`,
+        dedupeKey: `shared-device:${u.id}:${deviceId}:${await orgToday(u.org_id)}`,
       });
       if (enforce) throw new HttpError(403, 'DEVICE_IN_USE', 'This phone is registered to another employee. Each person must sign in on their own phone.');
       return;

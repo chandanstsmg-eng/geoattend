@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { q, type Queryable } from '../db/pool.js';
+import { currentOrg, q, type Queryable } from '../db/pool.js';
 import type { AuthUser } from './auth.js';
 
 export interface AuditEntry {
@@ -32,7 +32,7 @@ export async function audit(e: AuditEntry, db?: Queryable) {
       e.reason ?? null,
       e.req?.ip ?? null,
       e.req?.headers['user-agent']?.slice(0, 300) ?? null,
-      e.orgId ?? e.actor?.orgId ?? null,
+      e.orgId ?? e.actor?.orgId ?? currentOrg(),
     ],
     db,
   );

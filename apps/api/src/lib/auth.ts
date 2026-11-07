@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { SignJWT, jwtVerify } from 'jose';
 import { config } from '../config.js';
-import { one, q, tx } from '../db/pool.js';
+import { asSystem, one, q, tx } from '../db/pool.js';
 import { audit } from './audit.js';
 import { HttpError, forbidden, unauthorized } from './errors.js';
 
@@ -166,7 +166,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 export function requireAuth(role?: Role) {
   return async (req: Request, _res: Response, next: NextFunction) => {
     try {
-      const user = await resolveUser(req);
+      // The company is not known until the user has been read.
+      const user = await asSystem(() => resolveUser(req));
       if (!user) throw unauthorized();
       if (user.via === 'cookie' && !SAFE_METHODS.has(req.method)) {
         const header = req.headers['x-csrf-token'];

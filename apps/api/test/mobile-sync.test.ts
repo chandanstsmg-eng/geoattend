@@ -162,7 +162,7 @@ describe('a working day without a connection', () => {
     const sess = await one(`SELECT ended_at, state FROM tracking_sessions WHERE id = $1`, [s.sessionId]);
     expect(Math.abs(new Date(sess.ended_at).getTime() - Date.parse(leave))).toBeLessThan(1000);
     expect(sess.state).toBe('SHIFT_COMPLETED');
-    const w = await one(`SELECT worked_minutes FROM attendance_work WHERE attendance_id = $1`, [r.id]);
+    const w = await one(`SELECT worked_minutes FROM attendance_work_all WHERE attendance_id = $1`, [r.id]); // waits for a person before it is official
     expect(w.worked_minutes).toBeGreaterThan(200);
     expect((await one(`SELECT count(*)::int n FROM location_updates WHERE session_id = $1`, [s.sessionId])).n).toBeGreaterThanOrEqual(2);
   });

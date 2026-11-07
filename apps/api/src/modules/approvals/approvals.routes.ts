@@ -5,6 +5,7 @@
  */
 import { Router } from 'express';
 import { one, q } from '../../db/pool.js';
+import { orgTimezoneSql } from '../../lib/dates.js';
 import { mount, route } from '../../lib/http.js';
 import { employeeSite, overtimeCounts, siteFilter } from '../../lib/tenancy.js';
 
@@ -50,7 +51,7 @@ mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
         q(
           `SELECT l.*, (l.end_date - l.start_date + 1)::int AS days, u.full_name, ep.employee_code,
                   (SELECT count(*)::int FROM leave_requests o WHERE o.employee_id = l.employee_id AND o.status = 'APPROVED'
-                     AND o.start_date >= date_trunc('year', now())::date) AS approved_this_year
+                     AND o.start_date >= date_trunc('year', now() AT TIME ZONE ${orgTimezoneSql('$1')})::date) AS approved_this_year
            FROM leave_requests l JOIN users u ON u.id = l.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
            WHERE l.status = 'PENDING' AND u.org_id = $1 AND ${SITE} ORDER BY l.start_date, l.created_at`,
           org,

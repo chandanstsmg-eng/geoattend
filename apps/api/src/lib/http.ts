@@ -5,6 +5,7 @@
  */
 import type { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
+import { asSystem, withOrg } from '../db/pool.js';
 import { HttpError } from './errors.js';
 import { requireAuth, type AuthUser } from './auth.js';
 import { assertInOrg, type Scope } from './tenancy.js';
@@ -62,8 +63,8 @@ export function mount(router: Router, basePath: string, tag: string, defs: Route
     registry.push({ tag, fullPath: basePath + def.path, def });
     const guards = def.access === 'public' ? [] : [requireAuth(def.access === 'authenticated' ? undefined : def.access === 'admin' ? 'ADMIN' : 'EMPLOYEE')];
     router[def.method](def.path, ...(def.pre ?? []), ...guards, async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const user = (req as any).user as AuthUser | undefined;
+      const user = (req as any).user as AuthUser | undefined;
+      const run = async () => {
         if (def.ownerOnly && user?.access !== 'OWNER') throw new HttpError(403, 'OWNER_ONLY', 'Only the company owner can do this.');
         const params = parse(def.params, req.params, 'path parameters');
         // Before body validation, so another company's ids always answer 404 and nothing else.
@@ -74,6 +75,11 @@ export function mount(router: Router, basePath: string, tag: string, defs: Route
         if (def.raw || res.headersSent) return;
         if (result === undefined) res.status(204).end();
         else res.json(result);
+      };
+      try {
+        // A signed-in user's request reaches only their company's rows, enforced by the database.
+        // Public routes (sign-in, sign-up, refresh) work before anyone is known.
+        await (user ? withOrg(user.orgId, run) : asSystem(run));
       } catch (err) {
         next(err);
       }

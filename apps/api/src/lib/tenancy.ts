@@ -7,7 +7,7 @@
  * even confirmed to exist. List queries filter with `orgId` and `siteFilter()` themselves;
  * test/tenancy.test.ts checks both for every registered admin route.
  */
-import { one } from '../db/pool.js';
+import { asSystem, one } from '../db/pool.js';
 import { notFound } from './errors.js';
 
 export const DEFAULT_ORG_ID = '00000000-0000-0000-0000-000000000001';
@@ -49,11 +49,32 @@ export async function assertInOrg(scope: Scope, id: string, orgId: string, sites
 }
 
 /**
+ * Whether an account anywhere already uses this address. Sign-in is by address alone, so it must stay
+ * unique across companies. This is the one check that must look past the caller's company; it answers
+ * yes or no and returns nothing else.
+ */
+export const emailTaken = (email: string, exceptUserId: string | null = null) =>
+  asSystem(async () => !!(await one('SELECT 1 FROM users WHERE lower(email) = lower($1) AND ($2::uuid IS NULL OR id <> $2)', [email, exceptUserId])));
+
+/**
  * SQL condition limiting rows to a supervisor's sites; always true for owners.
  * `param` is the placeholder that will hold `user.sites` (null for owners).
  */
-/** SQL: this overtime entry counts, i.e. its shift's attendance was not voided. The entry itself stays as history. */
-export const overtimeCounts = (o = 'o') => `NOT EXISTS (SELECT 1 FROM attendance_records voided WHERE voided.id = ${o}.attendance_id AND voided.verification_status = 'VOIDED')`;
+/** SQL: this overtime entry counts, i.e. its shift's attendance was neither voided nor still waiting for verification. The entry itself stays as history. */
+export const overtimeCounts = (o = 'o') => `NOT EXISTS (SELECT 1 FROM attendance_records uncounted WHERE uncounted.id = ${o}.attendance_id AND uncounted.verification_status IN ('VOIDED', 'PENDING_VERIFICATION'))`;
+
+/** SQL: this attendance record counts towards official figures. Voided and pending records stay in history only. */
+export const attendanceCounts = (ar = 'ar') => `${ar}.verification_status NOT IN ('VOIDED', 'PENDING_VERIFICATION')`;
+
+/**
+ * SQL join to a record's worked time, one record at a time. A plain join to the view lets the planner
+ * compute the view for the whole company first: under row-level security it did so for about 20,000
+ * records, taking 424 ms instead of 5 for a page of 100. OFFSET 0 keeps the lookup per record.
+ */
+export const workJoin = (ar = 'ar', alias = 'aw', view = 'attendance_work') => `LATERAL (SELECT * FROM ${view} wj WHERE wj.attendance_id = ${ar}.id OFFSET 0) ${alias} ON true`;
+
+/** SQL: minutes of a record waiting for verification, shown apart from official time; NULL for any other record. */
+export const pendingMinutes = (ar = 'ar') => `CASE WHEN ${ar}.verification_status = 'PENDING_VERIFICATION' THEN (SELECT pw.worked_minutes FROM attendance_work_all pw WHERE pw.attendance_id = ${ar}.id) END`;
 
 export const siteFilter = (workplaceExpr: string, param: string) => `(${param}::uuid[] IS NULL OR ${workplaceExpr} = ANY(${param}::uuid[]))`;
 

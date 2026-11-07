@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { audit } from '../../lib/audit.js';
 import { z } from 'zod';
 import { one, q } from '../../db/pool.js';
+import { dayEndSql, dayStartSql } from '../../lib/dates.js';
 import { isoDate, mount, paging, route } from '../../lib/http.js';
 import { siteFilter } from '../../lib/tenancy.js';
 
@@ -24,7 +25,7 @@ mount(geofenceEventsRouter, '/api/v1/geofence-events', 'geofence-events', [
       await audit({ actor: user, action: 'location.view', resourceType: 'geofence_events', after: { employeeId: query.employeeId ?? null, from: query.from ?? null, to: query.to ?? null }, req });
       return q(
         `SELECT g.*, u.full_name, w.name AS workplace_name FROM geofence_events g JOIN users u ON u.id = g.employee_id JOIN workplaces w ON w.id = g.workplace_id
-         WHERE u.org_id = $8 AND ${siteFilter('g.workplace_id', '$9')} AND ($1::date IS NULL OR g.event_time >= $1::date) AND ($2::date IS NULL OR g.event_time < $2::date + 1)
+         WHERE u.org_id = $8 AND ${siteFilter('g.workplace_id', '$9')} AND ($1::date IS NULL OR g.event_time >= ${dayStartSql('$1', '$8')}) AND ($2::date IS NULL OR g.event_time < ${dayEndSql('$2', '$8')})
            AND ($3::uuid IS NULL OR g.employee_id = $3) AND ($4::uuid IS NULL OR g.workplace_id = $4) AND ($5::text IS NULL OR g.event_type = $5)
          ORDER BY g.event_time DESC LIMIT $6 OFFSET $7`,
         [query.from ?? null, query.to ?? null, query.employeeId ?? null, query.workplaceId ?? null, query.eventType ?? null, query.limit, query.offset, user.orgId, user.sites],
@@ -51,7 +52,7 @@ mount(absenceRouter, '/api/v1/absence-intervals', 'absence', [
     }),
     handler: async ({ query, user }) => {
       const where = `a.employee_id IN (SELECT id FROM users WHERE org_id = $7) AND ${siteFilter('a.workplace_id', '$8')}
-           AND ($1::date IS NULL OR a.started_at >= $1::date) AND ($2::date IS NULL OR a.started_at < $2::date + 1)
+           AND ($1::date IS NULL OR a.started_at >= ${dayStartSql('$1', '$7')}) AND ($2::date IS NULL OR a.started_at < ${dayEndSql('$2', '$7')})
            AND ($3::uuid IS NULL OR a.employee_id = $3) AND ($4::uuid IS NULL OR a.workplace_id = $4) AND ($5::text IS NULL OR a.status = $5)
            AND ($6::boolean IS NOT TRUE OR a.prolonged_at IS NOT NULL)`;
       const params = [query.from ?? null, query.to ?? null, query.employeeId ?? null, query.workplaceId ?? null, query.status ?? null, query.prolongedOnly === 'true', user.orgId, user.sites];
@@ -87,7 +88,7 @@ mount(auditRouter, '/api/v1/audit-logs', 'audit', [
     }),
     handler: async ({ query, user }) => {
       const where = `a.org_id = $7 AND ($1::text IS NULL OR a.action ILIKE $1 || '%') AND ($2::text IS NULL OR a.resource_type = $2) AND ($3::text IS NULL OR a.resource_id = $3)
-        AND ($4::uuid IS NULL OR a.actor_id = $4) AND ($5::date IS NULL OR a.created_at >= $5::date) AND ($6::date IS NULL OR a.created_at < $6::date + 1)`;
+        AND ($4::uuid IS NULL OR a.actor_id = $4) AND ($5::date IS NULL OR a.created_at >= ${dayStartSql('$5', '$7')}) AND ($6::date IS NULL OR a.created_at < ${dayEndSql('$6', '$7')})`;
       const params = [query.action ?? null, query.resourceType ?? null, query.resourceId ?? null, query.actorId ?? null, query.from ?? null, query.to ?? null, user.orgId];
       const items = await q(`SELECT a.*, u.full_name AS actor_name FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT $8 OFFSET $9`, [...params, query.limit, query.offset]);
       const total = await one(`SELECT count(*)::int AS n FROM audit_logs a WHERE ${where}`, params);

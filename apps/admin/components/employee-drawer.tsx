@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { get, patch, post, put, del, qs, errorMessage } from '@/lib/api';
-import { ago, fmtDate, fmtDateTime, fmtTime, metres, todayISO } from '@/lib/format';
+import { ago, fmtDate, fmtDateTime, fmtTime, metres, todayISO, businessInstant } from '@/lib/format';
 import { Badge, Button, Card, ConfirmButton, Drawer, Field, InlineError, Input, KeyValue, Modal, QueryState, Select, SimBadge, Table, Tabs, Td, Th, Textarea, EmptyState } from './ui';
 import { StateBadge, VerificationBadge } from './state-badge';
 import { useSupervisors, useWorkplaces } from './filters';
@@ -342,8 +342,8 @@ function LocationsTab({ id }: { id: string }) {
   const today = new Date();
   const [day, setDay] = useState(todayISO());
   const [load, setLoad] = useState(false);
-  const from = new Date(`${day}T00:00:00`).toISOString();
-  const to = new Date(`${day}T23:59:59`).toISOString();
+  const from = businessInstant(`${day}T00:00`);
+  const to = new Date(new Date(businessInstant(`${day}T23:59`)).getTime() + 59_000).toISOString();
   const q = useQuery({ queryKey: ['locations', id, day], queryFn: () => get<any[]>(`/employees/${id}/location-history${qs({ from, to })}`), enabled: load });
   return (
     <div className="space-y-3">

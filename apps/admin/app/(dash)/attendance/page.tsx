@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ImageOff, Plus } from 'lucide-react';
 import { get, post, qs, errorMessage } from '@/lib/api';
-import { localDateTime, daysAgoISO, fmtClock, fmtDate, fmtDateTime, metres, minutes, todayISO } from '@/lib/format';
+import { businessInstant, localDateTime, daysAgoISO, fmtClock, fmtDate, fmtDateTime, metres, minutes, todayISO } from '@/lib/format';
 import { rowKeys, LinkButton, Badge, Button, Callout, Card, Drawer, EmptyState, Field, InlineError, Input, KeyValue, Modal, PageHeader, Pagination, QueryState, rowLink, Select, SimBadge, Spinner, Table, Tabs, Td, Textarea, Th, Toolbar } from '@/components/ui';
 import { FACE_RESULT, VerificationBadge } from '@/components/state-badge';
 import { EmployeeSelect, WorkplaceSelect, useEmployees } from '@/components/filters';
@@ -257,6 +257,11 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
                           <>
                             <span className="text-gray-900">{minutes(r.worked_minutes)}</span>
                             {r.in_progress && <div className="text-xs text-gray-500">so far</div>}
+                          </>
+                        ) : r.pending_minutes != null ? (
+                          <>
+                            <span className="text-amber-800">{minutes(r.pending_minutes)}</span>
+                            <div className="text-xs text-amber-800">pending, not counted</div>
                           </>
                         ) : (
                           <span className="text-gray-400">—</span>
@@ -554,7 +559,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
   const create = useMutation({ meta: { success: 'Attendance added' },
     mutationFn: () => {
       const { workedHours, ...rest } = f;
-      return post('/attendance/manual', { ...rest, recordedAt: new Date(f.recordedAt).toISOString(), workedMinutes: workedHours ? Math.round(Number(workedHours) * 60) : undefined });
+      return post('/attendance/manual', { ...rest, recordedAt: businessInstant(f.recordedAt), workedMinutes: workedHours ? Math.round(Number(workedHours) * 60) : undefined });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['attendance'] }); qc.invalidateQueries({ queryKey: ['overview'] }); onClose(); },
   });

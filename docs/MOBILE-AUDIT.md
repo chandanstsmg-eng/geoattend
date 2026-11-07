@@ -55,4 +55,4 @@ Phone check gives brand-specific steps for Xiaomi, Oppo, Realme, OnePlus, Vivo, 
 
 A local release build (`preview` variant, arm64 only) completed on 4 Nov 2026: `app-release.apk`, 37.1 MB, signed with the debug key. It proves the native project compiles. It has not been installed on any phone or emulator. A store build needs EAS, or a real signing key.
 
-Building on Windows needs a real short folder rather than a mapped drive, about 8 GB of free disk, and `ninja` 1.12 or newer: the 1.10 bundled with CMake 3.22 fails on paths over 260 characters even with Windows long paths on. EAS builds on Linux, where none of this applies.
+Building on Windows needs a real short folder rather than a mapped drive, about 13 GB of free disk, and `ninja` 1.12 or newer: the 1.10 bundled with CMake 3.22 fails on paths over 260 characters even with Windows long paths on. EAS builds on Linux, where none of this applies.

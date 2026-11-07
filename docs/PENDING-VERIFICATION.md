@@ -14,6 +14,9 @@ Not done. These passed builds and API tests only.
 | Voided records | Disappear from every attendance, hours, overtime and pay figure, and stay visible in records | Yes |
 | Offline records | Shown as pending in Approvals with phone time and evidence; approve and reject work for a supervisor; owner can override a rejection | Yes |
 | Overtime | Overtime on a voided shift leaves the queue and totals | Yes |
+| Pending hours | A pending record shows its label and "pending, not counted" on the attendance list and the board; hours and monthly reports show pending apart; approving moves it into the totals | Yes |
+| Business time | With the computer set to another time zone, the dashboard still shows Indian times and today's Indian date; a manual record entered at a given time is stored as that time in India | Yes |
+| Date ranges | "This month" and "Last month" give the right dates just after midnight in India | No |
 | Photos | Delete button hidden for supervisors, works for owners with a reason | Yes |
 | Retention | Settings shows the hold; the checkbox is disabled; "Run retention now" reports photos kept | No |
 | Privacy page | Says photos are not deleted automatically yet | No |
@@ -22,7 +25,7 @@ Not done. These passed builds and API tests only.
 
 ## Phone checks (QA stage: before release)
 
-See [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md). Nothing has been run on a real phone.
+See [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md). Nothing has been run on a real phone: Xiaomi, Oppo, Vivo and Samsung are all NOT VERIFIED. The Phase D APK must not be distributed, because its server address is a placeholder.
 
 ## External services
 

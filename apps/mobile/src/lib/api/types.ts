@@ -315,6 +315,8 @@ export interface AttendanceHistoryItem {
   shift_date: string;
   recorded_at: string;
   verification_status: string;
+  /** Time on a record waiting for a manager; not part of any official total. */
+  pending_minutes?: number | null;
   is_late: boolean;
   late_by_minutes: number;
   evidence_distance_m: number | null;

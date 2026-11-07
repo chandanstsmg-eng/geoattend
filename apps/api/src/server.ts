@@ -3,7 +3,7 @@ import { assertRuntimeConfig, config, sampleData } from './config.js';
 import { startSampleHeartbeat } from './modules/jobs/sample-heartbeat.js';
 import { logger } from './lib/logger.js';
 import { ensureDatabase } from './db/postgres.js';
-import { closePool, getPool, initPool } from './db/pool.js';
+import { closePool, databaseRoleProblems, getPool, initPool, prepareTenantLogin } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { createApp } from './app.js';
 import { startSweeper } from './modules/jobs/sweeper.js';
@@ -24,6 +24,10 @@ async function main() {
   const url = await ensureDatabase();
   const pool = initPool(url);
   await migrate(pool, (m) => logger.info(m));
+  await prepareTenantLogin();
+  const roleProblems = await databaseRoleProblems();
+  if (roleProblems.length && config.isProduction) throw new Error(`Refusing to start in production:\n - ${roleProblems.join('\n - ')}`);
+  for (const p of roleProblems) logger.warn(p);
 
   const app = createApp();
   const server = app.listen(config.port, '0.0.0.0', () => {

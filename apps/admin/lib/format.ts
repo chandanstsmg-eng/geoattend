@@ -1,17 +1,24 @@
-export function fmtDateTime(v: string | Date | null | undefined, tz?: string) {
+/**
+ * Times and "today" are shown in the business time zone, not the zone of whoever opens the page, so
+ * an owner travelling abroad sees the same day and the same clock times as the site. Screens that know
+ * a workplace's own zone pass it as `tz`.
+ */
+export const BUSINESS_ZONE = 'Asia/Kolkata';
+
+export function fmtDateTime(v: string | Date | null | undefined, tz: string = BUSINESS_ZONE) {
   if (!v) return '—';
-  return new Date(v).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', ...(tz ? { timeZone: tz } : {}) });
+  return new Date(v).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: tz });
 }
 
-export function fmtTime(v: string | Date | null | undefined, tz?: string) {
+export function fmtTime(v: string | Date | null | undefined, tz: string = BUSINESS_ZONE) {
   if (!v) return '—';
-  return new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', ...(tz ? { timeZone: tz } : {}) });
+  return new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: tz });
 }
 
 /** Hours and minutes only, for dense tables (the full time stays in the record view). */
-export function fmtClock(v: string | Date | null | undefined, tz?: string) {
+export function fmtClock(v: string | Date | null | undefined, tz: string = BUSINESS_ZONE) {
   if (!v) return '—';
-  return new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', ...(tz ? { timeZone: tz } : {}) });
+  return new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: tz });
 }
 
 /** "Friday, 31 October 2026" for page subtitles. */
@@ -22,8 +29,9 @@ export function fmtLongDate(v: string | null | undefined) {
 
 export function fmtDate(v: string | null | undefined) {
   if (!v) return '—';
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T12:00:00`) : new Date(v);
-  return d.toLocaleDateString(undefined, { dateStyle: 'medium' });
+  // A plain date has no zone to convert: it is shown as it is. Only timestamps move to the business zone.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return new Date(`${v}T12:00:00`).toLocaleDateString(undefined, { dateStyle: 'medium' });
+  return new Date(v).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: BUSINESS_ZONE });
 }
 
 export function ago(v: string | Date | null | undefined, now = Date.now()) {
@@ -45,15 +53,12 @@ export function minutes(m: number | null | undefined) {
 
 export const metres = (m: number | null | undefined) => (m === null || m === undefined ? '—' : `${Math.round(m)} m`);
 
-export const todayISO = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+/** YYYY-MM-DD of an instant in the business zone. */
+export const businessDate = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 
-export const daysAgoISO = (n: number) => {
-  const d = new Date(Date.now() - n * 86400_000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+export const todayISO = () => businessDate(new Date());
+
+export const daysAgoISO = (n: number) => businessDate(new Date(Date.now() - n * 86400_000));
 
 export const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -63,5 +68,8 @@ export const hrsNum = (m: number) => Math.round((m / 60) * 10) / 10;
 /** "3 Nov" from an ISO date (chart axes). */
 export const shortDay = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
-/** "YYYY-MM-DDTHH:mm" in the browser's time zone, for datetime-local inputs. */
-export const localDateTime = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+/** "YYYY-MM-DDTHH:mm" in the business zone, for datetime-local inputs. */
+export const localDateTime = (d = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: BUSINESS_ZONE, dateStyle: 'short', timeStyle: 'short' }).format(d).replace(' ', 'T');
+
+/** The instant meant by what was typed in such an input (the business zone has no daylight saving). */
+export const businessInstant = (local: string) => new Date(`${local.slice(0, 16)}:00+05:30`).toISOString();
