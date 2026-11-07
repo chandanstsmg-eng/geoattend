@@ -1,5 +1,12 @@
-import { QueryClient } from '@tanstack/react-query';
+import { AppState } from 'react-native';
+import { focusManager, QueryClient } from '@tanstack/react-query';
 import { ApiError } from './api/client';
+
+// Coming back to the app counts as focus, so Home is fresh after the phone was put away.
+focusManager.setEventListener((handle) => {
+  const sub = AppState.addEventListener('change', (state) => handle(state === 'active'));
+  return () => sub.remove();
+});
 
 export const queryClient = new QueryClient({
   defaultOptions: {

@@ -136,7 +136,7 @@ export function DemoBadge({ show }: { show: boolean | null | undefined }) {
 export function Banner({ tone, title, message, onPress, actionLabel }: { tone: Tone; title: string; message?: string; onPress?: () => void; actionLabel?: string }) {
   const t = toneColors[tone];
   const content = (
-    <View style={[styles.banner, { backgroundColor: t.bg, borderColor: t.border }]}>
+    <View accessible={!onPress} accessibilityLiveRegion="polite" style={[styles.banner, { backgroundColor: t.bg, borderColor: t.border }]}>
       <Text style={[styles.bannerTitle, { color: t.fg }]}>{title}</Text>
       {message ? <Text style={styles.bannerMsg}>{message}</Text> : null}
       {onPress && actionLabel ? <Text style={[styles.bannerAction, { color: t.fg }]}>{actionLabel} ›</Text> : null}

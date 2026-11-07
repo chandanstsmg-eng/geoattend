@@ -6,15 +6,14 @@ import { SavedOnPhone } from '../../../components/SyncStatus';
 import { Badge, Button, Card, DemoBadge, ErrorState, H2, Loading, Muted, ReasonModal, Screen } from '../../../components/ui';
 import { api, errorMessage } from '../../../lib/api/client';
 import type { AttendanceHistory, AttendanceHistoryItem, ReviewItem } from '../../../lib/api/types';
+import { attendanceStatus, hoursMinutes as hm } from '../../../lib/attendance-status';
 import { fmtDate, fmtDateTime, fmtDistance, fmtTime } from '../../../lib/format';
 import { qk, queryClient } from '../../../lib/queryClient';
 import { stateLabel } from '../../../lib/states';
-import { colors, font, space, type Tone } from '../../../lib/theme';
+import { colors, font, space } from '../../../lib/theme';
 
-const hm = (m: number) => (m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`);
-
-const STATUS_TONE: Record<string, Tone> = { VERIFIED: 'success', MANUAL_APPROVED: 'success', CORRECTED: 'info', DISPUTED: 'warning', VOIDED: 'danger', PENDING_VERIFICATION: 'warning' };
-const STATUS_LABEL: Record<string, string> = { VERIFIED: 'Verified', MANUAL_APPROVED: 'Approved by manager', CORRECTED: 'Corrected', DISPUTED: 'Disputed', VOIDED: 'Not counted', PENDING_VERIFICATION: 'Waiting for manager check' };
+const REQUEST_KIND: Record<string, string> = { MANUAL_REVIEW: 'Manual review', DISPUTE: 'Dispute', TECHNICAL_ISSUE: 'Technical issue' };
+const REQUEST_STATUS: Record<string, string> = { OPEN: 'Waiting', APPROVED: 'Approved', REJECTED: 'Not approved' };
 
 /** Overtime after the shift and where its approval stands (only approved overtime is paid). */
 function OvertimeBadge({ a }: { a: AttendanceHistoryItem }) {
@@ -68,7 +67,7 @@ export default function HistoryScreen() {
               </Muted>
             </View>
             <DemoBadge show={a.is_simulated} />
-            <Badge label={STATUS_LABEL[a.verification_status] ?? a.verification_status} tone={STATUS_TONE[a.verification_status] ?? 'neutral'} />
+            <Badge label={attendanceStatus(a.verification_status).label} tone={attendanceStatus(a.verification_status).tone} />
           </View>
           <Text style={st.time}>Recorded at {fmtTime(a.recorded_at)}</Text>
           <Muted>
@@ -121,8 +120,8 @@ export default function HistoryScreen() {
           {reviews.data.map((r) => (
             <View key={r.id} style={st.missed}>
               <View style={{ flexDirection: 'row', gap: space.sm, alignItems: 'center' }}>
-                <Badge label={r.kind.replace('_', ' ')} />
-                <Badge label={r.status} tone={r.status === 'OPEN' ? 'warning' : r.status === 'APPROVED' ? 'success' : r.status === 'REJECTED' ? 'danger' : 'neutral'} />
+                <Badge label={REQUEST_KIND[r.kind] ?? r.kind.replace('_', ' ')} />
+                <Badge label={REQUEST_STATUS[r.status] ?? r.status} tone={r.status === 'OPEN' ? 'warning' : r.status === 'APPROVED' ? 'success' : r.status === 'REJECTED' ? 'danger' : 'neutral'} />
               </View>
               <Text style={st.missedText}>{r.reason}</Text>
               <Muted>

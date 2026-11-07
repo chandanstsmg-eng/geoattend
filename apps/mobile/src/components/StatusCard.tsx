@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import type { SessionStatus } from '../lib/api/types';
+import { attendanceStatus } from '../lib/attendance-status';
 import { fmtDistance, fmtTime } from '../lib/format';
 import { colors, font, radius, space, toneColors } from '../lib/theme';
 import { Badge, DemoBadge } from './ui';
@@ -9,8 +10,9 @@ export function StatusCard({ status }: { status: SessionStatus }) {
   const g = status.guidance;
   const t = toneColors[g.tone];
   const s = status.session;
+  const v = status.attendance ? attendanceStatus(status.attendance.verificationStatus) : null;
   return (
-    <View style={[st.card, { borderColor: t.border, backgroundColor: t.bg }]} accessibilityRole="summary" accessibilityLabel={`${g.title}. ${g.message}`}>
+    <View accessible style={[st.card, { borderColor: t.border, backgroundColor: t.bg }]} accessibilityRole="summary" accessibilityLabel={`${g.title}. ${g.message}${status.attendance ? `. Checked in at ${fmtTime(status.attendance.recordedAt)}. ${v!.label}` : ''}`}>
       <View style={st.top}>
         <Badge label={s.stateLabel} tone={g.tone} />
         <DemoBadge show={s.isSimulated} />
@@ -22,7 +24,9 @@ export function StatusCard({ status }: { status: SessionStatus }) {
         <Fact label="Accuracy" value={s.lastAccuracyM == null ? '—' : `±${Math.round(s.lastAccuracyM)} m`} />
         <Fact label="Radius" value={fmtDistance(status.workplace.radiusM)} />
       </View>
-      {status.attendance ? <Text style={st.recorded}>✓ Checked in at {fmtTime(status.attendance.recordedAt)}</Text> : null}
+      {status.attendance ? (
+        v!.counted ? <Text style={st.recorded}>✓ Checked in at {fmtTime(status.attendance.recordedAt)}</Text> : <Text style={[st.recorded, { color: colors.warning }]}>Checked in at {fmtTime(status.attendance.recordedAt)} · {v!.label} · not counted yet</Text>
+      ) : null}
     </View>
   );
 }

@@ -1,17 +1,21 @@
+/**
+ * The brand, as on the dashboard: navy #083E5A. Orange marks primary actions, and #EE7600 with white
+ * text is only 2.9:1, so buttons use the darker brand orange at 4.7:1.
+ */
 export const colors = {
-  navy: '#1E2952',
-  navyDark: '#151D3B',
-  navySoft: '#E8EBF4',
-  orange: '#EA580C',
-  orangeDark: '#C2410C',
-  orangeSoft: '#FFF1E8',
+  navy: '#083E5A',
+  navyDark: '#062F45',
+  navySoft: '#EEF4F8',
+  orange: '#BA5700',
+  orangeDark: '#994700',
+  orangeSoft: '#FFF5EB',
   white: '#FFFFFF',
   bg: '#F4F5F8',
   border: '#D9DCE3',
   text: '#1A1F2E',
   textMuted: '#5B6275',
-  textFaint: '#8A90A0',
-  success: '#15803D',
+  textFaint: '#6B7385',
+  success: '#136C34',
   successSoft: '#E7F6EC',
   warning: '#B45309',
   warningSoft: '#FEF5E3',
@@ -34,5 +38,5 @@ export const toneColors: Record<Tone, { fg: string; bg: string; border: string }
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 };
 export const radius = { sm: 6, md: 10, lg: 14 };
 export const font = { sm: 13, md: 15, lg: 17, xl: 20, xxl: 26 };
-/** Minimum touch target (Android guideline 48dp). */
+/** Minimum touch target: above the Android guideline of 48dp, for gloved and hurried hands. */
 export const TOUCH = 52;

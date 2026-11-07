@@ -38,7 +38,7 @@ export default function ShiftDetailsScreen() {
         <Row label="Time zone" value={shift.timezone} />
         <Row label="Arrival grace" value={`${shift.arrivalGraceMinutes} min`} />
         {shift.absenceThresholdMinutes != null ? <Row label="Absence alert after" value={`${shift.absenceThresholdMinutes} min away`} /> : null}
-        {a.workplace ? <Row label="Workspace" value={a.workplace.name} /> : null}
+        {a.workplace ? <Row label="Workplace" value={a.workplace.name} /> : null}
         {a.supervisor ? <Row label="Supervisor" value={a.supervisor.phone ? `${a.supervisor.fullName} · ${a.supervisor.phone}` : a.supervisor.fullName} /> : range?.managerName ? <Row label="Manager" value={range.managerName} /> : null}
         {range?.notes ? <Row label="Assigned work" value={range.notes} /> : null}
         {!shift.isActive ? <Banner tone="warning" title="This shift is not active for your current workplace" /> : null}
