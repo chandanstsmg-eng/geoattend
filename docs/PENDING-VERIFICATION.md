@@ -17,6 +17,10 @@ Phases E, F and G are merged for development only. None of these is done, and pr
 | Google Maps with the real key | NOT VERIFIED | The real key on the production domain. The key refuses every test address, so only the diagram fallback has been seen |
 | Attendance workflows by hand | NOT VERIFIED | A person walking through the critical rows in the table below |
 
+## Phase H decisions waiting
+
+See [PHASE-H-QA.md](PHASE-H-QA.md). D1 (a lost token refresh on a poor network signs the worker out and stops tracking) is HIGH and needs a decision before production. The MEDIUM and LOW items listed there are open.
+
 ## Known gaps in the interface
 
 Open after Phase G. Neither hides or alters a record, but both can mislead a supervisor.
