@@ -110,3 +110,27 @@ API, 25 calls each, sample data of 42 employees:
 - Mobile findings come from reading the code. Nothing ran on a phone.
 - Real Google Maps could not be viewed: the key refuses this test address.
 - The sample company is small (42 employees). Load at larger sizes is not measured here.
+
+## Outcome
+
+| Finding | Result |
+|---|---|
+| F1 caption presses a control | Fixed in `Field`, for all uses |
+| F2 multi-value settings | Fixed with `ListInput` |
+| F3 reports overclaim filters | Each section now states its scope. The exports themselves were not widened |
+| F4 map legend | Fixed: one definition of the groups in `markers.ts` |
+| F5 refused Maps key | Fixed: falls back to the diagram |
+| F6 failures shown as data | Fixed on the overview, map, roster, overtime and settings. Payroll is hidden, so it was left |
+| F7 silent list limits | Absences page through everything. Overtime, leave, tasks and announcements say when a limit is reached. **Open:** reviews and approvals |
+| F8 overtime bulk approve | Fixed: only rows on screen, after a confirmation |
+| F9 thumbnail audit noise | Fixed |
+| F10 overview tiles | Fixed: tiles open the matching filter and count what it lists |
+| F11 supervisors on owner pages | Fixed: "Not available" |
+| M1 pending looks confirmed | Fixed in the app. Not run on a phone |
+| M2 offline cold start | **Partly:** SOS is reachable. Continue and End shift stay unreachable on purpose; see below |
+| M3 stale Home | Fixed. Not run on a phone |
+| M4 unreachable screens | Fixed for announcements and tasks. Earnings stays hidden while payroll is off |
+
+**M2 needs a decision.** Opening `/shift` with no cached assignment makes the end-of-shift selfie rule read nothing, so the selfie would be skipped. Fixing it properly means persisting the assignment, which changes the inputs to the verification rules, so it was left for a decision rather than changed in a UI phase.
+
+**One calculation changed.** A workplace's attendance rate counted today's shifts that had not started as missed, which disagreed with the headline rate and with the definition at the top of `analytics.routes.ts`. It now uses the same rule. Closed days are unaffected: figures for past days are identical between the original and final code.
