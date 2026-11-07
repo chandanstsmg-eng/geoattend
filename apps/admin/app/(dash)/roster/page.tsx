@@ -121,6 +121,7 @@ export default function RosterPage() {
     queryKey: ['roster', week, workplaceId, managerId],
     queryFn: () => get<any[]>(`/roster${qs({ from: week, to: isoOf(dayNum(week) + 6), workplaceId, managerId })}`),
   });
+  const gridScroller = useKeyboardScroll<HTMLDivElement>();
   const employees = useQuery({ queryKey: ['employees', 'active'], queryFn: () => get<any[]>('/employees?status=active') });
   const managers = useQuery({ queryKey: ['roster', 'managers', ''], queryFn: () => get<any[]>('/roster/managers') });
   const staffing = useQuery({ queryKey: ['roster', 'staffing', week, workplaceId], queryFn: () => get<any>(`/roster/staffing${qs({ from: week, to: isoOf(dayNum(week) + 6), workplaceId })}`) });
@@ -211,7 +212,7 @@ export default function RosterPage() {
               </ul>
             </div>
             {/* `relative` keeps the absolutely positioned screen-reader text inside the scroll box (it otherwise widens the page). */}
-            <div className="relative hidden overflow-x-auto sm:block">
+            <div ref={gridScroller} className="relative hidden overflow-x-auto sm:block">
               <table className="w-full min-w-[920px] table-fixed text-left text-sm">
                 <thead>
                   <tr>

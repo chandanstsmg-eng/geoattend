@@ -128,7 +128,7 @@ const ACTIVITY_TONE: Record<string, string> = {
 
 export function ActivityFeed({ items, onEmployee, className }: { items: any[]; onEmployee: (id: string) => void; className?: string }) {
   return (
-    <Card title="Recent activity" padded={false} className={className} actions={<Link className="text-body-sm font-medium text-primary-600 hover:underline" href="/notifications">View all</Link>}>
+    <Card title="Recent activity" padded={false} className={className} actions={<Link className="inline-flex items-center py-1 text-body-sm font-medium text-primary-600 hover:underline" href="/notifications">View all</Link>}>
       {items.length === 0 ? (
         <EmptyState title="No activity yet" />
       ) : (

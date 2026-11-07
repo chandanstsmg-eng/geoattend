@@ -171,6 +171,11 @@ input[type='radio'] {
   main a[class*='flex'] {
     min-height: 2rem;
   }
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
 }
 
 .tabular {

@@ -380,9 +380,11 @@ export function Callout({ tone = 'info', children, action, className, icon = tru
 
 /** A box that scrolls sideways can be reached and scrolled with the keyboard, but only while it actually overflows. */
 export function useKeyboardScroll<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  useEffect(() => {
-    const el = ref.current;
+  const stop = useRef<(() => void) | null>(null);
+  // A callback ref, because the box can appear after the first render, once its data has loaded.
+  return useCallback((el: T | null) => {
+    stop.current?.();
+    stop.current = null;
     if (!el) return;
     const update = () => {
       if (el.scrollWidth > el.clientWidth + 1) {
@@ -398,9 +400,8 @@ export function useKeyboardScroll<T extends HTMLElement>() {
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
-    return () => ro.disconnect();
+    stop.current = () => ro.disconnect();
   }, []);
-  return ref;
 }
 
 /**
@@ -622,7 +623,7 @@ export function Tabs<T extends string>({ value, onChange, tabs, variant = 'under
           aria-selected={value === t.value}
           tabIndex={value === t.value ? 0 : -1}
           onClick={() => onChange(t.value)}
-          className={cx('-mb-px inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-0.5 pb-2.5 pt-1 text-sm font-medium transition-colors', value === t.value ? 'border-navy-800 text-navy-800' : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800')}
+          className={cx('-mb-px inline-flex min-w-6 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-b-2 px-0.5 pb-2.5 pt-1 text-sm font-medium transition-colors', value === t.value ? 'border-navy-800 text-navy-800' : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800')}
         >
           {t.label}
           {count(t, value === t.value)}

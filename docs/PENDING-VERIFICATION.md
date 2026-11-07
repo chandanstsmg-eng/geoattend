@@ -15,9 +15,9 @@ Phases E and F are merged for development only. None of these is done, and produ
 | Physical Android devices | NOT VERIFIED | Real phones, following [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md) |
 | Real production browser testing | NOT VERIFIED | The browser checks below, on the production domain, including Firefox and Safari |
 
-## Browser checks (QA stage: Phase G)
+## Browser checks (Phase G)
 
-Not done. These passed builds and API tests only.
+Phase G opened every page in headless Chrome on Windows, as owner and supervisor, at phone, tablet and desktop widths, with sample data. That covers layout, keyboard use, accessibility and whether figures match the API. **The attendance workflows in the table below were not walked through by a person**, so they stay open:
 
 | Area | Check | Critical |
 |---|---|---|
@@ -36,6 +36,8 @@ Not done. These passed builds and API tests only.
 | Offline setting | "Accept offline check-ins for (hours)" saves and takes effect | No |
 | Google Maps | Real map on the production domain | No |
 
+- Real Google Maps: the key refuses every address tested so far, so markers, geofence circles and workplace labels on a real map are not checked. Only the diagram fallback is.
+- The phone screens changed in Phase G (Home, status card, success screen, History) were checked by typecheck and unit tests only. Nothing has run on a phone or emulator.
 - The operations page (`/operations`): checked in headless Chrome 156 on Windows against development data only. Firefox, Safari and a production domain are not checked.
 - The three new summary options in Settings: seen, and off by default, in the same browser. Turning one on and a summary reaching someone are not checked.
 
