@@ -321,7 +321,7 @@ export default function ReportsPage() {
           <Card title="Daily attendance by workplace" className="lg:col-span-2" padded={false}>
             <QueryState query={summary} isEmpty={(rows) => rows.length === 0} empty={<EmptyState title="No attendance in this range" />}>
               {(rows) => (
-                <div className="max-h-96 overflow-y-auto">
+                <div className="max-h-96 overflow-y-auto" tabIndex={0} role="region" aria-label="Table, scrolls">
                   <Table>
                     <thead><tr><Th>Date</Th><Th>Workplace</Th><Th className="text-right">Attended</Th><Th className="text-right">Late</Th><Th className="text-right">Manual</Th></tr></thead>
                     <tbody>

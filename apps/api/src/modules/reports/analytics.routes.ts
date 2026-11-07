@@ -6,6 +6,7 @@
  * together (KPIs, charts and tables answer the same question). Definitions:
  *
  *   totalWorkers       active workers whose home workplace is in scope
+ *   allWorkers         the same with deactivated workers included (history stays, so they still exist)
  *   checkedIn          open shift sessions with attendance recorded (checked in, not yet out)
  *   liveLocated        open sessions whose newest location is fresher than Settings › tracking ›
  *                      staleAfterSec — a stale position never counts as live
@@ -143,8 +144,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     P,
   );
   const workers = await one(
-    `SELECT count(*)::int AS n FROM users u LEFT JOIN workplace_assignments wa ON wa.employee_id = u.id AND wa.effective_to IS NULL
-     WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND u.is_active AND ($5 OR NOT u.is_demo) AND ($6::uuid IS NULL OR u.id = $6)
+    `SELECT count(*) FILTER (WHERE u.is_active)::int AS n, count(*)::int AS all_workers FROM users u LEFT JOIN workplace_assignments wa ON wa.employee_id = u.id AND wa.effective_to IS NULL
+     WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND ($5 OR NOT u.is_demo) AND ($6::uuid IS NULL OR u.id = $6)
        AND (($2::uuid[] IS NULL AND $3::uuid IS NULL AND $4::uuid IS NULL) OR (wa.workplace_id IS NOT NULL AND ${inScope('wa.workplace_id')}))`,
     [...P, emp],
   );
@@ -382,6 +383,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     policy: { roundingMinutes: settings.workforce.roundingMinutes, weeklyRegularHours: settings.workforce.weeklyRegularHours },
     kpis: {
       totalWorkers: workers.n,
+      allWorkers: workers.all_workers,
       checkedIn: checkedIn.length,
       liveLocated: located.length,
       notCheckedIn: new Set(waitingToday.map((r) => r.employee_id)).size,

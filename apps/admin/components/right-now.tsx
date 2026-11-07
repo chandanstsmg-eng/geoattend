@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { qs } from '@/lib/api';
 import { LinkButton, cx, ErrorState } from './ui';
 import type { RosterRow } from './attendance-board';
 
@@ -21,7 +22,8 @@ function running(r: RosterRow, now: number) {
 
 function stateOf(s: any): 'onSite' | 'outside' | 'silent' {
   if (s.state === 'TRACKING_INTERRUPTED' || s.state === 'TRACKING_PERMISSION_REQUIRED' || s.is_stale || !s.last_location_at) return 'silent';
-  if (s.state === 'ON_OVERTIME' || s.state === 'ON_BREAK' || s.last_classification === 'INSIDE') return 'onSite';
+  // Overtime may be worked off-site, so it counts by where the phone is, like everyone else.
+  if (s.state === 'ON_BREAK' || s.last_classification === 'INSIDE') return 'onSite';
   return 'outside';
 }
 
@@ -40,7 +42,8 @@ function Cell({ label, value, hint, tone, href, onClick }: { label: string; valu
   return href ? <Link href={href} className={cls}>{inner}</Link> : <button type="button" onClick={onClick} className={cls}>{inner}</button>;
 }
 
-export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotArrived, mapHref }: { sessions: any[]; rows: RosterRow[]; now: number; loading: boolean; error: unknown; onRetry: () => void; onNotArrived: () => void; mapHref: string }) {
+export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotArrived, workplaceId }: { sessions: any[]; rows: RosterRow[]; now: number; loading: boolean; error: unknown; onRetry: () => void; onNotArrived: () => void; workplaceId: string }) {
+  const mapHref = (status: string) => `/map${qs({ workplaceId, status })}`;
   if (error) return <section className="rounded-lg border border-gray-200 bg-white shadow-card"><ErrorState error={error} onRetry={onRetry} /></section>;
   if (loading) return <div aria-busy className="h-[132px] animate-pulse rounded-lg border border-gray-200 bg-white" />;
 
@@ -84,9 +87,9 @@ export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotAr
         </div>
       </div>
       <div className="grid grid-cols-2 gap-px border-t border-gray-200 bg-gray-200 sm:grid-cols-4 xl:border-l xl:border-t-0">
-        <Cell label="On site" value={n.onSite} hint="fresh location inside" tone="good" href={mapHref} />
-        <Cell label="Outside" value={n.outside} hint="away from the zone" tone="warn" href={mapHref} />
-        <Cell label="Phone silent" value={n.silent} hint="no fresh location" tone="muted" href={mapHref} />
+        <Cell label="On site" value={n.onSite} hint="inside the zone, or on a break" tone="good" href={mapHref('inside')} />
+        <Cell label="Outside" value={n.outside} hint="away from the zone" tone="warn" href={mapHref('outside')} />
+        <Cell label="Phone silent" value={n.silent} hint="no fresh location" tone="muted" href={mapHref('silent')} />
         <Cell label="Not arrived" value={notArrived} hint="shift started, no check-in" tone="bad" onClick={onNotArrived} />
       </div>
     </section>

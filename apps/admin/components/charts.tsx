@@ -426,6 +426,16 @@ function DeltaChip({ d }: { d: NonNullable<Delta> }) {
   );
 }
 
+/** A thin bar under a figure in a table. Decorative: the figure beside it carries the meaning. */
+export function Meter({ value, max = 1, tone = 'navy' }: { value: number; max?: number; tone?: 'navy' | 'warn' }) {
+  const share = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  return (
+    <span className="mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-gray-100" aria-hidden>
+      <span className={cx('block h-full rounded-full', tone === 'warn' ? 'bg-amber-500' : 'bg-navy-600')} style={{ width: `${share * 100}%` }} />
+    </span>
+  );
+}
+
 /** A tiny trend line beside a figure (decorative: the number and the change carry the meaning). */
 export function Sparkline({ values, className }: { values: number[]; className?: string }) {
   if (values.length < 2) return null;

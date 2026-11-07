@@ -302,6 +302,22 @@ describe('attendance totals, CSV exports and scope', () => {
     }
   });
 
+  it('counts deactivated employees in the total only, within the caller\'s scope', async () => {
+    const url = `/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`;
+    const before = (await owner.agent.get(url).expect(200)).body.kpis;
+    expect(before.allWorkers).toBe(before.totalWorkers);
+    await q(`UPDATE users SET is_active = false WHERE id = $1`, [empB1.id]);
+    try {
+      const o = (await owner.agent.get(url).expect(200)).body.kpis;
+      expect(o.totalWorkers).toBe(before.totalWorkers - 1);
+      expect(o.allWorkers).toBe(before.allWorkers);
+      const s = (await sup.agent.get(url).expect(200)).body.kpis;
+      expect(s.allWorkers).toBeLessThan(o.allWorkers); // the other site's people are not theirs to count
+    } finally {
+      await q(`UPDATE users SET is_active = true WHERE id = $1`, [empB1.id]);
+    }
+  });
+
   it('builds the dashboard from the same figures, scoped per role', async () => {
     const o = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`).expect(200)).body;
     const hours = (await owner.agent.get(`/api/v1/reports/hours?from=${d1}&to=${d3}`).expect(200)).body.rows;
