@@ -2,6 +2,19 @@
 
 Work that is built and passes automated tests, but has **not** been checked the way a person would use it. None of it may be reported as verified until it is signed off here. Critical attendance workflows must pass before production.
 
+## Open production blockers
+
+Phases E and F are merged for development only. None of these is done, and production must wait for all of them.
+
+| Blocker | Status | What it needs |
+|---|---|---|
+| Linux SIGTERM and graceful worker shutdown | BLOCKED | A Linux machine. Only Windows has been tested, and this one has no WSL or Docker. Steps: [RUNBOOK.md](RUNBOOK.md), "Checks only a Linux server can pass" |
+| Off-machine backups | BLOCKED | Storage away from this computer, on a schedule. Every backup is on one disk |
+| External monitoring and alert delivery | BLOCKED | An outside monitor, a real alert webhook or mailbox, and someone on call. An alert has only reached a local test process |
+| Real SMTP, push and WhatsApp delivery | NOT VERIFIED | Real credentials and a real delivery to a person. No test against a local server or a simulated provider counts |
+| Physical Android devices | NOT VERIFIED | Real phones, following [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md) |
+| Real production browser testing | NOT VERIFIED | The browser checks below, on the production domain, including Firefox and Safari |
+
 ## Browser checks (QA stage: Phase G)
 
 Not done. These passed builds and API tests only.
@@ -23,8 +36,8 @@ Not done. These passed builds and API tests only.
 | Offline setting | "Accept offline check-ins for (hours)" saves and takes effect | No |
 | Google Maps | Real map on the production domain | No |
 
-- The operations page (`/operations`): sign-in with the token, each tab, each filter. Only its API is tested; nobody has opened the page.
-- The three new summary options in Settings.
+- The operations page (`/operations`): checked in headless Chrome 156 on Windows against development data only. Firefox, Safari and a production domain are not checked.
+- The three new summary options in Settings: seen, and off by default, in the same browser. Turning one on and a summary reaching someone are not checked.
 
 ## Phone checks (QA stage: before release)
 
