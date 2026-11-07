@@ -23,7 +23,7 @@ export function useNow(ms = 5000) {
 const geofenceText = (s: any) => {
   if (!s.last_classification || s.ended_at) return '—';
   if (s.is_stale) return `Unknown — last reading ${s.last_classification.toLowerCase()}`;
-  return s.last_classification === 'INSIDE' ? 'Inside the workspace area' : s.last_classification === 'OUTSIDE' ? 'Outside the workspace area' : 'Uncertain (GPS accuracy too low to decide)';
+  return s.last_classification === 'INSIDE' ? 'Inside the workplace area' : s.last_classification === 'OUTSIDE' ? 'Outside the workplace area' : 'Uncertain (GPS accuracy too low to decide)';
 };
 
 /**
@@ -192,7 +192,7 @@ export function PeopleList({ sessions, notIn = [], selected, onSelect, onOpenEmp
     <>
       {sessions.length + notIn.length > 5 && (
         <div className="border-b border-gray-200 px-3 py-2.5">
-          <SearchInput aria-label="Find a person on shift" placeholder="Find a person, workspace or shift" value={find} onChange={(e) => setFind(e.target.value)} />
+          <SearchInput aria-label="Find a person on shift" placeholder="Find a person, workplace or shift" value={find} onChange={(e) => setFind(e.target.value)} />
         </div>
       )}
       <ul className={cx('divide-y divide-gray-100 overflow-y-auto', className)}>

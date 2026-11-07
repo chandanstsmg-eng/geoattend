@@ -246,7 +246,7 @@ export function LineChart(props: XYProps) {
 }
 
 /**
- * Horizontal bars with the category name on the left — for ranked lists (workspaces, people).
+ * Horizontal bars with the category name on the left — for ranked lists (workplaces, people).
  * Each row is a button when `onSelect` is given.
  */
 export function HBarList({ data, label, series, format = plain, name, onSelect, max: maxRows = 10 }: { data: Row[]; label: string; series: SeriesDef[]; format?: (v: number) => string; name: (r: Row) => ReactNode; onSelect?: (r: Row) => void; max?: number }) {
@@ -481,7 +481,7 @@ export function Kpi({ label, value, unit, sub, tone, title, onClick, href, delta
       <span className="flex items-center gap-1 text-body-sm font-medium text-gray-600">
         {label}
         {info && (
-          <span title={info} className="inline-flex text-gray-400 hover:text-gray-600">
+          <span title={info} className="inline-flex text-gray-500 hover:text-gray-600">
             <Info className="h-3.5 w-3.5" aria-hidden />
             <span className="sr-only">{info}</span>
           </span>

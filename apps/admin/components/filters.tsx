@@ -69,10 +69,10 @@ export function DateRangeSelect({ value, onChange }: { value: DateRangeValue; on
   );
 }
 
-export function WorkplaceSelect({ value, onChange, allLabel = 'All workspaces' }: { value: string; onChange: (v: string) => void; allLabel?: string }) {
+export function WorkplaceSelect({ value, onChange, allLabel = 'All workplaces' }: { value: string; onChange: (v: string) => void; allLabel?: string }) {
   const wps = useWorkplaces();
   return (
-    <Select aria-label="Workspace" value={value} onChange={(e) => onChange(e.target.value)} className="w-auto min-w-44">
+    <Select aria-label="Workplace" value={value} onChange={(e) => onChange(e.target.value)} className="w-auto min-w-44">
       <option value="">{allLabel}</option>
       {wps.data?.map((w) => (
         <option key={w.id} value={w.id}>

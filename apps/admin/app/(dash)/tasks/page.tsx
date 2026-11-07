@@ -35,7 +35,7 @@ export default function TasksPage() {
                 {rows.map((t) => (
                   <tr key={t.id} className={rowLink} tabIndex={0} onClick={() => setOpen(t.id)} onKeyDown={rowKeys(() => setOpen(t.id))} aria-label={`${t.title}, open task`}>
                     <Td>
-                      <span className="font-medium text-gray-900">{t.title}</span> {t.requires_photo && <Camera className="inline h-3.5 w-3.5 text-gray-400" aria-label="Photo required" />}
+                      <span className="font-medium text-gray-900">{t.title}</span> {t.requires_photo && <Camera className="inline h-3.5 w-3.5 text-gray-500" aria-label="Photo required" />}
                       {t.details && <div className="line-clamp-1 text-xs text-gray-500">{t.details}</div>}
                     </Td>
                     <Td>{t.assignee_name} <span className="text-xs text-gray-500">{t.employee_code}</span></Td>

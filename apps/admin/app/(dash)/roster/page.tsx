@@ -38,7 +38,7 @@ function entriesOn(rows: any[], day: number) {
 }
 
 /**
- * The week at a glance. Coverage counts only workspaces with a daily target: each day contributes
+ * The week at a glance. Coverage counts only workplaces with a daily target: each day contributes
  * min(rostered, target) of its target. Overlapping entries are refused when saving, so there are
  * no conflicts to count here.
  */
@@ -53,23 +53,23 @@ function CoverageSummary({ roster, staffing, employees }: { roster?: any[]; staf
   return (
     <StatStrip label="Week summary" count={4} className="mb-4">
       <Kpi label="Scheduled employees" value={scheduled} sub={employees ? `of ${employees.length} active` : 'this week'} />
-      <Kpi label="Shift coverage" value={target ? Math.round((covered / target) * 100) : '—'} unit={target ? '%' : undefined} tone={target && covered < target ? 'warn' : undefined} sub={target ? `${covered} of ${target} required person-days` : 'set a daily target on a workspace'} title="Rostered people against each workspace's daily target, capped at the target" />
-      <Kpi label="Understaffed days" value={short} tone={short ? 'bad' : undefined} sub="workspace-days below target" />
+      <Kpi label="Shift coverage" value={target ? Math.round((covered / target) * 100) : '—'} unit={target ? '%' : undefined} tone={target && covered < target ? 'warn' : undefined} sub={target ? `${covered} of ${target} required person-days` : 'set a daily target on a workplace'} title="Rostered people against each workplace's daily target, capped at the target" />
+      <Kpi label="Understaffed days" value={short} tone={short ? 'bad' : undefined} sub="workplace-days below target" />
       <Kpi label="Not rostered" value={unassigned} tone={unassigned ? 'warn' : undefined} sub="active employees with no shift this week" />
     </StatStrip>
   );
 }
 
-/** Rostered people per workspace and day against the workspace's target (if it has one). */
+/** Rostered people per workplace and day against the workplace's target (if it has one). */
 function Staffing({ data, days, today }: { data: any; days: number[]; today: number }) {
   if (!data?.workplaces?.length) return null;
   return (
-    <Card padded={false} className="mb-4" title="Staffing" description="People rostered per workspace and day, against the workspace's daily target">
+    <Card padded={false} className="mb-4" title="Staffing" description="People rostered per workplace and day, against the workplace's daily target">
       <div className="relative overflow-x-auto">
         <table className="w-full min-w-[920px] table-fixed text-left text-sm">
           <thead>
             <tr>
-              <th scope="col" className="w-48 border-b border-gray-200 bg-gray-50/70 px-3 py-2 text-xs font-semibold text-gray-500">Workspace</th>
+              <th scope="col" className="w-48 border-b border-gray-200 bg-gray-50/70 px-3 py-2 text-xs font-semibold text-gray-500">Workplace</th>
               {days.map((d, i) => (
                 <th key={d} scope="col" className={cx('border-b border-l border-gray-200 bg-gray-50/70 px-2 py-2 text-center text-xs font-semibold', d === today ? 'text-navy-800' : 'text-gray-500')}>
                   {DAY_NAMES[i]} <span className="tabular">{new Date(d * DAY_MS).getUTCDate()}</span>
@@ -89,7 +89,7 @@ function Staffing({ data, days, today }: { data: any; days: number[]; today: num
                   const cell = w.days.find((x: any) => x.date === isoOf(d));
                   return (
                     <td key={d} className={cx('border-b border-l border-gray-100 px-2 py-2 text-center', cell?.shortage > 0 ? 'bg-red-50/60' : d === today && 'bg-navy-50/60')}>
-                      <span className={cx('tabular text-sm font-semibold', cell?.rostered ? 'text-navy-800' : 'text-gray-400')}>{cell?.rostered ?? 0}</span>
+                      <span className={cx('tabular text-sm font-semibold', cell?.rostered ? 'text-navy-800' : 'text-gray-500')}>{cell?.rostered ?? 0}</span>
                       {cell?.shortage > 0 && (
                         <Badge tone="red" className="ml-1.5" title={`${cell.shortage} below the target`}>−{cell.shortage}</Badge>
                       )}
@@ -145,7 +145,7 @@ export default function RosterPage() {
     <>
       <PageHeader
         title="Rosters"
-        description="Workers can start a shift only on rostered days, at the rostered workspace."
+        description="Workers can start a shift only on rostered days, at the rostered workplace."
         actions={
           <>
             <WorkplaceSelect value={workplaceId} onChange={setWorkplaceId} />
@@ -241,7 +241,7 @@ export default function RosterPage() {
                                   title={`${e.workplace_name} · ${e.shift_name} (${SHIFT_KIND[shiftKind(e.start_time, e.end_time)].label})${e.manager_name ? ` · assigned by ${e.manager_name}` : ''}`}
                                 >
                                   <span className="tabular block font-medium text-gray-900">{e.start_time.slice(0, 5)}–{e.end_time.slice(0, 5)}</span>
-                                  {/* The workspace is named only when it is not the worker's usual one. */}
+                                  {/* The workplace is named only when it is not the worker's usual one. */}
                                   {r.home && e.workplace_id && e.workplace_id !== r.home && <span className="block truncate text-gray-500">{e.workplace_name}</span>}
                                 </li>
                               ))}
@@ -249,7 +249,7 @@ export default function RosterPage() {
                             {(
                               <button
                                 onClick={() => setAdding({ employeeId: r.id, name: r.name, date: isoOf(d), home: r.home })}
-                                className={cx('mt-1 flex min-h-7 w-full items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:opacity-100', on.length ? '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100' : '')}
+                                className={cx('mt-1 flex min-h-7 w-full items-center justify-center rounded text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:opacity-100', on.length ? '[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100' : '')}
                                 aria-label={`Add roster entry for ${r.name} on ${isoOf(d)}`}
                               >
                                 <Plus className="h-3.5 w-3.5" aria-hidden />
@@ -267,7 +267,7 @@ export default function RosterPage() {
                       <span aria-hidden className={cx('h-3 w-1 rounded-sm border-l-4', k.bar)} /> {k.label}
                     </span>
                   ))}
-                  Hover an entry for its workspace and who assigned it.
+                  Hover an entry for its workplace and who assigned it.
                 </caption>
               </table>
             </div>
@@ -282,7 +282,7 @@ export default function RosterPage() {
             {staffing.data.unassigned.map((u: any) => (
               <li key={u.id}>
                 <button type="button" onClick={() => setDrawer(u.id)} className="rounded-md border border-gray-200 px-2.5 py-1 text-body-sm hover:bg-gray-50">
-                  {u.full_name} <span className="text-xs text-gray-500">{u.workplace_name ?? 'no workspace'}</span>
+                  {u.full_name} <span className="text-xs text-gray-500">{u.workplace_name ?? 'no workplace'}</span>
                 </button>
               </li>
             ))}

@@ -29,7 +29,7 @@ export function GettingStarted({ welcome }: { welcome?: boolean }) {
               href={s.href}
               className={cx('flex h-full gap-2 rounded-md border p-3 text-sm transition-colors hover:bg-gray-50', i === next ? 'border-primary-600 bg-primary-50/40 ring-1 ring-primary-600' : 'border-gray-200')}
             >
-              {s.done ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" aria-label="Done" /> : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-label="To do" />}
+              {s.done ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" aria-label="Done" /> : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-gray-500" aria-label="To do" />}
               <span>
                 <span className={cx('block font-medium', s.done ? 'text-gray-500 line-through' : 'text-gray-900')}>{i + 1}. {s.label}</span>
                 <span className="mt-0.5 block text-xs text-gray-500">{s.hint}</span>

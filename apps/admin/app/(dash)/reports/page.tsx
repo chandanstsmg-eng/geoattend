@@ -85,7 +85,7 @@ function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string
 
 /**
  * Days and hours per employee: the default export (three columns) and the separate overtime
- * export, for the page's filters. Supervisors get their own workspaces only — the API applies the scope.
+ * export, for the page's filters. Supervisors get their own workplaces only — the API applies the scope.
  */
 const linkBtn = (primary: boolean, disabled: boolean) =>
   cx(
@@ -121,7 +121,7 @@ function HoursSummary({ params }: { params: Filters }) {
         </>
       }
     >
-      <QueryState query={q} isEmpty={() => none} empty={<EmptyState title="No attendance in this period">Choose another date range, workspace or employee.</EmptyState>}>
+      <QueryState query={q} isEmpty={() => none} empty={<EmptyState title="No attendance in this period">Choose another date range, workplace or employee.</EmptyState>}>
         {() => (
           <>
             <Table>
@@ -261,8 +261,8 @@ function Analytics({ params }: { params: Filters }) {
         <ChartCard title="Hours worked by employee" subtitle="Regular and overtime hours (overtime is part of the total, never added twice)" series={HOURS_SERIES} empty={!d.hoursByEmployee.length} table={<DataTable data={d.hoursByEmployee.map((e: any) => ({ ...e, regular: hrsNum(e.totalMinutes - e.overtimeMinutes), overtime: hrsNum(e.overtimeMinutes), days: e.days }))} x="name" series={[...HOURS_SERIES, { key: 'days', label: 'Days', color: '' }]} />}>
           <HBarList data={d.hoursByEmployee.map((e: any) => ({ ...e, regular: hrsNum(e.totalMinutes - e.overtimeMinutes), overtime: hrsNum(e.overtimeMinutes) }))} label="Regular and overtime hours by employee" series={HOURS_SERIES} format={(v) => `${v} h`} name={(r) => r.name} max={10} />
         </ChartCard>
-        <ChartCard title="Workspace comparison" subtitle="Attendance rate and hours per workspace" series={WS_SERIES} empty={!ws.length} table={<DataTable data={ws} x="name" series={[{ key: 'rate', label: 'Rate %', color: '' }, { key: 'present', label: 'Attended', color: '' }, { key: 'expected', label: 'Rostered', color: '' }, { key: 'late', label: 'Late', color: '' }, { key: 'hours', label: 'Hours', color: '' }]} />}>
-          <HBarList data={ws} label="Attendance rate by workspace" series={WS_SERIES} format={(v) => `${v}%`} name={(r) => <span>{r.name} <span className="text-xs text-gray-500">· {r.hours} h · {r.late} late</span></span>} max={10} />
+        <ChartCard title="Workplace comparison" subtitle="Attendance rate and hours per workplace" series={WS_SERIES} empty={!ws.length} table={<DataTable data={ws} x="name" series={[{ key: 'rate', label: 'Rate %', color: '' }, { key: 'present', label: 'Attended', color: '' }, { key: 'expected', label: 'Rostered', color: '' }, { key: 'late', label: 'Late', color: '' }, { key: 'hours', label: 'Hours', color: '' }]} />}>
+          <HBarList data={ws} label="Attendance rate by workplace" series={WS_SERIES} format={(v) => `${v}%`} name={(r) => <span>{r.name} <span className="text-xs text-gray-500">· {r.hours} h · {r.late} late</span></span>} max={10} />
         </ChartCard>
       </div>
     </>
@@ -318,12 +318,12 @@ export default function ReportsPage() {
               <a className={linkBtn(false, !day)} href={`/api/v1/reports/shift.csv${qs({ date: day, workplaceId: f.workplaceId, includeSimulated: exportQs.includeSimulated })}`}><Download className="h-4 w-4" aria-hidden /> Shift roster (CSV)</a>
             </div>
           </Card>
-          <Card title="Daily attendance by workspace" className="lg:col-span-2" padded={false}>
+          <Card title="Daily attendance by workplace" className="lg:col-span-2" padded={false}>
             <QueryState query={summary} isEmpty={(rows) => rows.length === 0} empty={<EmptyState title="No attendance in this range" />}>
               {(rows) => (
                 <div className="max-h-96 overflow-y-auto">
                   <Table>
-                    <thead><tr><Th>Date</Th><Th>Workspace</Th><Th className="text-right">Attended</Th><Th className="text-right">Late</Th><Th className="text-right">Manual</Th></tr></thead>
+                    <thead><tr><Th>Date</Th><Th>Workplace</Th><Th className="text-right">Attended</Th><Th className="text-right">Late</Th><Th className="text-right">Manual</Th></tr></thead>
                     <tbody>
                       {rows.map((r) => (
                         <tr key={`${r.shift_date}-${r.workplace_name}`}>

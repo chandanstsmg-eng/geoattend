@@ -4,17 +4,23 @@ import { useQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { get, qs } from '@/lib/api';
 import { daysAgoISO, fmtDateTime, fmtTime, minutes, todayISO } from '@/lib/format';
-import { rowKeys, LinkButton, Badge, Button, Card, EmptyState, Input, PageHeader, QueryState, rowLink, Select, SimBadge, Table, Td, Th, Toolbar } from '@/components/ui';
+import { rowKeys, LinkButton, Badge, Card, EmptyState, Input, PageHeader, Pagination, QueryState, rowLink, Select, SimBadge, Table, Td, Th, Toolbar } from '@/components/ui';
 import { EmployeeSelect, WorkplaceSelect } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 import { useMe } from '@/lib/me';
+
+const PAGE = 50;
 
 export default function AbsencesPage() {
   const [f, setF] = useState({ from: daysAgoISO(7), to: todayISO(), workplaceId: '', employeeId: '', status: '', prolongedOnly: '' });
   const [emp, setEmp] = useState<string | null>(null);
   const { isOwner } = useMe();
-  const list = useQuery({ queryKey: ['absences', f], queryFn: () => get(`/absence-intervals${qs({ ...f, limit: 200 })}`), refetchInterval: 60_000 });
-  const set = (k: keyof typeof f) => (v: string) => setF({ ...f, [k]: v });
+  const [offset, setOffset] = useState(0);
+  const list = useQuery({ queryKey: ['absences', f, offset], queryFn: () => get(`/absence-intervals${qs({ ...f, limit: PAGE, offset })}`), refetchInterval: 60_000, placeholderData: (p) => p });
+  const set = (k: keyof typeof f) => (v: string) => {
+    setF({ ...f, [k]: v });
+    setOffset(0);
+  };
 
   return (
     <>
@@ -45,6 +51,7 @@ export default function AbsencesPage() {
         </Toolbar>
         <QueryState query={list} isEmpty={(d: any) => d.items.length === 0} empty={<EmptyState title="No absences in this range" />}>
           {(d: any) => (
+            <>
             <Table>
               <thead><tr><Th>Employee</Th><Th>Departed</Th><Th>Returned / closed</Th><Th>Duration</Th><Th>Status</Th><Th>Last known position</Th></tr></thead>
               <tbody>
@@ -60,11 +67,13 @@ export default function AbsencesPage() {
                       {a.tracking_gap && <Badge tone="orange" title="Location updates stopped during this absence">tracking gap</Badge>}
                       {a.is_simulated && <SimBadge />}
                     </div></Td>
-                    <Td className="tabular text-xs">{a.last_known_latitude != null ? `${a.last_known_latitude.toFixed(5)}, ${a.last_known_longitude.toFixed(5)} @ ${fmtTime(a.last_known_at)}` : '—'}</Td>
+                    <Td className="text-xs">{a.last_known_latitude != null ? <a className="font-medium text-primary-600 hover:underline" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} href={`https://www.google.com/maps/search/?api=1&query=${a.last_known_latitude},${a.last_known_longitude}`}>Open on map</a> : '—'}{a.last_known_at && <span className="tabular block text-gray-500">last known {fmtTime(a.last_known_at)}</span>}</Td>
                   </tr>
                 ))}
               </tbody>
             </Table>
+            <Pagination offset={offset} limit={PAGE} total={d.total ?? d.items.length} onChange={setOffset} noun="absence" />
+            </>
           )}
         </QueryState>
       </Card>

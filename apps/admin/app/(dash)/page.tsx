@@ -42,15 +42,15 @@ type Issue = { key: string; title: string; reason: string; icon: typeof Clock; s
 
 /**
  * Prioritised operational alerts: each group states why it is raised, its severity, who or which
- * workspace it affects (with a time when known) and the next step. Only issues the server reports.
+ * workplace it affects (with a time when known) and the next step. Only issues the server reports.
  */
 function AttentionPanel({ a, d, onEmployee, className }: { a: any; d: any; onEmployee: (id: string) => void; className?: string }) {
   const short = (d.byWorkspace as any[]).filter((w) => w.status === 'SHORT');
   const issues = ([
     { key: 'noshow', title: 'No-show', reason: 'Shift started, no check-in and no leave', icon: UserX, severity: 'high', count: a.noShowToday.length, items: a.noShowToday.map((x: any) => ({ id: x.employeeId, text: x.name, sub: `${x.workplace} · shift ${x.start ?? ''}` })), action: { label: 'Review attendance', href: '/attendance' } },
-    { key: 'short', title: 'Coverage below requirement', reason: 'Fewer people rostered today than the workspace target', icon: UsersRound, severity: 'high', count: short.length, items: short.map((w) => ({ text: w.name, sub: `short by ${w.shortage}` })), action: { label: 'Open roster', href: '/roster' } },
+    { key: 'short', title: 'Coverage below requirement', reason: 'Fewer people rostered today than the workplace target', icon: UsersRound, severity: 'high', count: short.length, items: short.map((w) => ({ text: w.name, sub: `short by ${w.shortage}` })), action: { label: 'Open roster', href: '/roster' } },
     { key: 'location', title: 'Location unavailable', reason: 'Checked in, but the phone stopped sending location', icon: MapPinOff, severity: 'high', count: a.locationErrors.length, items: a.locationErrors.map((x: any) => ({ id: x.employeeId, text: x.name, sub: x.state === 'TRACKING_PERMISSION_REQUIRED' ? 'permission needed' : 'updates stopped', at: x.since })), action: { label: 'Open live map', href: '/map' } },
-    { key: 'outside', title: 'Outside the geofence', reason: 'Fresh location clearly outside the workspace area', icon: MapPinOff, severity: 'medium', count: d.kpis.outsideGeofence, items: [], action: { label: 'Open live map', href: '/map' } },
+    { key: 'outside', title: 'Outside the geofence', reason: 'Fresh location clearly outside the workplace area', icon: MapPinOff, severity: 'medium', count: d.kpis.outsideGeofence, items: [], action: { label: 'Open live map', href: '/map' } },
     { key: 'late', title: 'Late arrival', reason: 'Checked in after the start time plus grace', icon: AlarmClock, severity: 'medium', count: a.lateToday.length, items: a.lateToday.map((x: any) => ({ id: x.employeeId, text: x.name, sub: `${minutes(x.minutes)} late`, at: x.at })), action: { label: 'View records', href: '/attendance?late=true' } },
     { key: 'checkout', title: 'Missing check-out', reason: 'Shift closed by the system without a check-out', icon: CircleAlert, severity: 'medium', count: a.missingCheckout.length, items: a.missingCheckout.map((x: any) => ({ id: x.employeeId, text: x.name, sub: `${fmtDate(x.date)} · ${x.workplace}` })), action: { label: 'Review attendance', href: '/attendance' } },
     { key: 'review', title: 'Unverified attendance', reason: 'Manual review, dispute or technical-issue requests', icon: Inbox, severity: 'medium', count: a.pendingCorrections, items: [], action: { label: 'Open approvals', href: '/approvals' } },
@@ -171,7 +171,7 @@ function WorkspaceModal({ w, onClose, onEmployee }: { w: any | null; onClose: ()
           )}
           <div className="flex justify-end gap-2">
             <LinkButton href={`/map?workplaceId=${w.id}`} size="sm">Live map</LinkButton>
-            {isOwner && <LinkButton href={`/workplaces/${w.id}`} size="sm">Workspace settings</LinkButton>}
+            {isOwner && <LinkButton href={`/workplaces/${w.id}`} size="sm">Workplace settings</LinkButton>}
           </div>
         </div>
       )}
@@ -344,7 +344,7 @@ export default function OverviewPage() {
                 triggerClassName="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-white px-3.5 text-sm font-medium text-gray-800 shadow-xs hover:border-gray-400 hover:bg-gray-50 sm:h-9.5"
                 trigger={<><Download className="h-4 w-4" aria-hidden /> Export</>}
                 items={[
-                  { heading: `${fmtDate(range.from)} – ${fmtDate(range.to)}${workplaceId ? ' · selected workspace' : ''}` },
+                  { heading: `${fmtDate(range.from)} – ${fmtDate(range.to)}${workplaceId ? ' · selected workplace' : ''}` },
                   { label: 'Hours summary (CSV)', icon: <Download />, onSelect: () => download('hours.csv') },
                   { label: 'Overtime (CSV)', icon: <Download />, onSelect: () => download('overtime.csv') },
                   'separator',
@@ -385,16 +385,16 @@ export default function OverviewPage() {
                 </ChartCard>
               )}
 
-              {/* 5 · Location-wise staffing (supervisors; owners have the Workspaces page) */}
+              {/* 5 · Location-wise staffing (supervisors; owners have the Workplaces page) */}
               {!isOwner && (
               <Card title="Location-wise staffing" description="Today’s staffing and the period’s attendance and hours · click a row for hours by employee" padded={false} className="mt-4">
                 {d.byWorkspace.length === 0 ? (
-                  <EmptyState title="No active workspaces">Ask the owner to add one.</EmptyState>
+                  <EmptyState title="No active workplaces">Ask the owner to add one.</EmptyState>
                 ) : (
                   <Table minWidth={920}>
                     <thead>
                       <tr>
-                        <Th>Workspace</Th>
+                        <Th>Workplace</Th>
                         <Th className="text-right">Rostered today</Th>
                         <Th className="text-right">Checked in</Th>
                         <Th className="text-right">Absent today</Th>
@@ -410,10 +410,10 @@ export default function OverviewPage() {
                       {d.byWorkspace.map((w: any) => (
                         <tr key={w.id} tabIndex={0} className={rowLink} onClick={() => setWsDetail(w)} onKeyDown={rowKeys(() => setWsDetail(w))}>
                           <Td className="font-medium text-gray-900">{w.name}<span className="block text-xs font-normal text-gray-500">{w.homeWorkers} home worker{w.homeWorkers === 1 ? '' : 's'}</span></Td>
-                          <Td className="text-right tabular">{w.assignedToday}{w.minStaff != null && <span className="text-gray-400"> / {w.minStaff}</span>}</Td>
+                          <Td className="text-right tabular">{w.assignedToday}{w.minStaff != null && <span className="text-gray-500"> / {w.minStaff}</span>}</Td>
                           <Td className="text-right tabular">{w.presentNow}</Td>
                           <Td className={cx('text-right tabular', w.absentToday > 0 && 'font-semibold text-red-700')}>{w.absentToday}</Td>
-                          <Td className="text-right tabular">{pct(w.completionRate)}<span className="block text-xs text-gray-400">{w.present}/{w.expected}</span></Td>
+                          <Td className="text-right tabular">{pct(w.completionRate)}<span className="block text-xs text-gray-500">{w.present}/{w.expected}</span></Td>
                           <Td className="text-right tabular">{w.late || '—'}</Td>
                           <Td className="text-right tabular">{hrs(w.totalMinutes)}</Td>
                           <Td className="text-right tabular">{w.overtimeMinutes ? hrs(w.overtimeMinutes) : '—'}</Td>

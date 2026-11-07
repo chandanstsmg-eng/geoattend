@@ -195,7 +195,7 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
                         {r.verification_status !== 'VERIFIED' && <VerificationBadge status={r.verification_status} />}
                       </div>
                     ) : (
-                      <span className="text-gray-400" aria-label="Not recorded">—</span>
+                      <span className="text-gray-500" aria-label="Not recorded">—</span>
                     )}
                   </Td>
                   <Td>
@@ -217,7 +217,7 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
                         <span className="text-xs text-amber-800">pending, not counted</span>
                       </div>
                     ) : (
-                      <span className="text-gray-400" aria-label="None">—</span>
+                      <span className="text-gray-500" aria-label="None">—</span>
                     )}
                   </Td>
                   <Td className="row-actions w-12 text-right">

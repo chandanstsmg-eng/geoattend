@@ -27,7 +27,7 @@ function Composer({ initial, onDone }: { initial?: any; onDone: () => void }) {
       {!initial && (
         <Field label="Audience">
           <Select value={f.workplaceId} onChange={(e) => setF({ ...f, workplaceId: e.target.value })} required={!isOwner}>
-            {isOwner ? <option value="">Everyone in the company</option> : <option value="">Choose a workspace…</option>}
+            {isOwner ? <option value="">Everyone in the company</option> : <option value="">Choose a workplace…</option>}
             {wps.data?.filter((w: any) => w.is_active).map((w: any) => <option key={w.id} value={w.id}>Everyone at {w.name}</option>)}
           </Select>
         </Field>

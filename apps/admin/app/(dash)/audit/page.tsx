@@ -50,7 +50,7 @@ export default function AuditPage() {
                             </div>
                           </details>
                         )}
-                        {a.ip && <div className="text-caption text-gray-400">{a.ip}</div>}
+                        {a.ip && <div className="text-caption text-gray-500">{a.ip}</div>}
                       </Td>
                     </tr>
                   ))}

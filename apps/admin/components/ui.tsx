@@ -5,7 +5,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, ChevronLeft, ChevronRight, Inbox, Info, Loader2, Search, X } from 'lucide-react';
 import {
+  Children,
+  cloneElement,
   forwardRef,
+  isValidElement,
   useCallback,
   useEffect,
   useId,
@@ -17,6 +20,7 @@ import {
   type CSSProperties,
   type InputHTMLAttributes,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
   type ReactNode,
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
@@ -164,23 +168,50 @@ export function DemoTag() {
   );
 }
 
+/**
+ * A caption, a control and its hint or error. The caption is a real <label for> only when the first
+ * direct child is a form control. Anything else (a row of preset buttons, a list of checkboxes)
+ * becomes a named group, because wrapping those in <label> made a click on the caption press the
+ * first button inside: clicking "Permitted radius" changed the geofence.
+ */
 export function Field({ label, hint, children, error, required }: { label: string; hint?: ReactNode; children: ReactNode; error?: string; required?: boolean }) {
+  const id = useId();
+  const box = useRef<HTMLDivElement>(null);
+  const noteId = hint || error ? `${id}-note` : undefined;
+  const kids = Children.toArray(children);
+  const at = kids.findIndex((k) => isValidElement(k) && CONTROLS.has(k.type));
+  const control = kids[at] as ReactElement<{ id?: string; 'aria-describedby'?: string; 'aria-invalid'?: boolean }> | undefined;
+  const controlId = control?.props.id ?? `${id}-control`;
+  if (control) {
+    kids[at] = cloneElement(control, { id: controlId, 'aria-describedby': noteId, 'aria-invalid': error ? true : undefined });
+  }
+  // In a group, a control with no label of its own takes its name from the caption.
+  useEffect(() => {
+    if (control) return;
+    for (const c of box.current?.querySelectorAll<HTMLInputElement>('input, select, textarea') ?? []) {
+      if (!c.labels?.length && !c.getAttribute('aria-label')) c.setAttribute('aria-labelledby', `${id}-caption`);
+    }
+  });
+  const caption = (
+    <>
+      {label}
+      {required && <span className="ml-0.5 text-red-600" aria-hidden>*</span>}
+    </>
+  );
+  const captionCls = 'mb-1.5 block text-body-sm font-medium text-gray-700';
   return (
-    <label className="block">
-      <span className="mb-1.5 block text-body-sm font-medium text-gray-700">
-        {label}
-        {required && <span className="ml-0.5 text-red-600" aria-hidden>*</span>}
-      </span>
-      {children}
-      {hint && !error && <span className="mt-1 block text-xs text-gray-500">{hint}</span>}
-      {error && <span className="mt-1 block text-xs text-red-700">{error}</span>}
-    </label>
+    <div ref={box} className="block" role={control ? undefined : 'group'} aria-labelledby={control ? undefined : `${id}-caption`} aria-describedby={control ? undefined : noteId}>
+      {control ? <label htmlFor={controlId} className={captionCls}>{caption}</label> : <span id={`${id}-caption`} className={captionCls}>{caption}</span>}
+      {kids}
+      {hint && !error && <span id={noteId} className="mt-1 block text-xs text-gray-500">{hint}</span>}
+      {error && <span id={noteId} className="mt-1 block text-xs text-red-700">{error}</span>}
+    </div>
   );
 }
 
 // 16px text below `sm` stops iOS Safari from zooming the page when a field is focused.
 const inputCls =
-  'h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-base text-gray-900 shadow-xs transition-colors sm:h-9.5 sm:text-sm placeholder:text-gray-400 hover:border-gray-400 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
+  'h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-base text-gray-900 shadow-xs transition-colors sm:h-9.5 sm:text-sm placeholder:text-gray-500 hover:border-gray-400 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500';
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(({ className, ...rest }, ref) => <input ref={ref} className={withSize(inputCls, className)} {...rest} />);
 Input.displayName = 'Input';
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(({ className, children, ...rest }, ref) => (
@@ -193,12 +224,31 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   <textarea ref={ref} className={withSize(inputCls, cx('h-auto min-h-20 py-2', className))} {...rest} />
 ));
 Textarea.displayName = 'Textarea';
+/**
+ * Several values in one text box. The typed text is kept as it is while the box has focus, because
+ * rebuilding it from the parsed list on every keystroke removed the comma the moment it was typed.
+ */
+export function ListInput<T extends string | number>({ value, parse, onChange, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> & { value: T[]; parse: (raw: string) => T[]; onChange: (v: T[]) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <Input
+      {...rest}
+      value={text ?? value.join(', ')}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parse(e.target.value));
+      }}
+      onBlur={() => setText(null)}
+    />
+  );
+}
+const CONTROLS = new Set<unknown>([Input, Select, Textarea, ListInput, 'input', 'select', 'textarea']);
 
 /** Text input with a leading search icon. */
 export function SearchInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <div className={cx('relative w-full', className)}>
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" aria-hidden />
       <Input type="search" {...rest} className="pl-8" />
     </div>
   );
@@ -214,6 +264,34 @@ export function Spinner({ label = 'Loading…' }: { label?: string }) {
     <div className="flex items-center justify-center gap-2 py-12 text-sm text-gray-500" role="status">
       <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {label}
     </div>
+  );
+}
+
+/** A placeholder block for anything that is not a table: size it with classes. */
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cx('animate-pulse rounded bg-gray-100', className)} aria-hidden />;
+}
+
+/** The heading of a dashboard section: states what the section answers, with its controls on the right. */
+export function SectionHeading({ title, description, actions, className }: { title: string; description?: ReactNode; actions?: ReactNode; className?: string }) {
+  return (
+    <div className={cx('mb-3 mt-8 flex flex-wrap items-end justify-between gap-x-4 gap-y-2', className)}>
+      <div className="min-w-0">
+        <h2 className="text-base font-semibold text-navy-900">{title}</h2>
+        {description && <p className="text-body-sm text-gray-500">{description}</p>}
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/** Says so when a list stops short of everything that exists, so a cut list is never read as complete. */
+export function CutNotice({ shown, total, noun, children }: { shown: number; total?: number | null; noun: string; children?: ReactNode }) {
+  if (total == null || total <= shown) return null;
+  return (
+    <p role="note" className="border-t border-gray-100 px-4 py-2.5 text-body-sm text-gray-600">
+      Showing the first {shown} of {total} {noun}. {children ?? 'Narrow the filters to see the rest.'}
+    </p>
   );
 }
 
@@ -287,6 +365,31 @@ export function Callout({ tone = 'info', children, action, className, icon = tru
   );
 }
 
+/** A box that scrolls sideways can be reached and scrolled with the keyboard, but only while it actually overflows. */
+export function useKeyboardScroll<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      if (el.scrollWidth > el.clientWidth + 1) {
+        el.tabIndex = 0;
+        el.setAttribute('role', 'region');
+        el.setAttribute('aria-label', 'Table, scrolls sideways');
+      } else {
+        el.removeAttribute('tabindex');
+        el.removeAttribute('role');
+        el.removeAttribute('aria-label');
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return ref;
+}
+
 /**
  * On phones (< 640px) rows are shown as stacked cards (see `.rtable` in globals.css): each
  * body cell is labelled with its column header so the content stays readable without
@@ -294,6 +397,7 @@ export function Callout({ tone = 'info', children, action, className, icon = tru
  */
 export function Table({ children, className, stack = true, minWidth = 640 }: { children: ReactNode; className?: string; stack?: boolean; minWidth?: number }) {
   const ref = useRef<HTMLTableElement>(null);
+  const scroller = useKeyboardScroll<HTMLDivElement>();
   useEffect(() => {
     const table = ref.current;
     if (!table || !stack) return;
@@ -316,7 +420,7 @@ export function Table({ children, className, stack = true, minWidth = 640 }: { c
   }, [stack]);
   return (
     // `relative`: absolutely positioned content (sr-only text) stays inside the scroll box instead of widening the page.
-    <div className={cx('relative overflow-x-auto', className)}>
+    <div ref={scroller} className={cx('relative overflow-x-auto', className)}>
       {/* The minimum width goes through a variable, not an inline min-width, so the phone card layout (.rtable in globals.css) can drop it. */}
       <table ref={ref} className={cx('w-full min-w-[var(--table-min)] text-left text-sm', stack && 'rtable')} style={{ '--table-min': `${minWidth}px` } as CSSProperties}>
         {children}
@@ -352,7 +456,7 @@ export function SortTh<K extends string>({ children, k, sort, onSort, className 
     <th scope="col" aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'} data-label={typeof children === 'string' ? children : undefined} className={cx('h-10 whitespace-nowrap border-b border-gray-200 bg-gray-50 px-4 text-xs font-semibold text-gray-500', className)}>
       <button type="button" onClick={() => onSort({ key: k, dir: active && sort.dir === 'asc' ? 'desc' : 'asc' })} className={cx('-mx-1 inline-flex min-h-8 items-center gap-1 rounded px-1 hover:text-gray-900', active && 'text-gray-900')}>
         {children}
-        <Icon className={cx('h-3.5 w-3.5', active ? 'text-gray-700' : 'text-gray-400')} aria-hidden />
+        <Icon className={cx('h-3.5 w-3.5', active ? 'text-gray-700' : 'text-gray-500')} aria-hidden />
       </button>
     </th>
   );
@@ -642,7 +746,7 @@ export function Menu({ trigger, items, label, align = 'end', triggerClassName, w
             if ('heading' in it) return <div key={i} className="px-3 py-2 text-xs text-gray-500">{it.heading}</div>;
             const cls = cx(
               'flex w-full items-center gap-2.5 px-3 py-2 text-left outline-none focus-visible:bg-gray-100 [&_svg]:h-4 [&_svg]:w-4 [&_svg]:shrink-0',
-              it.disabled ? 'cursor-not-allowed text-gray-400' : it.danger ? 'text-red-700 hover:bg-red-50 focus-visible:bg-red-50' : 'text-gray-800 hover:bg-gray-100',
+              it.disabled ? 'cursor-not-allowed text-gray-500' : it.danger ? 'text-red-700 hover:bg-red-50 focus-visible:bg-red-50' : 'text-gray-800 hover:bg-gray-100',
             );
             const content = (
               <>

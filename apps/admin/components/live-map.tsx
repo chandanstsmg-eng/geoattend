@@ -70,10 +70,10 @@ function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[];
   const [fitted, setFitted] = useState(false);
   useEffect(() => {
     if (!map || fitted || !(located.length || workplaces.length)) return;
-    // Prefer fresh positions, then any last-known positions, then the workspaces themselves.
+    // Prefer fresh positions, then any last-known positions, then the workplaces themselves.
     const live = located.filter((s) => !s.is_stale && !s.ended_at);
     const people = live.length ? live : located;
-    // With nobody located, show the workspaces that have staff rather than every site in the company.
+    // With nobody located, show the workplaces that have staff rather than every site in the company.
     const staffed = workplaces.filter((w: any) => (w.homeWorkers ?? w.home_workers ?? 1) > 0);
     const sites = people.length ? workplaces.filter((w) => people.some((s) => s.workplace_id === w.id)) : staffed.length ? staffed : workplaces;
     fitTo(map, [...people.map((s) => ({ lat: s.last_latitude, lng: s.last_longitude })), ...sites.map((w) => ({ lat: w.latitude, lng: w.longitude }))]);
@@ -84,12 +84,12 @@ function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[];
     <>
       <MapControl position={ControlPosition.TOP_LEFT}>
         <div className="m-2.5 flex max-w-[calc(100vw-5rem)] flex-wrap items-start gap-1.5">
-          <button type="button" onClick={() => map && fitTo(map, all())} className={ctrlBtn} title="Fit all people and workspaces">
+          <button type="button" onClick={() => map && fitTo(map, all())} className={ctrlBtn} title="Fit all people and workplaces">
             <Maximize2 className="h-3.5 w-3.5" aria-hidden /> Fit all
           </button>
           {workplaces.length > 1 && (
             <Select
-              aria-label="Go to workspace"
+              aria-label="Go to workplace"
               value=""
               onChange={(e) => {
                 const w = workplaces.find((x) => x.id === e.target.value);
@@ -100,7 +100,7 @@ function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[];
               }}
               className="h-9 w-48 border-gray-200 bg-white text-body-sm shadow-sm"
             >
-              <option value="">Go to workspace…</option>
+              <option value="">Go to workplace…</option>
               {workplaces.map((w) => (
                 <option key={w.id} value={w.id}>{w.name}</option>
               ))}
@@ -230,7 +230,7 @@ export function MapLegend({ className }: { className?: string }) {
   return (
     <details open className={cx('group text-xs text-gray-600', className)}>
       <summary className="inline-flex cursor-pointer select-none items-center gap-1 rounded-full border border-gray-200 bg-white px-2.5 py-1 font-medium text-gray-700 hover:bg-gray-50">
-        Legend <span aria-hidden className="text-gray-400 group-open:rotate-180">▾</span>
+        Legend <span aria-hidden className="text-gray-500 group-open:rotate-180">▾</span>
       </summary>
       <ul className="mt-2 flex flex-wrap items-center gap-2" aria-label="Map legend">
         {LEGEND.map((l) => (
@@ -252,7 +252,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
   const first = workplaces[0];
   const center = first ? { lat: first.latitude, lng: first.longitude } : located[0] ? { lat: located[0].last_latitude, lng: located[0].last_longitude } : null;
   const [schematicWp, setSchematicWp] = useState<string>('');
-  if (!center) return <div className={cx('flex items-center justify-center bg-gray-50 text-sm text-gray-500', className)}>No active workspace to show</div>;
+  if (!center) return <div className={cx('flex items-center justify-center bg-gray-50 text-sm text-gray-500', className)}>No active workplace to show</div>;
 
   if (!mapsConfigured) {
     const w = workplaces.find((x) => x.id === schematicWp) ?? first;
@@ -261,7 +261,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
       <div className="space-y-3 p-4">
         <MapSetupNotice compact />
         {workplaces.length > 1 && (
-          <Select aria-label="Workspace shown" value={w?.id ?? ''} onChange={(e) => setSchematicWp(e.target.value)} className="w-56">
+          <Select aria-label="Workplace shown" value={w?.id ?? ''} onChange={(e) => setSchematicWp(e.target.value)} className="w-56">
             {workplaces.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
           </Select>
         )}

@@ -13,7 +13,7 @@ export default function WorkplacesPage() {
   return (
     <>
       <PageHeader
-        title="Workspaces"
+        title="Workplaces"
         description="Attendance is accepted only after the server verifies the worker is inside the radius."
         actions={
           <LinkButton href="/workplaces/new" variant="primary">
@@ -26,7 +26,7 @@ export default function WorkplacesPage() {
           query={list}
           isEmpty={(d) => d.length === 0}
           empty={
-            <EmptyState title="No workspaces yet" icon={<Building2 aria-hidden />} action={<Link href="/workplaces/new" className="text-sm font-medium text-primary-700 hover:underline">Add your first workspace</Link>}>
+            <EmptyState title="No workplaces yet" icon={<Building2 aria-hidden />} action={<Link href="/workplaces/new" className="text-sm font-medium text-primary-700 hover:underline">Add your first workplace</Link>}>
               Create one to start assigning employees and shifts.
             </EmptyState>
           }
@@ -58,7 +58,7 @@ export default function WorkplacesPage() {
                     </Td>
                     <Td className="text-right tabular">{w.radius_m} m</Td>
                     <Td className="text-right tabular">{w.employee_count}</Td>
-                    <Td className="text-right tabular">{w.open_sessions || <span className="text-gray-400">0</span>}</Td>
+                    <Td className="text-right tabular">{w.open_sessions || <span className="text-gray-500">0</span>}</Td>
                     <Td className="tabular text-gray-600">after {w.absence_threshold_minutes} min</Td>
                     <Td className="text-gray-600">{w.timezone}</Td>
                     <Td>

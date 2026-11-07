@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { NOTIFICATION_LABELS, NOTIFICATION_TYPES } from '@geoattend/shared';
 import { api, get, post, put } from '@/lib/api';
-import { Badge, Button, Card, ConfirmButton, Field, InlineError, Input, PageHeader, QueryState, Select, Tabs, Textarea } from '@/components/ui';
+import { Badge, Button, Card, ConfirmButton, ErrorState, Field, InlineError, Input, ListInput, PageHeader, QueryState, Select, Skeleton, Tabs, Textarea } from '@/components/ui';
 import { mapsConfigured } from '@/components/maps/google';
 import { AlertTriangle, CheckCircle2, MinusCircle, ShieldAlert } from 'lucide-react';
 
@@ -60,10 +60,11 @@ function DigestPreview() {
   const qc = useQueryClient();
   const d = useQuery({ queryKey: ['digest'], queryFn: () => get('/digest') });
   const test = useMutation({ meta: { success: 'Test summary sent', toastError: true }, mutationFn: () => post('/digest/test'), onSuccess: () => qc.invalidateQueries({ queryKey: ['digest'] }) });
-  if (!d.data) return null;
+  if (d.error) return <div className="mb-4"><InlineError error={d.error} /></div>;
+  if (!d.data) return <Skeleton className="mb-4 h-16" />;
   return (
     <div className="mb-4 space-y-2">
-      <div className="rounded-lg bg-[#e7ffdb] p-3 text-sm text-gray-800 shadow-inner">
+      <div className="rounded-lg bg-teal-50 p-3 text-sm text-gray-800">
         <p className="font-semibold">{d.data.preview.company} — {d.data.preview.when}</p>
         <p>{d.data.preview.line}</p>
       </div>
@@ -103,6 +104,8 @@ function CompanyCard() {
   });
   return (
     <Card title="Company">
+      {org.error && !f && <ErrorState error={org.error} onRetry={() => org.refetch()} />}
+      {!f && !org.error && <Skeleton className="h-24" />}
       {f && (
         <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -273,10 +276,10 @@ export default function SettingsPage() {
                           </div>
                         </Field>
                         <Field label="WhatsApp numbers" hint="With country code, digits only — e.g. 919800000000. Separate with commas.">
-                          <Input value={v.whatsappNumbers.join(', ')} onChange={(e) => setV({ ...v, whatsappNumbers: list(e.target.value).map((x) => x.replace(/\D/g, '')) })} />
+                          <ListInput value={v.whatsappNumbers} parse={(s) => list(s).map((x) => x.replace(/\D/g, ''))} onChange={(whatsappNumbers) => setV({ ...v, whatsappNumbers })} />
                         </Field>
                         <Field label="E-mail recipients" hint="Separate with commas.">
-                          <Input value={v.emailRecipients.join(', ')} onChange={(e) => setV({ ...v, emailRecipients: list(e.target.value) })} />
+                          <ListInput value={v.emailRecipients} parse={list} onChange={(emailRecipients) => setV({ ...v, emailRecipients })} />
                         </Field>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.monthlyReport} onChange={(e) => setV({ ...v, monthlyReport: e.target.checked })} /> On the 1st, e-mail last month’s attendance (CSV)</label>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.weeklyReport} onChange={(e) => setV({ ...v, weeklyReport: e.target.checked })} /> On Mondays, e-mail last week’s attendance (CSV)</label>
@@ -321,7 +324,7 @@ export default function SettingsPage() {
                       </div>
                       <label className="flex items-center gap-2 text-sm text-gray-700">
                         <input type="checkbox" checked={v.supervisorAnnouncements} onChange={(e) => setV({ ...v, supervisorAnnouncements: e.target.checked })} />
-                        Supervisors may publish announcements to their own workspaces
+                        Supervisors may publish announcements to their own workplaces
                       </label>
                       <label className="flex items-center gap-2 text-sm text-gray-700">
                         <input type="checkbox" checked={v.keepMatchedPhotos} onChange={(e) => setV({ ...v, keepMatchedPhotos: e.target.checked })} />
@@ -411,7 +414,7 @@ export default function SettingsPage() {
                 <SectionForm section="geofence" value={d.settings.geofence}>
                   {(v, setV) => (
                     <div className="grid gap-3 sm:grid-cols-3">
-                      <Field label="Presets (m, comma separated)"><Input value={v.presetsM.join(', ')} onChange={(e) => setV({ ...v, presetsM: e.target.value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0) })} /></Field>
+                      <Field label="Presets (m, comma separated)"><ListInput value={v.presetsM} parse={(s) => s.split(',').map((x) => Number(x.trim())).filter((x) => x > 0)} onChange={(presetsM) => setV({ ...v, presetsM })} /></Field>
                       <Field label="Minimum (m)"><Input type="number" value={v.minRadiusM} onChange={(e) => setV({ ...v, minRadiusM: Number(e.target.value) })} /></Field>
                       <Field label="Maximum (m)"><Input type="number" value={v.maxRadiusM} onChange={(e) => setV({ ...v, maxRadiusM: Number(e.target.value) })} /></Field>
                     </div>

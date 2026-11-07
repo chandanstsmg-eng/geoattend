@@ -32,7 +32,7 @@ function Cell({ label, value, hint, tone, href, onClick }: { label: string; valu
         <span aria-hidden className={cx('h-2 w-2 rounded-full', tone === 'good' ? 'bg-teal-600' : tone === 'warn' ? 'bg-amber-500' : tone === 'bad' ? 'bg-red-600' : 'bg-gray-400')} />
         {label}
       </span>
-      <span className={cx('mt-0.5 block text-2xl font-semibold leading-8 tracking-tight tabular', value === 0 ? 'text-gray-400' : tone === 'bad' ? 'text-red-700' : tone === 'warn' ? 'text-amber-700' : 'text-navy-800')}>{value}</span>
+      <span className={cx('mt-0.5 block text-2xl font-semibold leading-8 tracking-tight tabular', value === 0 ? 'text-gray-500' : tone === 'bad' ? 'text-red-700' : tone === 'warn' ? 'text-amber-700' : 'text-navy-800')}>{value}</span>
       <span className="block text-xs text-gray-500">{hint}</span>
     </>
   );

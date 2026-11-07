@@ -165,7 +165,7 @@ export function GeofenceEditorMap({ value, radius, onChange, onRadiusChange, onA
       <AdvancedMarker
         position={value}
         draggable
-        title="Workspace centre — drag to adjust"
+        title="Workplace centre — drag to adjust"
         onDragEnd={(e) => {
           const ll = e.latLng;
           if (ll) set({ lat: ll.lat(), lng: ll.lng() });

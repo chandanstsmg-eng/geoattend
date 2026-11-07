@@ -7,9 +7,9 @@ import { Camera, Check, ClipboardList, MapPin, X } from 'lucide-react';
 import { get, post, qs } from '@/lib/api';
 import { hrsNum, shortDay, daysAgoISO, fmtClock, fmtDate, fmtDateTime, minutes, todayISO } from '@/lib/format';
 import { useMe } from '@/lib/me';
-import { rowKeys, LinkButton, Badge, Button, Callout, cx, DemoTag, Drawer, EmptyState, ErrorState, Field, InlineError, Input, KeyValue, PageHeader, QueryState, SearchInput, SimBadge, Table, Tabs, Td, Textarea, Th, rowLink } from '@/components/ui';
+import { rowKeys, LinkButton, Badge, Button, Callout, Card, ConfirmButton, cx, DemoTag, Drawer, EmptyState, ErrorState, Field, InlineError, Input, KeyValue, PageHeader, QueryState, SearchInput, SimBadge, Table, Tabs, Td, Textarea, Th, rowLink } from '@/components/ui';
 import { DateRangeSelect, defaultRange, WorkplaceSelect, type DateRangeValue } from '@/components/filters';
-import { ChartCard, Composition, DataTable, HBarList, LineChart, SERIES_COLORS } from '@/components/charts';
+import { ChartCard, Composition, DataTable, HBarList, Kpi, LineChart, SERIES_COLORS, StatStrip, StatStripSkeleton } from '@/components/charts';
 
 /**
  * Overtime: work after the scheduled end of a shift, started and ended by the employee in the
@@ -51,22 +51,12 @@ function StatusBadge({ o }: { o: any }) {
   );
 }
 
-function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode; tone?: 'amber' | 'violet' }) {
-  return (
-    <div className="px-4 py-3.5 sm:px-5">
-      <span className="block text-body-sm text-gray-500">{label}</span>
-      <span className={cx('mt-1 block text-2xl font-semibold leading-8 tabular', tone === 'amber' ? 'text-amber-700' : tone === 'violet' ? 'text-violet-700' : 'text-gray-900')}>{value}</span>
-      {sub && <span className="mt-0.5 block text-xs leading-snug text-gray-500">{sub}</span>}
-    </div>
-  );
-}
-
 const hours = (m: number) => (m ? minutes(m) : '0 min');
 const OT = [{ key: 'hours', label: 'Approved overtime (h)', color: SERIES_COLORS[1] }];
 
 /**
  * Overtime over a chosen period, from the same analytics engine as the reports: approved hours per
- * day, by employee and by workspace, and claims by decision. Only real entries are counted.
+ * day, by employee and by workplace, and claims by decision. Only real entries are counted.
  */
 function OvertimeAnalytics({ workplaceId }: { workplaceId: string }) {
   const [range, setRange] = useState<DateRangeValue>(() => defaultRange('30d'));
@@ -87,10 +77,9 @@ function OvertimeAnalytics({ workplaceId }: { workplaceId: string }) {
         <div className="h-64 animate-pulse rounded-lg border border-gray-200 bg-white" />
       ) : !decided && !d.summary.overtimeMinutes ? (
         // One empty state instead of three empty charts.
-        <div className="rounded-lg border border-dashed border-gray-300 bg-white px-6 py-10 text-center shadow-card">
-          <p className="font-medium text-navy-900">No overtime in {fmtDate(d.from)} – {fmtDate(d.to)}</p>
-          <p className="mt-1 text-sm text-gray-500">Charts appear here once employees claim overtime after a shift. Try a longer period or another workspace.</p>
-        </div>
+        <Card padded={false}>
+          <EmptyState title={`No overtime in ${fmtDate(d.from)} – ${fmtDate(d.to)}`}>Charts appear here once employees claim overtime after a shift. Try a longer period or another workplace.</EmptyState>
+        </Card>
       ) : (
         <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
           <ChartCard title="Approved overtime per day" subtitle={`${hrsNum(d.summary.overtimeMinutes)} h approved · ${fmtDate(d.from)} – ${fmtDate(d.to)}`} empty={!d.summary.overtimeMinutes} table={<DataTable data={d.hoursByDay.map((x: any) => ({ date: x.date, hours: hrsNum(x.overtime) }))} x="date" series={OT} xTitle={fmtDate} />}>
@@ -111,8 +100,8 @@ function OvertimeAnalytics({ workplaceId }: { workplaceId: string }) {
             <HBarList data={d.overtimeByEmployee.map((e: any) => ({ ...e, hours: hrsNum(e.overtimeMinutes) }))} label="Approved overtime by employee" series={OT} format={(v) => `${v} h`} name={(r) => (<span className="flex items-center gap-1.5">{r.name}{r.unusual && <Badge tone="amber" title="Overtime is over 25% of their hours, or far above the team's usual">review</Badge>}</span>)} max={8} />
           </ChartCard>
           {ws.length > 1 && (
-            <ChartCard title="Overtime by workspace" subtitle="Approved hours" className="lg:col-span-2 xl:col-span-3">
-              <HBarList data={ws} label="Approved overtime by workspace" series={OT} format={(v) => `${v} h`} name={(r) => r.name} max={10} />
+            <ChartCard title="Overtime by workplace" subtitle="Approved hours" className="lg:col-span-2 xl:col-span-3">
+              <HBarList data={ws} label="Approved overtime by workplace" series={OT} format={(v) => `${v} h`} name={(r) => r.name} max={10} />
             </ChartCard>
           )}
         </div>
@@ -129,6 +118,7 @@ export default function OvertimePage() {
   const [range, setRange] = useState({ from: daysAgoISO(30), to: todayISO() });
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const onlyWorkplace = (id: string) => (setWorkplaceId(id), setSelected(new Set()));
   const [open, setOpen] = useState<any | null>(null);
 
   useEffect(() => {
@@ -154,7 +144,8 @@ export default function OvertimePage() {
     qc.invalidateQueries({ queryKey: ['overview'] });
   };
   const bulk = useMutation({ meta: { success: 'Overtime decisions saved' },
-    mutationFn: () => post<{ approved: number; skipped: number }>('/overtime/decisions', { ids: [...selected] }),
+    // Only rows on screen: a row hidden by the search is never approved unseen.
+    mutationFn: () => post<{ approved: number; skipped: number }>('/overtime/decisions', { ids: pendingRows.filter((o) => selected.has(o.id)).map((o) => o.id) }),
     onSuccess: () => {
       setSelected(new Set());
       refresh();
@@ -164,6 +155,8 @@ export default function OvertimePage() {
   const s = summary.data;
   const pendingRows = tab === 'pending' ? rows : [];
   const allChecked = pendingRows.length > 0 && pendingRows.every((o) => selected.has(o.id));
+  const chosen = pendingRows.filter((o) => selected.has(o.id));
+  const chosenMinutes = chosen.reduce((n, o) => n + (o.claimed_minutes ?? 0), 0);
   const toggle = (id: string) => setSelected((cur) => {
     const n = new Set(cur);
     if (n.has(id)) n.delete(id);
@@ -185,17 +178,22 @@ export default function OvertimePage() {
         }
       />
 
-      <section aria-label="Overtime summary" className="grid grid-cols-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-card sm:grid-cols-3 lg:grid-cols-5 [&>*]:border-gray-200 max-lg:[&>*]:border-b max-sm:[&>*:nth-child(odd):not(:last-child)]:border-r max-sm:[&>*:last-child]:col-span-2 max-sm:[&>*:last-child]:border-b-0 sm:max-lg:[&>*:not(:nth-child(3n))]:border-r lg:[&>*:not(:last-child)]:border-r">
-        <Stat label="On overtime now" value={s?.running ?? '–'} sub="still working after their shift" tone={s?.running ? 'violet' : undefined} />
-        <Stat label={date && date !== todayISO() ? `Overtime on ${fmtDate(s?.date)}` : 'Overtime today'} value={s ? hours(s.claimed_minutes) : '–'} sub={s ? `${s.workers} ${s.workers === 1 ? 'person' : 'people'} · worked so far` : undefined} />
-        <Stat label="Approved for the day" value={s ? hours(s.approved_minutes) : '–'} sub="counts toward pay" />
-        <Stat label="Waiting approval" value={s?.pending ?? '–'} sub={s?.pending ? `${minutes(s.pending_minutes)} in total` : 'nothing waiting'} tone={s?.pending ? 'amber' : undefined} />
-        <Stat label="Approved this month" value={s ? hours(s.month_approved_minutes) : '–'} sub={s?.month} />
-      </section>
+      {summary.error && !s ? (
+        <ErrorState error={summary.error} onRetry={() => summary.refetch()} />
+      ) : !s ? (
+        <StatStripSkeleton label="Overtime summary" count={5} />
+      ) : (
+        <StatStrip label="Overtime summary" count={5}>
+          <Kpi label="On overtime now" value={s.running} sub="still working after their shift" />
+          <Kpi label={date && date !== todayISO() ? `Overtime on ${fmtDate(s.date)}` : 'Overtime today'} value={hours(s.claimed_minutes)} sub={`${s.workers} ${s.workers === 1 ? 'person' : 'people'} · worked so far`} />
+          <Kpi label="Approved for the day" value={hours(s.approved_minutes)} sub="counts toward pay" />
+          <Kpi label="Waiting approval" value={s.pending} sub={s.pending ? `${minutes(s.pending_minutes)} in total` : 'nothing waiting'} tone={s.pending ? 'warn' : undefined} />
+          <Kpi label="Approved this month" value={hours(s.month_approved_minutes)} sub={s.month} />
+        </StatStrip>
+      )}
 
       {s?.byWorkplace?.length > 1 && (
-        <section aria-label="Overtime by workplace" className="mt-6 rounded-lg border border-gray-200 bg-white shadow-card">
-          <h2 className="border-b border-gray-200 px-4 py-3 text-title font-semibold text-gray-900">By workplace · {fmtDate(s.date)}</h2>
+        <Card title={`By workplace · ${fmtDate(s.date)}`} padded={false} className="mt-6">
           <Table minWidth={560}>
             <thead>
               <tr>
@@ -209,7 +207,7 @@ export default function OvertimePage() {
             </thead>
             <tbody>
               {s.byWorkplace.map((w: any) => (
-                <tr key={w.workplace_id} className={rowLink} tabIndex={0} onClick={() => setWorkplaceId(w.workplace_id)} onKeyDown={rowKeys(() => setWorkplaceId(w.workplace_id))} aria-label={`${w.workplace_name}, show only this workplace`}>
+                <tr key={w.workplace_id} className={rowLink} tabIndex={0} onClick={() => onlyWorkplace(w.workplace_id)} onKeyDown={rowKeys(() => onlyWorkplace(w.workplace_id))} aria-label={`${w.workplace_name}, show only this workplace`}>
                   <Td className="font-medium text-gray-900">{w.workplace_name}</Td>
                   <Td className="tabular text-right">{w.workers}</Td>
                   <Td className="tabular text-right">{w.running || '—'}</Td>
@@ -220,7 +218,7 @@ export default function OvertimePage() {
               ))}
             </tbody>
           </Table>
-        </section>
+        </Card>
       )}
 
       <section aria-label="Overtime entries" className="mt-6 rounded-lg border border-gray-200 bg-white shadow-card">
@@ -247,15 +245,15 @@ export default function OvertimePage() {
                 <Input type="date" aria-label="To" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} className="w-auto" />
               </div>
             )}
-            <SearchInput aria-label="Search overtime" placeholder="Search name, ID or workplace" value={search} onChange={(e) => setSearch(e.target.value)} className="sm:w-56" />
+            <SearchInput aria-label="Search overtime" placeholder="Search name, ID or workplace" value={search} onChange={(e) => (setSearch(e.target.value), setSelected(new Set()))} className="sm:w-56" />
           </div>
         </div>
-        {tab === 'pending' && selected.size > 0 && (
+        {tab === 'pending' && chosen.length > 0 && (
           <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 bg-primary-50 px-4 py-2.5 text-sm">
-            <span className="font-medium text-gray-900">{selected.size} selected</span>
-            <Button size="sm" variant="primary" loading={bulk.isPending} onClick={() => bulk.mutate()}>
+            <span className="font-medium text-gray-900">{chosen.length} selected</span>
+            <ConfirmButton size="sm" variant="primary" loading={bulk.isPending} title={`Approve ${chosen.length} overtime ${chosen.length === 1 ? 'entry' : 'entries'}?`} description={`${minutes(chosenMinutes)} of worked time will count toward hours and pay.`} confirmLabel="Approve" onConfirm={() => bulk.mutate()}>
               <Check className="h-4 w-4" aria-hidden /> Approve all worked time
-            </Button>
+            </ConfirmButton>
             <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
             <InlineError error={bulk.error} />
           </div>
