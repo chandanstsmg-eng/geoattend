@@ -406,7 +406,9 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 (SELECT COALESCE(ROUND(SUM(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at))) / 60), 0)::int FROM absence_intervals a WHERE a.session_id = ar.session_id) AS away_minutes,
                 (SELECT count(*)::int FROM absence_intervals a WHERE a.session_id = ar.session_id AND a.prolonged_at IS NOT NULL) AS prolonged_absences,
                 s.ended_at AS shift_ended_at, ar.is_simulated, aw.worked_minutes, aw.scheduled_minutes, aw.ended_early_minutes,
-                aw.overtime_minutes, aw.overtime_claimed_minutes, aw.overtime_status, sh.timezone, ${pendingMinutes()} AS pending_minutes
+                aw.overtime_minutes, aw.overtime_claimed_minutes, aw.overtime_status, ${pendingMinutes()} AS pending_minutes,
+                -- local times in the shift's time zone of that day, not today's (a later edit must not rewrite history)
+                COALESCE((SELECT r.timezone FROM shift_revisions r WHERE r.shift_id = sh.id AND ar.shift_date <= r.valid_to AND (r.valid_from IS NULL OR ar.shift_date >= r.valid_from) ORDER BY r.valid_to LIMIT 1), sh.timezone) AS timezone
          FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN tracking_sessions s ON s.id = ar.session_id
          LEFT JOIN ${workJoin()}

@@ -556,10 +556,11 @@ function Reviews() {
 
 function ManualDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
+  const { isOwner } = useMe();
   const emps = useEmployees();
   const [f, setF] = useState({ employeeId: '', shiftId: '', shiftDate: todayISO(), recordedAt: localDateTime(), workedHours: '', reason: '' });
   const emp = emps.data?.find((e: any) => e.id === f.employeeId);
-  const create = useMutation({ meta: { success: 'Attendance added' },
+  const create = useMutation({ meta: { success: isOwner ? 'Attendance added' : 'Sent to the owner for approval' },
     mutationFn: () => {
       const { workedHours, ...rest } = f;
       return post('/attendance/manual', { ...rest, recordedAt: businessInstant(f.recordedAt), workedMinutes: workedHours ? Math.round(Number(workedHours) * 60) : undefined });
@@ -567,7 +568,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['attendance'] }); qc.invalidateQueries({ queryKey: ['overview'] }); onClose(); },
   });
   return (
-    <Modal open onOpenChange={(o) => !o && onClose()} title="Manual attendance" description="For cases without device evidence (e.g. a broken phone). Recorded as MANUAL_APPROVED with your name and reason in the audit log.">
+    <Modal open onOpenChange={(o) => !o && onClose()} title="Manual attendance" description={isOwner ? 'For cases without device evidence (e.g. a broken phone). Recorded as MANUAL_APPROVED with your name and reason in the audit log.' : 'For cases without device evidence (e.g. a broken phone). It waits for the owner’s approval and does not count until then. Your name and reason are kept in the audit log.'}>
       <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <div className="sm:col-span-2">
           <Field label="Employee">

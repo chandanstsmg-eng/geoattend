@@ -67,7 +67,8 @@ function dayOutcome(rows: any[], date: string, today: string): DayOutcome {
     scheduled: rows.length,
     // Today, a shift only counts once it has an outcome — one that has not started yet is not missed.
     expected: rows.filter((r) => !isPending(r) && !r.on_leave && !r.holiday && (date < today || r.attendance_id || r.no_show || r.ended_at)).length,
-    present: rows.filter(attended).length,
+    // Work on a holiday or a leave day is not part of the rate: those days are not expected either.
+    present: rows.filter((r) => attended(r) && !r.on_leave && !r.holiday).length,
     pending: rows.filter(isPending).length,
     late: rows.filter((r) => r.is_late).length,
     absent: rows.filter((r) => !r.attendance_id && !r.on_leave && !r.holiday && (date < today || r.no_show || r.ended_at)).length,
@@ -350,7 +351,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   // ── what needs attention, and recent activity ──
   const pendingCorrections = await one(
     `SELECT count(*)::int AS n FROM review_requests r JOIN users u ON u.id = r.employee_id
-     WHERE r.status = 'OPEN' AND r.kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') AND u.org_id = $1 AND ${inScope(employeeSite('u.id'))}`,
+     WHERE r.status = 'OPEN' AND (r.kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') OR (r.kind = 'ADMIN_CORRECTION' AND $2::uuid[] IS NULL))
+       AND u.org_id = $1 AND ${inScope(employeeSite('u.id'))}`, // supervisors' corrections wait for an owner, as in Approvals
     P.slice(0, 4),
   );
   const overtimePending = await one(

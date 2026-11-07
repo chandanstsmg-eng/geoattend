@@ -4,7 +4,7 @@
  * and picking coordinates only — attendance eligibility is decided on the
  * server with geodesic distance, never by what the map draws.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { APIProvider, AdvancedMarker, Map, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { MapPinOff } from 'lucide-react';
 
@@ -15,41 +15,63 @@ export const mapsConfigured = MAPS_KEY.length > 0;
 /**
  * Google calls gm_authFailure when it refuses the key (wrong address, billing, quota). Without this
  * the page kept a grey "Oops" box; with it the same fallback as an unconfigured key takes over.
+ * A map that throws while drawing (seen in Safari's engine after a refusal) falls back the same way.
  */
-let refused = false;
+let failure: null | 'refused' | 'error' = null;
 const listeners = new Set<() => void>();
-if (typeof window !== 'undefined') {
-  (window as unknown as { gm_authFailure?: () => void }).gm_authFailure = () => {
-    refused = true;
-    listeners.forEach((l) => l());
-  };
+function mapsFailed(kind: 'refused' | 'error') {
+  if (failure === 'refused') return;
+  failure = kind;
+  listeners.forEach((l) => l());
 }
+if (typeof window !== 'undefined') {
+  (window as unknown as { gm_authFailure?: () => void }).gm_authFailure = () => mapsFailed('refused');
+}
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+/** True once Google Maps refused the key or failed to draw: show the diagram instead. */
 export function useMapsRefused() {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => refused,
-    () => false,
-  );
+  return useSyncExternalStore(subscribe, () => failure !== null, () => false);
+}
+function useMapsFailure() {
+  return useSyncExternalStore(subscribe, () => failure, () => null);
+}
+
+/** Keeps a failing Google map from taking the page down: it reports the failure and shows `fallback` (nothing by default). */
+export class MapsBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch() {
+    mapsFailed('error');
+  }
+  render() {
+    return this.state.failed ? (this.props.fallback ?? null) : this.props.children;
+  }
 }
 
 export function MapsProvider({ children }: { children: ReactNode }) {
   if (!mapsConfigured) return <>{children}</>;
+  // If Google's loader itself throws, the page carries on without it: every map then shows its fallback.
   return (
-    <APIProvider apiKey={MAPS_KEY} libraries={['places', 'geocoding', 'marker']}>
-      {children}
-    </APIProvider>
+    <MapsBoundary fallback={children}>
+      <APIProvider apiKey={MAPS_KEY} libraries={['places', 'geocoding', 'marker']}>
+        {children}
+      </APIProvider>
+    </MapsBoundary>
   );
 }
 
 export function MapSetupNotice({ compact, refused: wasRefused }: { compact?: boolean; refused?: boolean }) {
+  const kind = useMapsFailure();
   if (wasRefused)
     return (
       <div role="note" className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <MapPinOff className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
-        <p className="min-w-0 font-medium">Google Maps refused this site’s key, so positions are shown on a diagram instead.</p>
+        <p className="min-w-0 font-medium">{kind === 'error' ? 'Google Maps could not be shown in this browser' : 'Google Maps refused this site’s key'}, so positions are shown on a diagram instead.</p>
       </div>
     );
   return (
@@ -183,6 +205,7 @@ export function GeofenceEditorMap({ value, radius, onChange, onRadiusChange, onA
   }, [map, value.lat, value.lng]);
 
   return (
+    <MapsBoundary>
     <Map
       className="h-[min(520px,60svh)] min-h-[300px] w-full overflow-hidden rounded-md"
       defaultCenter={value}
@@ -205,6 +228,7 @@ export function GeofenceEditorMap({ value, radius, onChange, onRadiusChange, onA
       </AdvancedMarker>
       <GeofenceCircle center={value} radius={radius} editable onRadiusChange={onRadiusChange} />
     </Map>
+    </MapsBoundary>
   );
 }
 

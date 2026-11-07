@@ -603,6 +603,9 @@ export async function verifyOfflineRecord(reviewer: AuthUser, attendanceId: stri
     const before = await one('SELECT * FROM attendance_records WHERE id = $1 FOR UPDATE', [attendanceId], db);
     if (!before) throw notFound('Attendance record');
     if (before.verification_status !== 'PENDING_VERIFICATION') throw conflict('NOT_PENDING', 'This record is not waiting for verification.');
+    if (before.risk_flags?.includes('SUPERVISOR_ENTERED') && reviewer.access !== 'OWNER') {
+      throw new HttpError(403, 'OWNER_ONLY', 'A record entered by a supervisor is approved or rejected by the company owner.');
+    }
     await assertPayrollMonthOpen(reviewer.orgId, before.shift_date, db);
     const after = await one(
       decision === 'APPROVE'
@@ -671,21 +674,38 @@ export async function createManualAttendance(admin: AuthUser, input: { employeeI
       db,
     );
     if (!shift) throw new HttpError(400, 'NOT_ASSIGNED', 'The employee was not assigned to this shift on that date.');
+    const today = (await one('SELECT (now() AT TIME ZONE $1)::date::text AS d', [shift.timezone], db)).d as string;
+    if (input.shiftDate > today) throw new HttpError(400, 'FUTURE_DATE', 'Attendance cannot be entered for a day that has not happened yet.');
+    if (new Date(input.recordedAt).getTime() > Date.now() + 5 * 60_000) throw new HttpError(400, 'FUTURE_TIME', 'The arrival time is in the future.');
+    const scheduled = shiftMinutes(shift.start_time, shift.end_time);
+    if (input.workedMinutes != null && input.workedMinutes > scheduled) {
+      throw new HttpError(400, 'TOO_MANY_MINUTES', `Worked time cannot be longer than the shift (${scheduled} min). Record extra time as overtime.`);
+    }
+    // A supervisor's entry is a correction: like other supervisor corrections it waits for the owner and does not count until then.
+    const byOwner = admin.access === 'OWNER';
     const wp = await one('SELECT * FROM workplaces WHERE id = $1', [shift.workplace_id], db);
     const emp = await one('SELECT is_demo FROM users WHERE id = $1', [input.employeeId], db);
     const start = await shiftStartOn(db, shift.id, input.shiftDate);
     const { isLate, lateBy } = lateness(new Date(input.recordedAt), start.at, start.grace);
     const rec = await one(
       `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags, is_simulated, is_late, late_by_minutes, manual_worked_minutes, approved_by, approved_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'MANUAL_APPROVED','{ADMIN_ENTERED}',$8,$9,$10,$11,$12,now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$13,$14,$8,$9,$10,$11,$12,CASE WHEN $12::uuid IS NULL THEN NULL ELSE now() END)
        ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING RETURNING *`,
-      [input.employeeId, wp.id, shift.id, input.shiftDate, input.recordedAt, `manual:${crypto.randomUUID()}`, wp.radius_m, emp?.is_demo ?? false, isLate, lateBy, input.workedMinutes ?? null, admin.id],
+      [input.employeeId, wp.id, shift.id, input.shiftDate, input.recordedAt, `manual:${crypto.randomUUID()}`, wp.radius_m, emp?.is_demo ?? false, isLate, lateBy, input.workedMinutes ?? null, byOwner ? admin.id : null,
+        byOwner ? 'MANUAL_APPROVED' : 'PENDING_VERIFICATION', byOwner ? ['ADMIN_ENTERED'] : ['ADMIN_ENTERED', 'SUPERVISOR_ENTERED']],
       db,
     );
     if (!rec) throw conflict('ALREADY_RECORDED', 'An attendance record already exists for this employee, shift and date.');
     await audit({ actor: admin, action: 'attendance.manual_create', resourceType: 'attendance_record', resourceId: rec.id, after: rec, reason: input.reason, req }, db);
     return rec;
   });
+}
+
+/** Scheduled length of a shift in minutes; an end at or before the start runs past midnight. */
+export function shiftMinutes(start: string, end: string) {
+  const m = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const d = m(end) - m(start);
+  return d > 0 ? d : d + 1440;
 }
 
 export async function expireStaleIntents(outbox: Outbox) {

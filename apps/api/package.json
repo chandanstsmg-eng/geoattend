@@ -13,6 +13,7 @@
     "set-logins": "tsx scripts/set-logins.ts",
     "db:stop": "tsx scripts/db-stop.ts",
     "jobs:status": "tsx scripts/jobs-status.ts",
+    "admin:reset-password": "tsx scripts/reset-admin-password.ts",
     "db:backup": "tsx scripts/backup.ts",
     "db:backup:online": "tsx scripts/backup-online.ts",
     "db:backup:verify": "tsx scripts/backup-verify.ts",

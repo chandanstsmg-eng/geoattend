@@ -127,8 +127,10 @@ function EditPerson({ person, onClose }: { person: any | null; onClose: () => vo
   };
   const save = useMutation({ meta: { success: 'Supervisor saved' }, mutationFn: () => patch(`/team/${person.id}`, cur), onSuccess: done });
   const status = useMutation({ meta: { success: 'Supervisor updated', toastError: true }, mutationFn: (isActive: boolean) => post(`/team/${person.id}/status`, { isActive }), onSuccess: done });
+  const [tempPw, setTempPw] = useState<string | null>(null);
+  const resetPw = useMutation({ mutationFn: () => post(`/team/${person.id}/reset-password`), onSuccess: (r: any) => setTempPw(r.temporaryPassword) });
   return (
-    <Modal open={!!person} onOpenChange={(o) => !o && (setF(null), onClose())} title={person?.full_name ?? ''} description={person?.email}>
+    <Modal open={!!person} onOpenChange={(o) => !o && (setF(null), setTempPw(null), onClose())} title={person?.full_name ?? ''} description={person?.email}>
       {cur && (
         <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
           <Field label="Role">
@@ -138,10 +140,18 @@ function EditPerson({ person, onClose }: { person: any | null; onClose: () => vo
             </Select>
           </Field>
           {cur.access === 'SUPERVISOR' && <Field label="Workplaces"><SitePicker value={cur.siteIds} onChange={(siteIds) => setF({ ...cur, siteIds })} /></Field>}
-          <InlineError error={save.error ?? status.error} />
+          <InlineError error={save.error ?? status.error ?? resetPw.error} />
+          {tempPw && (
+            <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              Temporary password, shown once: <code className="select-all font-semibold">{tempPw}</code>. They must choose a new one when they sign in, and their other sign-ins have ended.
+            </p>
+          )}
           <div className="flex flex-wrap justify-end gap-2">
             {person.is_active ? (
-              <ConfirmButton variant="danger" danger className="mr-auto" loading={status.isPending} title={`Deactivate ${person.full_name}?`} description="They are signed out." confirmLabel="Deactivate" onConfirm={() => status.mutate(false)}>Deactivate</ConfirmButton>
+              <>
+                <ConfirmButton variant="danger" danger className="mr-auto" loading={status.isPending} title={`Deactivate ${person.full_name}?`} description="They are signed out." confirmLabel="Deactivate" onConfirm={() => status.mutate(false)}>Deactivate</ConfirmButton>
+                <ConfirmButton loading={resetPw.isPending} title={`Reset ${person.full_name}’s password?`} description="They are signed out and get a temporary password, which you pass on to them." confirmLabel="Reset password" onConfirm={() => resetPw.mutate()}>Reset password</ConfirmButton>
+              </>
             ) : (
               <Button type="button" loading={status.isPending} onClick={() => status.mutate(true)}>Reactivate</Button>
             )}

@@ -46,10 +46,13 @@ mount(sosRouter, '/api/v1/sos', 'sos', [
             db,
           );
         }
+        // On shift, the alert belongs to the workplace they are working at, so that site's supervisor and the
+        // manager on the roster entry are told; otherwise to their home workplace.
+        const shift = await one('SELECT id, workplace_id FROM tracking_sessions WHERE employee_id = $1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', [user.id], db);
         const s = await one(
           `INSERT INTO sos_alerts (org_id, employee_id, workplace_id, latitude, longitude, accuracy_m, message)
-           VALUES ($1,$2,${employeeSite('$2::uuid')},$3,$4,$5,$6) RETURNING *`,
-          [user.orgId, user.id, body.location?.latitude ?? null, body.location?.longitude ?? null, body.location?.accuracyM ?? null, body.message || null],
+           VALUES ($1,$2,COALESCE($7::uuid, ${employeeSite('$2::uuid')}),$3,$4,$5,$6) RETURNING *`,
+          [user.orgId, user.id, body.location?.latitude ?? null, body.location?.longitude ?? null, body.location?.accuracyM ?? null, body.message || null, shift?.workplace_id ?? null],
           db,
         );
         const where = body.location ? ` Location: https://www.google.com/maps?q=${body.location.latitude},${body.location.longitude} (±${Math.round(body.location.accuracyM)} m).` : ' The phone could not get a location.';
@@ -60,6 +63,7 @@ mount(sosRouter, '/api/v1/sos', 'sos', [
           body: `${user.fullName} pressed SOS${body.message ? `: “${body.message}”` : ''}.${where} Call them now.`,
           employeeId: user.id,
           workplaceId: s.workplace_id,
+          sessionId: shift?.id ?? null,
           data: { sosId: s.id, location: body.location ?? null },
           dedupeKey: `sos:${s.id}`,
         });
