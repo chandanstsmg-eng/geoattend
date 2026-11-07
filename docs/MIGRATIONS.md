@@ -90,6 +90,22 @@ Rollback: [migrations/027_rollback.sql](migrations/027_rollback.sql).
 
 Twenty indexes on columns that reports and jobs search by. No row changes. Each blocks writes to its table while it builds, which took seconds on 810,000 records. On a large live table, build them first with `CREATE INDEX CONCURRENTLY`: the migration then skips them.
 
+## 028_job_monitoring
+
+Rollback: [migrations/028_rollback.sql](migrations/028_rollback.sql). Details: [BACKGROUND-JOBS.md](BACKGROUND-JOBS.md).
+
+Adds `job_runs` and `ops_alerts`, two nullable columns on the job tables, and six indexes. No company data is touched, no existing row changes meaning, and the restricted login gets no access. The new tables start empty, so the indexes build instantly.
+
+## 029_shift_reminders
+
+Rollback: [migrations/029_rollback.sql](migrations/029_rollback.sql).
+
+Adds `employee_profiles.shift_reminders`, an employee's choice, true by default. No existing row changes meaning, and nothing is sent because of it: companies turn reminders on themselves.
+
+## Applying 028 and 029
+
+They apply after 024 to 027, each in its own transaction, when the API or worker starts. Take a backup first, and check afterwards that `SELECT max(version) FROM schema_migrations` is `029_shift_reminders`. To roll back, stop the API, run `docs/migrations/029_rollback.sql`, then `028_rollback.sql`, then the steps below, and deploy the earlier code.
+
 ## Applying 024 to 027
 
 Order matters in both directions. **Never run this on a production database without approval and a verified backup.**

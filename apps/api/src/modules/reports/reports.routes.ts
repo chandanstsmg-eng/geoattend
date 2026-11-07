@@ -104,8 +104,14 @@ export function workFlags(
  */
 export async function monthlySummary(orgId: string, month: string, workplaceId: string | null, includeSimulated: boolean) {
   const first = DateTime.fromISO(`${month}-01`);
+  return { month, ...(await periodSummary(orgId, first.toISODate()!, first.endOf('month').toISODate()!, workplaceId, includeSimulated)) };
+}
+
+/** The same summary for any run of days. */
+export async function periodSummary(orgId: string, from: string, until: string, workplaceId: string | null, includeSimulated: boolean) {
+  const first = DateTime.fromISO(from);
   const today = DateTime.fromISO(await defaultDate(orgId, workplaceId));
-  const last = DateTime.min(first.endOf('month').startOf('day'), today);
+  const last = DateTime.min(DateTime.fromISO(until), today);
   const totals = new Map<string, any>();
   for (let d = first; d <= last; d = d.plus({ days: 1 })) {
     const date = d.toISODate()!;
@@ -118,7 +124,7 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
       const r = shifts[0];
       let t = totals.get(employeeId);
       if (!t) {
-        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0, pending_days: 0, pending_minutes: 0 };
+        t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code, workplace_id: r.workplace_id, workplace_name: r.workplace_name, is_demo: r.is_demo, scheduled: 0, present: 0, late: 0, leave: 0, paid_leave: 0, unpaid_leave: 0, holidays: 0, absent: 0, missed_shifts: 0, worked_minutes: 0, overtime_minutes: 0, left_early: 0, pending_days: 0, pending_minutes: 0 };
         totals.set(employeeId, t);
       }
       t.scheduled++;
@@ -159,7 +165,7 @@ export async function monthlySummary(orgId: string, month: string, workplaceId: 
       }
     }
   }
-  return { month, from: first.toISODate(), to, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
+  return { from: first.toISODate(), to, rows: [...totals.values()].sort((a, b) => a.full_name.localeCompare(b.full_name)) };
 }
 
 /** A stored time as it read on the wall at the workplace, for people reading an export. */
@@ -411,15 +417,15 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         [query.from, query.to, user.orgId], query.from, query.to,
       );
       csvHeaders(res, `attendance_${query.from}_${query.to}.csv`);
-      const sent = await streamCsv(
+      await streamCsv(
         res,
           ['Date', 'Employee ID', 'Employee', 'Workplace', 'Shift', 'Recorded at (UTC, server)', 'Verification', 'Late', 'Late by (min)', 'Distance (m)', 'GPS accuracy (m)', 'Radius (m)', 'Risk flags', 'Away (min)', 'Prolonged absences', 'Shift ended at (UTC)', 'Worked (min)', 'Overtime worked (min)', 'Overtime status', 'Overtime approved (min)', 'Left early', 'Simulated', 'Recorded at (local)', 'Shift ended at (local)', 'Pending worked (min, not counted)'],
         (range ? dateChunks(range.from, range.to) : []).map((c) => async () => (await rowsFor(c.from, c.to)).map((r) => {
             const f = workFlags(r, workforce);
             return [r.shift_date, r.employee_code, r.full_name, r.workplace, r.shift, r.recorded_at, r.verification_status, r.is_late ? 'yes' : 'no', r.late_by_minutes, r.distance_m, r.accuracy_m, r.radius_m_at_record, r.risk_flags, r.away_minutes, r.prolonged_absences, r.shift_ended_at, r.worked_minutes ?? '', r.overtime_claimed_minutes || '', r.overtime_status ?? '', f.overtime_minutes || '', f.left_early ? 'yes' : '', r.is_simulated ? 'SIMULATED' : '', wallClock(r.recorded_at, r.timezone), wallClock(r.shift_ended_at, r.timezone), r.pending_minutes ?? ''];
           })),
+        (rows) => audit({ actor: user, action: 'report.export', resourceType: 'attendance_csv', after: { ...query, rows }, req }),
       );
-      await audit({ actor: user, action: 'report.export', resourceType: 'attendance_csv', after: { ...query, rows: sent }, req });
     },
   }),
   route({
@@ -445,12 +451,12 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         [query.from, query.to, user.orgId], query.from, query.to,
       );
       csvHeaders(res, `absences_${query.from}_${query.to}.csv`);
-      const sent = await streamCsv(
+      await streamCsv(
         res,
           ['Employee ID', 'Employee', 'Workplace', 'Departed (UTC)', 'Returned / closed (UTC)', 'Status', 'Duration (min)', 'Threshold (min)', 'Prolonged at (UTC)', 'Tracking gap during absence', 'Simulated', 'Departed (local)', 'Returned / closed (local)'],
         (range ? dateChunks(range.from, range.to) : []).map((c) => async () => (await rowsFor(c.from, c.to)).map((r) => [r.employee_code, r.full_name, r.workplace, r.started_at, r.ended_at, r.status, r.minutes, r.threshold_minutes, r.prolonged_at, r.tracking_gap ? 'yes' : 'no', r.is_simulated ? 'SIMULATED' : '', wallClock(r.started_at, r.timezone), wallClock(r.ended_at, r.timezone)])),
+        (rows) => audit({ actor: user, action: 'report.export', resourceType: 'absences_csv', after: { ...query, rows }, req }),
       );
-      await audit({ actor: user, action: 'report.export', resourceType: 'absences_csv', after: { ...query, rows: sent }, req });
     },
   }),
   route({

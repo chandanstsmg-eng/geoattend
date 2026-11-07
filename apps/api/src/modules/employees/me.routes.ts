@@ -208,6 +208,24 @@ mount(meRouter, '/api/v1/me', 'me', [
     },
   }),
   route({
+    method: 'get',
+    path: '/preferences',
+    summary: 'What this employee has chosen to be told',
+    access: 'employee',
+    handler: async ({ user }) => ({ shiftReminders: (await one(`SELECT shift_reminders FROM employee_profiles WHERE user_id = $1`, [user.id]))?.shift_reminders ?? true }),
+  }),
+  route({
+    method: 'put',
+    path: '/preferences',
+    summary: 'Turn shift reminders on or off for this employee',
+    access: 'employee',
+    body: z.object({ shiftReminders: z.boolean() }),
+    handler: async ({ user, body }) => {
+      await q(`UPDATE employee_profiles SET shift_reminders = $2 WHERE user_id = $1`, [user.id, body.shiftReminders]);
+      return { shiftReminders: body.shiftReminders };
+    },
+  }),
+  route({
     method: 'post',
     path: '/devices',
     summary: 'Register / refresh this device (push token, app version)',

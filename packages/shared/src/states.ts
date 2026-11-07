@@ -129,6 +129,10 @@ export const NOTIFICATION_TYPES = [
   'OVERTIME_STARTED',
   'OVERTIME_ENDED',
   'OVERTIME_DECIDED',
+  'MISSING_CHECKOUT',
+  'ATTENDANCE_PENDING',
+  'WEEKLY_SUMMARY',
+  'SHIFT_REMINDER',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -172,6 +176,10 @@ export const NOTIFICATION_LABELS: Record<NotificationType, string> = {
   OVERTIME_STARTED: 'Overtime started',
   OVERTIME_ENDED: 'Overtime waiting for approval',
   OVERTIME_DECIDED: 'Overtime answered',
+  MISSING_CHECKOUT: 'Missing check-out',
+  ATTENDANCE_PENDING: 'Attendance waiting for verification',
+  WEEKLY_SUMMARY: 'Your week',
+  SHIFT_REMINDER: 'Your shift starts soon',
 };
 
 export const LEAVE_TYPES = ['CASUAL', 'SICK', 'EARNED', 'UNPAID', 'OTHER'] as const;

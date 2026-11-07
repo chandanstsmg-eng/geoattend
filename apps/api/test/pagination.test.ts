@@ -109,6 +109,16 @@ describe('streamed exports', () => {
     expect(a.after_data.rows).toBe(total());
   });
 
+  it('the record is written before the download ends, and failing to write it cuts the download', async () => {
+    const order: string[] = [];
+    const res = { write: () => true, once: () => undefined, end: () => { order.push('end'); } };
+    await streamCsv(res, ['A'], [async () => [['1'], ['2']]], async (rows) => { order.push(`record ${rows}`); });
+    expect(order).toEqual(['record 2', 'end']);
+    order.length = 0;
+    await expect(streamCsv(res, ['A'], [async () => [['1']]], async () => { throw new Error('audit failed'); })).rejects.toThrow('audit failed');
+    expect(order).toEqual([]);
+  });
+
   it('a failure part way through cuts the connection instead of passing as a complete file', async () => {
     const chunks: string[] = [];
     const res = { write: (s: string) => (chunks.push(s), true), once: () => undefined, end: () => { throw new Error('must not end normally'); } };

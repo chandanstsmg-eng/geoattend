@@ -278,6 +278,19 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
         simulated: s.is_simulated,
       });
     }
+    if (offline) {
+      await notify(db, outbox, {
+        type: 'ATTENDANCE_PENDING',
+        severity: 'WARNING',
+        body: `${s.employee_name}'s attendance for ${s.shift_name} was sent late from the phone. It does not count until someone verifies it in Approvals.`,
+        employeeId,
+        workplaceId: s.workplace_id,
+        sessionId: s.id,
+        data: { attendanceId: record.id },
+        dedupeKey: `pending:${record.id}`,
+        simulated: s.is_simulated,
+      });
+    }
     outbox.push({ type: 'attendance.recorded', attendanceId: record.id, employeeId });
     return { ok: true, record, replay: false };
   });

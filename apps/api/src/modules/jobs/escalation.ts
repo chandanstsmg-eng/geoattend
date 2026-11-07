@@ -1,7 +1,8 @@
 /**
  * Backup approver: anything waiting more than a day for a decision (leave, an attendance
- * request, a new phone) is raised to the company owners, so nothing stalls when a
- * supervisor is busy or away. Once per item (dedupe key).
+ * request, a record waiting for verification, a photo check, a correction, overtime, a new
+ * phone) is raised to the company owners, so nothing stalls when a supervisor is busy or
+ * away. Once per item (dedupe key). This only tells people: a decision is always a person's.
  */
 import { getPool, q } from '../../db/pool.js';
 import { notify } from '../notifications/notify.js';
@@ -24,7 +25,19 @@ async function overdueForCompany(now: Date) {
        WHERE r.status = 'OPEN' AND r.kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') AND r.created_at < $1
      UNION ALL
      SELECT 'device', d.id, d.user_id, u.full_name, d.created_at, 'a new phone' FROM device_registrations d JOIN users u ON u.id = d.user_id
-       WHERE d.status = 'PENDING' AND u.is_active AND d.created_at < $1`,
+       WHERE d.status = 'PENDING' AND u.is_active AND d.created_at < $1
+     UNION ALL
+     SELECT 'verification', ar.id, ar.employee_id, u.full_name, ar.created_at, 'attendance record sent late from the phone' FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
+       WHERE ar.verification_status = 'PENDING_VERIFICATION' AND NOT ar.is_simulated AND ar.created_at < $1
+     UNION ALL
+     SELECT 'photo-check', ar.id, ar.employee_id, u.full_name, ar.created_at, 'attendance photo check' FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
+       WHERE ar.face_review = 'PENDING' AND ar.verification_status <> 'VOIDED' AND NOT ar.is_simulated AND ar.created_at < $1
+     UNION ALL
+     SELECT 'correction', r.id, r.employee_id, u.full_name, r.created_at, 'attendance correction' FROM review_requests r JOIN users u ON u.id = r.employee_id
+       WHERE r.status = 'OPEN' AND r.kind = 'ADMIN_CORRECTION' AND r.created_at < $1
+     UNION ALL
+     SELECT 'overtime', o.id, o.employee_id, u.full_name, o.created_at, 'overtime' FROM overtime_entries o JOIN users u ON u.id = o.employee_id
+       WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND o.created_at < $1`,
     [cutoff],
   );
   if (!items.length) return;

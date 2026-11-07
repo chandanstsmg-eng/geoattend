@@ -1,6 +1,6 @@
 /** Screen 19: account settings — profile, change password, report a technical issue, sign out. */
 import { useEffect, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Switch } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Banner, Body, Button, Card, DemoBadge, Field, H2, Muted, ReasonModal, Row, Screen } from '../../../components/ui';
 import { api, errorMessage } from '../../../lib/api/client';
@@ -24,6 +24,7 @@ export default function AccountScreen() {
   const [pwBusy, setPwBusy] = useState(false);
   const [pwError, setPwError] = useState<string | null>(null);
   const [pwDone, setPwDone] = useState(false);
+  const [reminders, setReminders] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (params.report) setReportOpen(true);
@@ -31,6 +32,21 @@ export default function AccountScreen() {
   useEffect(() => {
     deviceInfo().then((d) => setDeviceId(d.deviceId), () => undefined);
   }, []);
+
+  useEffect(() => {
+    api<{ shiftReminders: boolean }>('/me/preferences').then((p) => setReminders(p.shiftReminders), () => undefined);
+  }, []);
+
+  const changeReminders = async (on: boolean) => {
+    const before = reminders;
+    setReminders(on);
+    try {
+      await api('/me/preferences', { method: 'PUT', body: { shiftReminders: on } });
+    } catch (e) {
+      setReminders(before);
+      Alert.alert('Not saved', errorMessage(e));
+    }
+  };
 
   const emp = assignment.data?.employee;
   const openSession = statusQ.data ?? null;
@@ -93,6 +109,12 @@ export default function AccountScreen() {
         <Field label="Repeat new password" value={confirm} onChangeText={setConfirm} secureTextEntry autoComplete="new-password" error={pwError} />
         {pwDone ? <Banner tone="success" title="Password changed" message="Other devices have been signed out. This phone stays signed in." /> : null}
         <Button title="Change password" variant="secondary" onPress={changePassword} loading={pwBusy} />
+      </Card>
+
+      <Card>
+        <H2>Shift reminders</H2>
+        <Body>Reminders before your shift, and if your shift has started and you have not.</Body>
+        <Switch accessibilityLabel="Shift reminders" value={reminders ?? true} disabled={reminders === null} onValueChange={(on) => void changeReminders(on)} />
       </Card>
 
       <Card>

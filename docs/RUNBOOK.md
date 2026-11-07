@@ -36,7 +36,7 @@ git switch main                     # or return to the baseline completely
 
 **Development (any platform):** `npm run db:backup:online`
 
-Copies the running database into `data/backups/pg-online-<timestamp>/`, starts the copy on a separate port and compares row counts with the live database. The live server keeps running.
+Copies the running database into `data/backups/pg-online-<timestamp>/`, starts the copy on a separate port and compares row counts with the live database. The live server keeps running. The result and a checksum of every file go in the backup's `manifest.json`; a failure is recorded there and the command exits 1. `npm run db:backup:verify` checks backups against their manifests later. Backups made before this have no manifest and show as `NO_MANIFEST`: that means unproven, not bad.
 
 To restore one:
 
@@ -65,3 +65,14 @@ To restore one:
 4. Keep the backup until the change has been verified in use.
 
 Migrations have no down scripts. Rolling back a migration means restoring the backup, and data written since then is lost.
+
+## Checks only a Linux server can pass
+
+These have never been run: the development machine is Windows, which has no SIGTERM to catch. Run them on the test server before release, with the API and a worker running.
+
+1. **Clean stop.** `kill -TERM <pid>` on the worker, then on the API. Each should log "received", exit with code 0 within 10 seconds, and leave `SELECT count(*) FROM job_state WHERE running_since IS NOT NULL` at 0.
+2. **In Docker.** `docker stop` on the API container should do the same, not end in a forced kill (exit 137). The image starts Node directly, so it should receive the signal.
+3. **Crash.** `kill -9` a worker during a job. Within `JOB_LEASE_SECONDS` a surviving worker should add an `INTERRUPTED` row to `job_runs` and the job should run again.
+4. **Outage.** Stop PostgreSQL for a minute. `/api/v1/ops/health` should answer 503, the processes should stay up, and jobs should resume without a restart.
+5. **Backup alert.** Stop the backup schedule. After `BACKUP_MAX_AGE_HOURS` the `backup` alert should reach whoever is on call.
+

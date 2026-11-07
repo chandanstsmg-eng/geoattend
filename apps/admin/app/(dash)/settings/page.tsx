@@ -232,6 +232,9 @@ export default function SettingsPage() {
                         <Field label="Alert when a shift has not been started after (min)" hint="Skips employees on approved leave. 0 turns the alert off.">
                           <Input type="number" min={0} max={240} value={v.noShowAfterMinutes} onChange={(e) => setV({ ...v, noShowAfterMinutes: Number(e.target.value) })} />
                         </Field>
+                        <Field label="Remind employees before a shift (min)" hint="Sent to their phone, in the shift's own time zone. Skips leave, holidays and anyone who has started. Each employee can turn it off. 0 turns reminders off.">
+                          <Input type="number" min={0} max={240} value={v.shiftReminderMinutes ?? 0} onChange={(e) => setV({ ...v, shiftReminderMinutes: Number(e.target.value) })} />
+                        </Field>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.notifyOnArrival} onChange={(e) => setV({ ...v, notifyOnArrival: e.target.checked })} /> Notify when an employee arrives</label>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.notifyOnReturn} onChange={(e) => setV({ ...v, notifyOnReturn: e.target.checked })} /> Notify when an employee returns</label>
                         <div className="overflow-x-auto">
@@ -276,6 +279,9 @@ export default function SettingsPage() {
                           <Input value={v.emailRecipients.join(', ')} onChange={(e) => setV({ ...v, emailRecipients: list(e.target.value) })} />
                         </Field>
                         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={v.monthlyReport} onChange={(e) => setV({ ...v, monthlyReport: e.target.checked })} /> On the 1st, e-mail last month’s attendance (CSV)</label>
+                        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.weeklyReport} onChange={(e) => setV({ ...v, weeklyReport: e.target.checked })} /> On Mondays, e-mail last week’s attendance (CSV)</label>
+                        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.supervisorSummaries} onChange={(e) => setV({ ...v, supervisorSummaries: e.target.checked })} /> On Mondays, e-mail each supervisor last week’s attendance for their own sites</label>
+                        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!v.employeeSummaries} onChange={(e) => setV({ ...v, employeeSummaries: e.target.checked })} /> On Mondays, send each employee their own week to their phone</label>
                       </div>
                     );
                   }}

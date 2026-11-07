@@ -125,7 +125,26 @@ export const config = {
   dashboardUrl: str('DASHBOARD_URL', 'http://localhost:3400'),
 
   sweeperIntervalMs: int('SWEEPER_INTERVAL_MS', 15_000),
-  /** Bearer token for GET /health/jobs. Unset: that endpoint does not exist. */
+  jobs: {
+    /** false: this process serves requests only, and `npm run worker` runs the jobs. */
+    enabled: bool('JOBS_ENABLED', true),
+    leaseSeconds: int('JOB_LEASE_SECONDS', 300),
+    /** A job still running after this is recorded as failed, so one stuck call cannot stop every job behind it. */
+    timeoutMs: int('JOB_TIMEOUT_MS', 600_000),
+  },
+  backups: {
+    dir: path.resolve(REPO_ROOT, str('BACKUP_DIR', path.join(DATA_DIR, 'backups'))),
+    /** Alert when the newest proven backup is older than this. 0: backups are not monitored here. */
+    maxAgeHours: int('BACKUP_MAX_AGE_HOURS', nodeEnv === 'production' ? 26 : 0),
+    /** Proven backups `db:backup:prune` keeps. */
+    keep: int('BACKUP_KEEP', 14),
+  },
+  /** Where operational alerts go. Neither set: they are logged and shown on the operations page only. */
+  opsAlerts: {
+    webhookUrl: str('ALERT_WEBHOOK_URL'),
+    emails: str('OPS_ALERT_EMAILS').split(',').map((s) => s.trim()).filter(Boolean),
+  },
+  /** Bearer token for /health/jobs and /api/v1/ops. Unset: those endpoints do not exist. */
   opsToken: str('OPS_TOKEN'),
   logLevel: str('LOG_LEVEL', nodeEnv === 'test' ? 'silent' : 'info'),
 };
@@ -171,6 +190,8 @@ export function productionConfigErrors(env: Record<string, string | undefined>) 
   if (get('NODE_ENV') === 'production' && !bool2(env.COOKIE_SECURE, true)) e.push('COOKIE_SECURE must be true in production (serve over HTTPS).');
   if (bool2(env.DEMO_MODE, false)) e.push('DEMO_MODE must not be enabled when NODE_ENV=production.');
   if (bool2(env.PAYROLL_ENABLED, false)) e.push('PAYROLL_ENABLED must stay off until the pay rules have been reviewed by a qualified person.');
+  if (get('OPS_TOKEN') && (get('OPS_TOKEN').length < 32 || PLACEHOLDER.test(get('OPS_TOKEN')))) e.push('OPS_TOKEN must be at least 32 random characters.');
+  if (get('ALERT_WEBHOOK_URL') && !isPublicHttps(get('ALERT_WEBHOOK_URL'))) e.push('ALERT_WEBHOOK_URL must be a public https:// address.');
   if (get('STORAGE_DRIVER') !== 's3') e.push('STORAGE_DRIVER must be s3 in production.');
   else {
     if (!get('S3_BUCKET')) e.push('S3_BUCKET is required.');

@@ -46,6 +46,8 @@ export const alertsSchema = z.object({
   prolongedReminderCooldownMin: z.number().int().min(5).max(480),
   /** Alert when a scheduled employee has not started their shift this many minutes after it began (0 = off). */
   noShowAfterMinutes: z.number().int().min(0).max(240),
+  /** Remind an employee this many minutes before a shift starts (0 = off). */
+  shiftReminderMinutes: z.number().int().min(0).max(240).optional(),
   notifyOnReturn: z.boolean(),
   notifyOnArrival: z.boolean(),
   webPushTypes: z.array(z.enum(NOTIFICATION_TYPES)),
@@ -128,6 +130,12 @@ export const digestSchema = z.object({
   emailRecipients: z.array(z.email()).max(10),
   /** On the 1st, e-mail last month's summary (CSV) to the e-mail recipients. */
   monthlyReport: z.boolean(),
+  /** On Mondays, e-mail last week's summary (CSV) to the e-mail recipients. */
+  weeklyReport: z.boolean().optional(),
+  /** On Mondays, e-mail each supervisor last week's summary for their own sites. */
+  supervisorSummaries: z.boolean().optional(),
+  /** On Mondays, send each employee their own week as a phone push. */
+  employeeSummaries: z.boolean().optional(),
 });
 
 export const settingsSchema = z.object({
@@ -204,6 +212,7 @@ export const DEFAULT_SETTINGS: Settings = {
   alerts: {
     prolongedReminderCooldownMin: 30,
     noShowAfterMinutes: 15,
+    shiftReminderMinutes: 0,
     notifyOnReturn: true,
     notifyOnArrival: true,
     webPushTypes: ['BREAK_OVERDUE', 'PROLONGED_ABSENCE', 'TRACKING_INTERRUPTED', 'PERMISSION_REVOKED', 'DUPLICATE_SUBMISSION', 'MANUAL_REVIEW_REQUESTED', 'LATE_ARRIVAL', 'NO_SHOW', 'LEAVE_REQUESTED'],
@@ -215,7 +224,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Version 2: overtime (tracking after the shift, anywhere, until the employee ends it).
   privacy: { version: 2, controller: 'Your organisation (configure in Settings)', contact: 'hr@example.com', text: DEFAULT_PRIVACY_TEXT },
   workforce: { deviceBinding: 'ENFORCE', overtimeMinMinutes: 15, leftEarlyMinutes: 15, faceEnrollment: 'REQUIRED', supervisorAnnouncements: true, roundingMinutes: 0, weeklyRegularHours: 0, overtimeMultiplier: 1, keepMatchedPhotos: true },
-  digest: { times: ['10:00', '19:00'], whatsappNumbers: [], emailRecipients: [], monthlyReport: true },
+  digest: { times: ['10:00', '19:00'], whatsappNumbers: [], emailRecipients: [], monthlyReport: true, weeklyReport: false, supervisorSummaries: false, employeeSummaries: false },
   breaks: {
     types: [
       { key: 'LUNCH', label: 'Lunch', paid: false, maxMinutes: 45 },

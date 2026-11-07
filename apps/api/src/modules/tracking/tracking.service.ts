@@ -661,6 +661,20 @@ export async function finalizeLocked(
     dedupeKey: `ended:${s.id}`,
     simulated: s.is_simulated,
   });
+  // The system closed a shift nobody ended: the end time is unknown, so someone should look at it.
+  if (opts.authorization === 'EXPIRED' && s.has_attendance) {
+    await notify(db, outbox, {
+      type: 'MISSING_CHECKOUT',
+      severity: 'WARNING',
+      body: `${s.employee_name} did not end ${s.shift_name} at ${s.workplace_name}. The system closed it at the end of the shift window.`,
+      employeeId: s.employee_id,
+      workplaceId: s.workplace_id,
+      sessionId: s.id,
+      data: { shiftDate: s.shift_date },
+      dedupeKey: `missing-checkout:${s.id}`,
+      simulated: s.is_simulated,
+    });
+  }
   if (opts.authorization !== 'ENDED') {
     await notify(db, outbox, {
       type,

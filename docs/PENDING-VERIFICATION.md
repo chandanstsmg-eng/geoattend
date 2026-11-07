@@ -23,7 +23,13 @@ Not done. These passed builds and API tests only.
 | Offline setting | "Accept offline check-ins for (hours)" saves and takes effect | No |
 | Google Maps | Real map on the production domain | No |
 
+- The operations page (`/operations`): sign-in with the token, each tab, each filter. Only its API is tested; nobody has opened the page.
+- The three new summary options in Settings.
+
 ## Phone checks (QA stage: before release)
+
+- A real push reaching a phone, including a shift reminder and the weekly summary, and the Shift reminders switch on the Account screen.
+
 
 See [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md). Nothing has been run on a real phone: Xiaomi, Oppo, Vivo and Samsung are all NOT VERIFIED. The Phase D APK must not be distributed, because its server address is a placeholder.
 
