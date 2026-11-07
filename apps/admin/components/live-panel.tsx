@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
-import { MARKER_STYLE, BODY_STYLE, initialsOf, kindFor } from './maps/markers';
+import { MARKER_STYLE, BODY_STYLE, LOCATION_GROUPS, initialsOf, kindFor } from './maps/markers';
 import { ago, fmtTime, metres, minutes } from '@/lib/format';
 import { Badge, Button, KeyValue, SearchInput, SimBadge, cx } from './ui';
 import { BatteryBadge, StateBadge } from './state-badge';
@@ -67,8 +67,8 @@ export function SessionDetails({ s, now, onBack, onOpenEmployee }: { s: any; now
         <Button size="sm" variant="ghost" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" aria-hidden /> All people
         </Button>
-        <Button size="sm" className="ml-auto" onClick={() => onOpenEmployee(s.employee_id)}>
-          Employee record <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+        <Button size="sm" className="ml-auto" title="Employee record, with location history and day replay where you are allowed to see them" onClick={() => onOpenEmployee(s.employee_id)}>
+          Record and location history <ExternalLink className="h-3.5 w-3.5" aria-hidden />
         </Button>
       </div>
       <div className="space-y-4 p-4">
@@ -165,17 +165,6 @@ function PeopleSection({ label, rows, selected, onSelect, now }: { label: string
   );
 }
 
-/** Location states for grouping the list; the order is the order of urgency for an operator. */
-export const LOCATION_GROUPS: Array<{ key: string; label: string; kinds: string[] }> = [
-  { key: 'outside', label: 'Outside the permitted area', kinds: ['away', 'prolonged'] },
-  { key: 'unavailable', label: 'Location unavailable', kinds: ['interrupted'] },
-  { key: 'stale', label: 'Stale location', kinds: ['stale'] },
-  { key: 'arriving', label: 'On shift, not yet on site', kinds: ['arriving', 'review'] },
-  { key: 'onsite', label: 'On site', kinds: ['present', 'break'] },
-  { key: 'overtime', label: 'On overtime', kinds: ['overtime'] },
-  { key: 'ended', label: 'Shift ended', kinds: ['ended'] },
-];
-
 /**
  * The list of people. `notIn` rows (rostered, no session) open the employee record; session rows
  * select the person on the map. `grouped` sections the list by location state.
@@ -187,7 +176,7 @@ export function PeopleList({ sessions, notIn = [], selected, onSelect, onOpenEmp
   const waiting = notIn.filter((r) => match(`${r.full_name} ${r.employee_code} ${r.workplace_name ?? ''}`));
   const sections = grouped
     ? LOCATION_GROUPS.map((g) => ({ ...g, rows: listed.filter((s) => g.kinds.includes(kindFor(s))) })).filter((g) => g.rows.length)
-    : [{ key: 'all', label: '', kinds: [], rows: listed }];
+    : [{ key: 'all', label: '', filter: '', kinds: [], rows: listed }];
   return (
     <>
       {sessions.length + notIn.length > 5 && (

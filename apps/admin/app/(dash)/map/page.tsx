@@ -2,10 +2,10 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { PanelRightClose, PanelRightOpen, RefreshCw } from 'lucide-react';
-import { kindFor } from '@/components/maps/markers';
+import { kindFor, LOCATION_GROUPS } from '@/components/maps/markers';
 import { get, qs } from '@/lib/api';
 import { useLive } from '@/lib/live';
-import { Button, Callout, PageHeader, QueryState, Select, cx } from '@/components/ui';
+import { Badge, Button, Callout, ErrorState, PageHeader, QueryState, Select, Tabs, cx } from '@/components/ui';
 import { SupervisorSelect, WorkplaceSelect, useSupervisors, useWorkplaces } from '@/components/filters';
 import { MapLegend, WorkforceMap } from '@/components/live-map';
 import { PeopleList, SessionDetails, useNow } from '@/components/live-panel';
@@ -13,17 +13,46 @@ import { useMe } from '@/lib/me';
 import { useIncludeSimulated } from '@/lib/sim-pref';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 
-/** Status filter groups over the marker kinds (and "not checked in", which has no position). */
+const group = (key: string) => LOCATION_GROUPS.find((g) => g.key === key)!;
+/** Status filters over the marker kinds (and "not checked in", which has no position). The groups come from markers.ts. */
 const STATUS_FILTERS: Array<{ value: string; label: string; kinds?: string[] }> = [
   { value: '', label: 'All statuses' },
-  { value: 'inside', label: 'Working inside site', kinds: ['present', 'break'] },
-  { value: 'outside', label: 'Away / outside site', kinds: ['away', 'prolonged', 'overtime'] },
-  { value: 'arriving', label: 'Not yet present', kinds: ['arriving', 'review'] },
-  { value: 'problem', label: 'Location unavailable', kinds: ['interrupted'] },
-  { value: 'stale', label: 'Stale location', kinds: ['stale'] },
-  { value: 'ended', label: 'Shift ended', kinds: ['ended'] },
+  { value: 'inside', label: group('onsite').filter, kinds: group('onsite').kinds },
+  { value: 'outside', label: group('outside').filter, kinds: group('outside').kinds },
+  { value: 'arriving', label: group('arriving').filter, kinds: group('arriving').kinds },
+  { value: 'overtime', label: group('overtime').filter, kinds: group('overtime').kinds },
+  { value: 'silent', label: 'No fresh location', kinds: [...group('unavailable').kinds, ...group('stale').kinds] },
+  { value: 'ended', label: group('ended').filter, kinds: group('ended').kinds },
   { value: 'not-in', label: 'Not checked in' },
 ];
+
+/** Who belongs where today: each workplace's roster against who is on shift there now. */
+function WorkplaceList({ workplaces, roster, open, onPick }: { workplaces: any[]; roster: any[]; open: any[]; onPick: (id: string) => void }) {
+  return (
+    <ul className="max-h-[calc(100dvh-14rem)] min-h-40 divide-y divide-gray-100 overflow-y-auto">
+      {workplaces.map((w) => {
+        const rostered = new Set(roster.filter((r) => r.workplace_id === w.id).map((r) => r.employee_id)).size;
+        const here = open.filter((s) => s.workplace_id === w.id);
+        const late = here.filter((s) => s.is_stale || !s.last_location_at).length;
+        return (
+          <li key={w.id}>
+            <button type="button" onClick={() => onPick(w.id)} className="block w-full px-4 py-3 text-left text-sm hover:bg-gray-50">
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="truncate font-semibold text-gray-900">{w.name}</span>
+                <span className="tabular shrink-0 text-body-sm text-gray-600">{here.length} of {rostered} on shift</span>
+              </span>
+              <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                <span className="tabular">{Math.round(w.radius_m ?? w.radiusM ?? 0)} m radius</span>
+                {late > 0 && <Badge tone="amber">{late} no fresh location</Badge>}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+      {workplaces.length === 0 && <li className="px-4 py-10 text-center text-sm text-gray-500">No workplace in this view.</li>}
+    </ul>
+  );
+}
 
 export default function LiveMapPage() {
   const { isOwner } = useMe();
@@ -34,9 +63,10 @@ export default function LiveMapPage() {
   const includeSim = sim.include;
   const [shift, setShift] = useState('');
   const [panel, setPanel] = useState(true);
+  const [side, setSide] = useState<'people' | 'places'>('people');
   const [selected, setSelected] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<string | null>(null);
-  const live = useQuery({ queryKey: ['live', workplaceId, supervisorId, includeSim], queryFn: () => get(`/tracking/live${qs({ workplaceId, supervisorId, includeSimulated: includeSim })}`), refetchInterval: 30_000 });
+  const live = useQuery({ queryKey: ['live', workplaceId, supervisorId, includeSim], queryFn: () => get(`/tracking/live${qs({ workplaceId, supervisorId, includeSimulated: includeSim })}`), refetchInterval: 30_000, placeholderData: (p) => p });
   const overview = useQuery({ queryKey: ['overview', workplaceId], queryFn: () => get(`/reports/overview${qs({ workplaceId })}`), refetchInterval: 60_000 });
   const wps = useWorkplaces();
   const sups = useSupervisors(isOwner);
@@ -44,10 +74,10 @@ export default function LiveMapPage() {
   const now = useNow();
 
   const supSites: string[] | null = supervisorId ? (sups.data?.find((s) => s.id === supervisorId)?.site_ids ?? []) : null;
-  const group = STATUS_FILTERS.find((f) => f.value === status);
+  const filter = STATUS_FILTERS.find((f) => f.value === status);
   const all: any[] = live.data?.sessions ?? [];
   const shifts = [...new Set(all.map((s) => s.shift_name).filter(Boolean))].sort();
-  const sessions = (group?.kinds ? all.filter((s) => group.kinds!.includes(kindFor(s))) : status === 'not-in' ? [] : all).filter((s) => !shift || s.shift_name === shift);
+  const sessions = (filter?.kinds ? all.filter((s) => filter.kinds!.includes(kindFor(s))) : status === 'not-in' ? [] : all).filter((s) => !shift || s.shift_name === shift);
   const sel = all.find((s) => s.id === selected) ?? null;
   // Rostered today with no session at all: nothing to put on the map, but they belong on the list.
   const withSession = new Set(all.map((s) => `${s.employee_id}|${s.shift_name}`));
@@ -62,6 +92,7 @@ export default function LiveMapPage() {
     const p = new URLSearchParams(window.location.search);
     setWanted(p.get('employee'));
     if (p.get('workplaceId')) setWorkplaceId(p.get('workplaceId')!);
+    if (STATUS_FILTERS.some((f) => f.value === p.get('status'))) setStatus(p.get('status')!);
   }, []);
   useEffect(() => {
     if (!wanted || !live.data) return;
@@ -73,7 +104,8 @@ export default function LiveMapPage() {
   const open = all.filter((s) => s.is_open);
   const counts = {
     live: open.filter((s) => s.last_location_at && !s.is_stale).length,
-    stale: open.filter((s) => s.is_stale || !s.last_location_at).length,
+    lastKnown: open.filter((s) => s.last_location_at && s.is_stale).length,
+    waiting: open.filter((s) => !s.last_location_at).length,
   };
 
   return (
@@ -82,7 +114,7 @@ export default function LiveMapPage() {
         title="Live map"
         description={
           live.error ? <span className="text-red-700">Live positions could not be loaded.</span> : <span className="tabular">
-            {open.length} on shift · <span className="text-teal-700">{counts.live} live</span> · {counts.stale} stale or no location · {notIn.length} not checked in
+            {open.length} on shift · <span className="text-teal-700">{counts.live} live</span> · {counts.lastKnown} last known · {counts.waiting} no location yet · {overview.error ? 'not-checked-in count unavailable' : `${notIn.length} not checked in`}
           </span>
         }
         actions={
@@ -120,7 +152,9 @@ export default function LiveMapPage() {
       {conn !== 'live' && <Callout tone="warning" className="mb-4">Real-time connection lost — reconnecting. The map refreshes every 30 s meanwhile.</Callout>}
       <div className={cx('grid items-start gap-5', panel && 'lg:grid-cols-[minmax(0,1fr)_minmax(20rem,27%)]')}>
         <section aria-label="Map" className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-card lg:sticky lg:top-[5.5rem]">
-          {live.isLoading || wps.isLoading ? (
+          {wps.error ? (
+            <ErrorState error={wps.error} onRetry={() => wps.refetch()} />
+          ) : live.isLoading || wps.isLoading ? (
             <div className="h-[calc(100dvh-15rem)] min-h-[380px] animate-pulse bg-gray-100" />
           ) : (
             <WorkforceMap sessions={sessions} workplaces={workplaces} selected={selected} onSelect={(id) => { setSelected(id); setPanel(true); }} className="h-[calc(100dvh-15rem)] max-h-[860px] min-h-[380px] w-full" />
@@ -135,13 +169,16 @@ export default function LiveMapPage() {
             <SessionDetails s={sel} now={now} onBack={() => setSelected(null)} onOpenEmployee={setDrawer} />
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
-                <h2 className="text-title font-semibold text-navy-900">People on shift</h2>
-                <span className="tabular text-body-sm text-gray-500">{open.length} open</span>
+              <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3 py-2.5">
+                <Tabs variant="segmented" label="Panel" value={side} onChange={setSide} tabs={[{ value: 'people', label: 'People', count: open.length }, { value: 'places', label: 'Workplaces', count: workplaces.length }]} />
               </div>
-              <QueryState query={live}>
-                {() => <PeopleList grouped sessions={sessions} notIn={showNotIn ? notIn : []} selected={selected} onSelect={(id) => { setSelected(id); setPanel(true); }} onOpenEmployee={setDrawer} now={now} className="max-h-[calc(100dvh-14rem)] min-h-40" />}
-              </QueryState>
+              {side === 'people' ? (
+                <QueryState query={live}>
+                  {() => <PeopleList grouped sessions={sessions} notIn={showNotIn ? notIn : []} selected={selected} onSelect={(id) => { setSelected(id); setPanel(true); }} onOpenEmployee={setDrawer} now={now} className="max-h-[calc(100dvh-14rem)] min-h-40" />}
+                </QueryState>
+              ) : (
+                <WorkplaceList workplaces={workplaces} roster={overview.data?.roster ?? []} open={open} onPick={(id) => { setWorkplaceId(id); setSide('people'); }} />
+              )}
             </>
           )}
         </section>

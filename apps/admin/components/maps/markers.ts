@@ -5,7 +5,7 @@ import { markerKind, type MarkerKind, type SessionState } from '@geoattend/share
  *  - `body`: navy = on shift as expected, orange = needs attention, hollow = no fresh position
  *    (stale, unavailable or shift ended — the marker is where the phone last reported);
  *  - `color`: the small status dot, the semantic attendance / location state.
- * The selected marker gets a brand-orange ring. Labels always carry the meaning too.
+ * The selected marker gets a navy ring. Labels always carry the meaning too.
  */
 export type MarkerBody = 'normal' | 'attention' | 'hollow';
 export const MARKER_STYLE: Record<MarkerKind, { color: string; label: string; body: MarkerBody; hollow?: boolean }> = {
@@ -26,6 +26,21 @@ export const BODY_STYLE: Record<MarkerBody, { fill: string; border: string; text
   attention: { fill: '#b45309', border: '#ffffff', text: '#ffffff', label: 'Needs attention' },
   hollow: { fill: '#ffffff', border: '#94a3b8', text: '#4e5d71', label: 'Last known position' },
 };
+
+/**
+ * The one definition of what each kind means to a person reading the map: the legend, the status
+ * filter and the people list all use it, so they can never disagree about who is inside the zone.
+ * Order is urgency for an operator.
+ */
+export const LOCATION_GROUPS: Array<{ key: string; filter: string; label: string; kinds: MarkerKind[] }> = [
+  { key: 'outside', filter: 'Outside the zone', label: 'Outside the permitted area', kinds: ['away', 'prolonged'] },
+  { key: 'unavailable', filter: '', label: 'Location unavailable', kinds: ['interrupted'] },
+  { key: 'stale', filter: '', label: 'Last known location', kinds: ['stale'] },
+  { key: 'arriving', filter: 'Not yet on site', label: 'On shift, not yet on site', kinds: ['arriving', 'review'] },
+  { key: 'onsite', filter: 'Inside the zone', label: 'On site', kinds: ['present', 'break'] },
+  { key: 'overtime', filter: 'On overtime', label: 'On overtime', kinds: ['overtime'] },
+  { key: 'ended', filter: 'Shift ended', label: 'Shift ended', kinds: ['ended'] },
+];
 
 export function kindFor(s: { state: string; is_stale: boolean }): MarkerKind {
   return markerKind(s.state as SessionState, s.is_stale);

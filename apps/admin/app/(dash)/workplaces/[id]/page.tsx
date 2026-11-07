@@ -7,7 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import { get, patch, post, put } from '@/lib/api';
 import { useSupervisors } from '@/components/filters';
 import { ConfirmButton, Badge, Button, Card, cx, DemoTag, ErrorState, Field, InlineError, Input, PageHeader, Spinner, Textarea } from '@/components/ui';
-import { GeofenceEditorMap, MapSetupNotice, mapsConfigured, PlaceSearch } from '@/components/maps/google';
+import { GeofenceEditorMap, MapSetupNotice, mapsConfigured, PlaceSearch, useMapsRefused } from '@/components/maps/google';
 import { SchematicMap } from '@/components/maps/schematic';
 
 const TIMEZONES = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Kolkata'];
@@ -76,6 +76,8 @@ function SupervisorsCard({ workplaceId, current }: { workplaceId: string; curren
 }
 
 export default function WorkplaceEditorPage() {
+  const refused = useMapsRefused();
+  const mapsUsable = mapsConfigured && !refused;
   const { id } = useParams<{ id: string }>();
   const isNew = id === 'new';
   const router = useRouter();
@@ -142,7 +144,7 @@ export default function WorkplaceEditorPage() {
       />
       <div className="grid items-start gap-5 xl:grid-cols-5">
         <Card className="xl:sticky xl:top-[5.5rem] xl:col-span-3 xl:self-start" title="Location and geofence" description="Search, then drag the orange pin to the exact point. Drag the circle edge to resize.">
-          {mapsConfigured ? (
+          {mapsUsable ? (
             <div className="space-y-3">
               <PlaceSearch
                 onPlace={(p) => {
@@ -170,7 +172,7 @@ export default function WorkplaceEditorPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              <MapSetupNotice />
+              <MapSetupNotice refused={refused} />
               <SchematicMap center={center} radiusM={f.radiusM} height={300} />
             </div>
           )}
@@ -249,7 +251,7 @@ export default function WorkplaceEditorPage() {
                 <Textarea value={f.reason} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. Marker moved to the main gate" />
               </Field>
             )}
-            {isNew && !placed && mapsConfigured && <p className="text-xs text-amber-700">Search for an address or click the map to place the workplace.</p>}
+            {isNew && !placed && mapsUsable && <p className="text-xs text-amber-700">Search for an address or click the map to place the workplace.</p>}
             <InlineError error={save.error ?? toggle.error} />
             <div className="flex items-center gap-2">
               <Button type="submit" variant="primary" loading={save.isPending}>
