@@ -7,7 +7,7 @@ import { Camera, Check, ClipboardList, MapPin, X } from 'lucide-react';
 import { get, post, qs } from '@/lib/api';
 import { hrsNum, shortDay, daysAgoISO, fmtClock, fmtDate, fmtDateTime, minutes, todayISO } from '@/lib/format';
 import { useMe } from '@/lib/me';
-import { rowKeys, LinkButton, Badge, Button, Callout, Card, ConfirmButton, cx, DemoTag, Drawer, EmptyState, ErrorState, Field, InlineError, Input, KeyValue, PageHeader, QueryState, SearchInput, SimBadge, Table, Tabs, Td, Textarea, Th, rowLink } from '@/components/ui';
+import { rowKeys, LinkButton, Badge, Button, Callout, Card, ConfirmButton, CutNotice, cx, DemoTag, Drawer, EmptyState, ErrorState, Field, InlineError, Input, KeyValue, PageHeader, QueryState, SearchInput, SimBadge, Table, Tabs, Td, Textarea, Th, rowLink } from '@/components/ui';
 import { DateRangeSelect, defaultRange, WorkplaceSelect, type DateRangeValue } from '@/components/filters';
 import { ChartCard, Composition, DataTable, HBarList, Kpi, LineChart, SERIES_COLORS, StatStrip, StatStripSkeleton } from '@/components/charts';
 
@@ -337,6 +337,7 @@ export default function OvertimePage() {
             </Table>
           )}
         </QueryState>
+        <CutNotice shown={list.data?.length ?? 0} cap={1000} noun="entries" />
       </section>
 
       <OvertimeAnalytics workplaceId={workplaceId} />

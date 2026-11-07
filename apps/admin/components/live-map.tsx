@@ -222,8 +222,8 @@ function Markers({ located, selected, onSelect }: { located: any[]; selected: st
 
 /** The states people scan for. Each says only what is known; the exact state is in the marker's tooltip and the side panel. */
 const LEGEND: Array<{ label: string; body: keyof typeof BODY_STYLE; dot?: string; hint: string }> = [
-  { label: 'Inside the zone', body: 'normal', dot: MARKER_STYLE.present.color, hint: 'A fresh position, verified inside the geofence' },
-  { label: 'On break', body: 'normal', dot: MARKER_STYLE.break.color, hint: 'On a declared break' },
+  { label: 'On site', body: 'normal', dot: MARKER_STYLE.present.color, hint: 'Present at the workplace. A single reading outside is not acted on until it is confirmed.' },
+  { label: 'On break', body: 'normal', dot: MARKER_STYLE.break.color, hint: 'On a declared break, which may be taken off-site' },
   { label: 'Not yet on site', body: 'normal', dot: MARKER_STYLE.arriving.color, hint: 'On shift, not verified inside the geofence yet' },
   { label: 'On overtime', body: 'normal', dot: MARKER_STYLE.overtime.color, hint: 'Overtime may be worked off-site, so this says nothing about the zone' },
   { label: 'Needs attention', body: 'attention', dot: MARKER_STYLE.away.color, hint: 'Away from the geofence, prolonged absence or manual review' },

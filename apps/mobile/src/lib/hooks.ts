@@ -25,8 +25,6 @@ export function useStatus(opts: { poll?: boolean } = {}) {
       return r.status && r.status.tracking.shouldTrack ? r.status : null;
     },
     refetchInterval: opts.poll ? 15_000 : false,
-    // This poll also reconciles tracking and flushes queued locations: focus must not pause it.
-    refetchIntervalInBackground: !!opts.poll,
     staleTime: 5_000,
   });
 }

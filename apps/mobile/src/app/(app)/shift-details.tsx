@@ -1,3 +1,4 @@
+import { attendanceStatus } from '../../lib/attendance-status';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Banner, Body, Button, Card, ErrorState, H2, Loading, Muted, Row, Screen } from '../../components/ui';
 import { errorMessage } from '../../lib/api/client';
@@ -53,7 +54,7 @@ export default function ShiftDetailsScreen() {
             <Row label="Ends" value={fmtTime(cur.endsAt)} />
             <Row label="Tracking allowed" value={`${fmtTime(cur.windowOpensAt)}–${fmtTime(cur.windowClosesAt)}`} />
             <Row label="Status" value={cur.completed ? 'Completed' : open ? open.session.stateLabel : 'Not started'} strong />
-            {open?.attendance ? <Row label="Attendance recorded" value={fmtTime(open.attendance.recordedAt)} /> : null}
+            {open?.attendance ? <Row label="Checked in" value={`${fmtTime(open.attendance.recordedAt)} · ${attendanceStatus(open.attendance.verificationStatus).label}`} /> : null}
           </>
         ) : (
           <Muted>The shift window is not open right now.</Muted>

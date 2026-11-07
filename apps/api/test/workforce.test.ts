@@ -327,6 +327,7 @@ describe('attendance totals, CSV exports and scope', () => {
     expect(o.kpis.activeWorkspaces).toBe(2);
     expect(o.hoursByDay.reduce((n: number, d: any) => n + d.worked, 0)).toBe(o.kpis.totalMinutes);
     expect(o.byWorkspace.reduce((n: number, w: any) => n + w.totalMinutes, 0)).toBe(o.kpis.totalMinutes);
+    expect(o.byWorkspace.reduce((n: number, w: any) => n + w.expected, 0)).toBe(o.summary.expected);
     expect(o.kpis.incomplete).toBe(1);
     expect(o.attention.missingCheckout[0]).toMatchObject({ name: 'Cara B2', date: d3 });
     expect(o.supervisors.map((s: any) => s.name)).toEqual(['Sam Supervisor']);

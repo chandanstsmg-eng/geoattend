@@ -187,7 +187,7 @@ function Analytics({ params, onSupervisor }: { params: Filters; onSupervisor: (i
   const ots = d.overtimeStatus;
   // Per-day series behind the sparklines (same days as the charts below).
   const sparkRate = trend.filter((t: any) => t.expected > 0).map((t: any) => t.rate);
-  const sparkHours = d.hoursByDay.map((x: any) => (x.worked ?? 0) + (x.overtime ?? 0));
+  const sparkHours = d.hoursByDay.map((x: any) => x.worked ?? 0);
   const sparkOt = d.hoursByDay.map((x: any) => x.overtime ?? 0);
   const sparkLate = d.trend.map((t: any) => t.late);
   return (

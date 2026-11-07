@@ -27,7 +27,7 @@ const STATUS_FILTERS: Array<{ value: string; label: string; kinds?: string[] }> 
 ];
 
 /** Who belongs where today: each workplace's roster against who is on shift there now. */
-function WorkplaceList({ workplaces, roster, open, onPick }: { workplaces: any[]; roster: any[]; open: any[]; onPick: (id: string) => void }) {
+function WorkplaceList({ workplaces, roster, rosterKnown, open, onPick }: { workplaces: any[]; roster: any[]; rosterKnown: boolean; open: any[]; onPick: (id: string) => void }) {
   return (
     <ul className="max-h-[calc(100dvh-14rem)] min-h-40 divide-y divide-gray-100 overflow-y-auto">
       {workplaces.map((w) => {
@@ -39,7 +39,7 @@ function WorkplaceList({ workplaces, roster, open, onPick }: { workplaces: any[]
             <button type="button" onClick={() => onPick(w.id)} className="block w-full px-4 py-3 text-left text-sm hover:bg-gray-50">
               <span className="flex items-baseline justify-between gap-2">
                 <span className="truncate font-semibold text-gray-900">{w.name}</span>
-                <span className="tabular shrink-0 text-body-sm text-gray-600">{here.length} of {rostered} on shift</span>
+                <span className="tabular shrink-0 text-body-sm text-gray-600">{rosterKnown ? `${here.length} of ${rostered}` : here.length} on shift</span>
               </span>
               <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                 <span className="tabular">{Math.round(w.radius_m ?? w.radiusM ?? 0)} m radius</span>
@@ -77,7 +77,7 @@ export default function LiveMapPage() {
   const filter = STATUS_FILTERS.find((f) => f.value === status);
   const all: any[] = live.data?.sessions ?? [];
   const shifts = [...new Set(all.map((s) => s.shift_name).filter(Boolean))].sort();
-  const sessions = (filter?.kinds ? all.filter((s) => filter.kinds!.includes(kindFor(s))) : status === 'not-in' ? [] : all).filter((s) => !shift || s.shift_name === shift);
+  const sessions = (filter?.kinds ? all.filter((s) => filter.kinds!.includes(kindFor(s)) || (status === 'silent' && s.is_open && !s.last_location_at)) : status === 'not-in' ? [] : all).filter((s) => !shift || s.shift_name === shift);
   const sel = all.find((s) => s.id === selected) ?? null;
   // Rostered today with no session at all: nothing to put on the map, but they belong on the list.
   const withSession = new Set(all.map((s) => `${s.employee_id}|${s.shift_name}`));
@@ -177,7 +177,7 @@ export default function LiveMapPage() {
                   {() => <PeopleList grouped sessions={sessions} notIn={showNotIn ? notIn : []} selected={selected} onSelect={(id) => { setSelected(id); setPanel(true); }} onOpenEmployee={setDrawer} now={now} className="max-h-[calc(100dvh-14rem)] min-h-40" />}
                 </QueryState>
               ) : (
-                <WorkplaceList workplaces={workplaces} roster={overview.data?.roster ?? []} open={open} onPick={(id) => { setWorkplaceId(id); setSide('people'); }} />
+                <WorkplaceList workplaces={workplaces} roster={overview.data?.roster ?? []} rosterKnown={!!overview.data} open={open} onPick={(id) => { setWorkplaceId(id); setSide('people'); }} />
               )}
             </>
           )}

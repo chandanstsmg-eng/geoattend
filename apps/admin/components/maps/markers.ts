@@ -28,8 +28,10 @@ export const BODY_STYLE: Record<MarkerBody, { fill: string; border: string; text
 };
 
 /**
- * The one definition of what each kind means to a person reading the map: the legend, the status
- * filter and the people list all use it, so they can never disagree about who is inside the zone.
+ * The one definition of what each group of kinds means, used by the status filter, the people list
+ * and the overview tiles, so a tile's number is what the map shows. The legend in live-map.tsx
+ * follows the same words. "On site" is the session's state: someone on a declared break may have
+ * stepped out, and a single reading outside is not acted on until it is confirmed.
  * Order is urgency for an operator.
  */
 export const LOCATION_GROUPS: Array<{ key: string; filter: string; label: string; kinds: MarkerKind[] }> = [
@@ -37,7 +39,7 @@ export const LOCATION_GROUPS: Array<{ key: string; filter: string; label: string
   { key: 'unavailable', filter: '', label: 'Location unavailable', kinds: ['interrupted'] },
   { key: 'stale', filter: '', label: 'Last known location', kinds: ['stale'] },
   { key: 'arriving', filter: 'Not yet on site', label: 'On shift, not yet on site', kinds: ['arriving', 'review'] },
-  { key: 'onsite', filter: 'Inside the zone', label: 'On site', kinds: ['present', 'break'] },
+  { key: 'onsite', filter: 'On site or on a break', label: 'On site', kinds: ['present', 'break'] },
   { key: 'overtime', filter: 'On overtime', label: 'On overtime', kinds: ['overtime'] },
   { key: 'ended', filter: 'Shift ended', label: 'Shift ended', kinds: ['ended'] },
 ];

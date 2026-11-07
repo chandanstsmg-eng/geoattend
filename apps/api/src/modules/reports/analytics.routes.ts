@@ -178,6 +178,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     if (date === today) todayRows = rows;
     for (const r of rows) {
       if (r.on_leave || r.holiday || isPending(r)) continue;
+      // As in dayOutcome: today, a shift that has not started has no outcome yet, so it is not missed.
+      if (date >= today && !r.attendance_id && !r.no_show && !r.ended_at) continue;
       inc(expectedByWp, r.workplace_id);
       if (r.attendance_id) inc(presentByWp, r.workplace_id);
       if (r.is_late) inc(lateByWp, r.workplace_id);

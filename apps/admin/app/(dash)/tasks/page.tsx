@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Camera, Check, MapPin, Plus, RotateCcw } from 'lucide-react';
 import { get, post, qs } from '@/lib/api';
 import { ago, fmtDate, fmtDateTime, metres, todayISO } from '@/lib/format';
-import { rowKeys, Badge, Button, Card, Drawer, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, rowLink, Table, Tabs, Td, Textarea, Th } from '@/components/ui';
+import { rowKeys, Badge, Button, Card, CutNotice, Drawer, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, rowLink, Table, Tabs, Td, Textarea, Th } from '@/components/ui';
 import { useEmployees } from '@/components/filters';
 
 type Status = 'SUBMITTED' | 'OPEN' | 'REOPENED' | 'APPROVED' | 'ALL';
@@ -48,6 +48,7 @@ export default function TasksPage() {
             </Table>
           )}
         </QueryState>
+        <CutNotice shown={list.data?.length ?? 0} cap={200} noun="tasks" />
       </Card>
       <AssignTask open={creating} onClose={() => setCreating(false)} />
       <Drawer open={!!open} onOpenChange={(o) => !o && setOpen(null)} title="Task" subtitle="Proof of work and review">

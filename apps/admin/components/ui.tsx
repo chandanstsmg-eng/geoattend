@@ -299,11 +299,11 @@ export function SectionHeading({ title, description, actions, className }: { tit
 }
 
 /** Says so when a list stops short of everything that exists, so a cut list is never read as complete. */
-export function CutNotice({ shown, total, noun, children }: { shown: number; total?: number | null; noun: string; children?: ReactNode }) {
-  if (total == null || total <= shown) return null;
+export function CutNotice({ shown, cap, noun }: { shown: number; cap: number; noun: string }) {
+  if (shown < cap) return null;
   return (
     <p role="note" className="border-t border-gray-100 px-4 py-2.5 text-body-sm text-gray-600">
-      Showing the first {shown} of {total} {noun}. {children ?? 'Narrow the filters to see the rest.'}
+      Only the first {cap} {noun} are shown. There may be more; narrow the filters to see them.
     </p>
   );
 }
@@ -400,6 +400,7 @@ export function useKeyboardScroll<T extends HTMLElement>() {
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
     stop.current = () => ro.disconnect();
   }, []);
 }

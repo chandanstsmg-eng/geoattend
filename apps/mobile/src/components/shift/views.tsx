@@ -3,6 +3,7 @@
  * permission-required and manual-review). Text comes from the server's guidance;
  * the app never decides eligibility itself.
  */
+import { attendanceStatus } from '../../lib/attendance-status';
 import { useState } from 'react';
 import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
@@ -111,6 +112,7 @@ export function LiveTrackingView({ status }: { status: SessionStatus }) {
       <Hero status={status} />
       <Card>
         {status.attendance ? <Row label="Checked in" value={fmtTime(status.attendance.recordedAt)} strong /> : null}
+        {status.attendance && !attendanceStatus(status.attendance.verificationStatus).counted ? <Row label="Status" value={`${attendanceStatus(status.attendance.verificationStatus).label} · not counted yet`} /> : null}
         {status.attendance?.isLate ? <Row label="Late by" value={`${status.attendance.lateByMinutes} min`} /> : null}
         <Row label="Last update" value={status.session.lastLocationAt ? fmtAgo(status.session.lastLocationAt, now) : '—'} />
         {snap.queueLength ? <Row label="Waiting to send" value={String(snap.queueLength)} /> : null}

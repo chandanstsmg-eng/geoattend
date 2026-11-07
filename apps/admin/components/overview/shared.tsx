@@ -231,7 +231,7 @@ export function useOverview({ range, workplaceId, supervisorId = '', employeeId 
   const trend = useMemo(() => (d?.trend ?? []).map((t: any) => ({ ...t, rate: t.expected ? Math.round((t.present / t.expected) * 100) : 0 })), [d]);
   const download = (path: string) => window.location.assign(`/api/v1/reports/${path}${qs({ from: range.from, to: range.to, workplaceId, includeSimulated: String(sim.include) })}`);
   const refresh = () => { dash.refetch(); live.refetch(); today.refetch(); approvals.refetch(); };
-  return { dash, live, today, d, sessions, now, previous, trend, download, refresh, waiting: approvals.data?.total ?? 0, prevLabel: d?.previous ? `${fmtDate(d.previous.from)} – ${fmtDate(d.previous.to)}` : '' };
+  return { dash, live, today, d, sessions, now, previous, trend, download, refresh, waiting: approvals.data?.total ?? null, prevLabel: d?.previous ? `${fmtDate(d.previous.from)} – ${fmtDate(d.previous.to)}` : '' };
 }
 
 /** Same export for both roles; the API decides what each may download. */
@@ -330,15 +330,17 @@ export function LocationTable({ d, onOpen }: { d: any; onOpen: (w: any) => void 
       {rows.length === 0 ? (
         <EmptyState title="No active workplaces" />
       ) : (
-        <Table minWidth={820}>
+        <Table minWidth={980}>
           <thead>
             <tr>
               <Th>Workplace</Th>
-              <Th className="w-44">Checked in today</Th>
+              <Th className="w-44">On shift now</Th>
+              <Th className="text-right">Absent today</Th>
               <Th className="w-44">Attendance rate</Th>
               <Th className="text-right">Late</Th>
               <Th className="text-right">Hours</Th>
               <Th className="text-right">Overtime</Th>
+              <Th className="text-right" label="No location evidence">No GPS evidence</Th>
               <Th>Staffing</Th>
             </tr>
           </thead>
@@ -347,10 +349,12 @@ export function LocationTable({ d, onOpen }: { d: any; onOpen: (w: any) => void 
               <tr key={w.id} tabIndex={0} className={rowLink} onClick={() => onOpen(w)} onKeyDown={rowKeys(() => onOpen(w))} aria-label={`${w.name}, open hours by employee`}>
                 <Td className="font-medium text-gray-900">{w.name}<span className="block text-xs font-normal text-gray-500">{w.homeWorkers} based here</span></Td>
                 <Td><span className="tabular">{w.presentNow} of {w.assignedToday}</span>{w.minStaff != null && <span className="tabular text-xs text-gray-500"> · needs {w.minStaff}</span>}<Meter value={w.presentNow} max={Math.max(1, w.assignedToday)} /></Td>
+                <Td className={cx('text-right tabular', w.absentToday > 0 && 'font-semibold text-red-700')}>{w.absentToday || '—'}</Td>
                 <Td><span className="tabular">{pct(w.completionRate)}</span> <span className="tabular text-xs text-gray-500">{w.present}/{w.expected}</span><Meter value={w.completionRate ?? 0} tone={w.completionRate != null && w.completionRate < 0.8 ? 'warn' : 'navy'} /></Td>
                 <Td className="text-right tabular">{w.late || '—'}</Td>
                 <Td className="text-right tabular">{hrs(w.totalMinutes)}</Td>
                 <Td className="text-right tabular">{w.overtimeMinutes ? hrs(w.overtimeMinutes) : '—'}</Td>
+                <Td className="text-right tabular text-gray-600">{w.noEvidenceMinutes ? hrs(w.noEvidenceMinutes) : '—'}</Td>
                 <Td><Badge dot tone={STATUS[w.status]!.tone}>{w.status === 'SHORT' ? `Short by ${w.shortage}` : STATUS[w.status]!.label}</Badge></Td>
               </tr>
             ))}

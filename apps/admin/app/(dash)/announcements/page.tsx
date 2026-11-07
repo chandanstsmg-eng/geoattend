@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, Megaphone, Pencil, Pin, PinOff, Plus, Send } from 'lucide-react';
 import { get, patch, post, qs } from '@/lib/api';
 import { ago, fmtDateTime } from '@/lib/format';
-import { Badge, Button, Callout, ConfirmButton, cx, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, SearchInput, Select, Tabs, Textarea, Toolbar } from '@/components/ui';
+import { Badge, Button, Callout, ConfirmButton, CutNotice, cx, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, SearchInput, Select, Tabs, Textarea, Toolbar } from '@/components/ui';
 import { WorkplaceSelect, useWorkplaces } from '@/components/filters';
 import { useMe } from '@/lib/me';
 import { useDebounced } from '@/lib/use-debounced';
@@ -171,6 +171,7 @@ export default function AnnouncementsPage() {
             </ul>
           )}
         </QueryState>
+        <CutNotice shown={list.data?.length ?? 0} cap={200} noun="announcements" />
       </section>
 
       <Modal open={compose} onOpenChange={setCompose} title="New announcement" description="Workers see it in their app straight away.">

@@ -8,7 +8,7 @@ import { del, get, post, qs } from '@/lib/api';
 import { useWorkplaces } from '@/components/filters';
 import { useMe } from '@/lib/me';
 import { ago, fmtDate, todayISO } from '@/lib/format';
-import { Badge, Button, Card, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, Select, Table, Tabs, Td, Textarea, Th } from '@/components/ui';
+import { Badge, Button, Card, CutNotice, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, Select, Table, Tabs, Td, Textarea, Th } from '@/components/ui';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 
 type Status = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'ALL';
@@ -121,6 +121,7 @@ export default function LeavePage() {
             </Table>
           )}
         </QueryState>
+        <CutNotice shown={list.data?.length ?? 0} cap={200} noun="leave requests" />
       </Card>
 
       <div className="mt-6">

@@ -7,6 +7,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { qs } from '@/lib/api';
+import { kindFor } from './maps/markers';
 import { LinkButton, cx, ErrorState } from './ui';
 import type { RosterRow } from './attendance-board';
 
@@ -20,11 +21,14 @@ function running(r: RosterRow, now: number) {
   return end > start ? cur >= start && cur < end : cur >= start;
 }
 
-function stateOf(s: any): 'onSite' | 'outside' | 'silent' {
-  if (s.state === 'TRACKING_INTERRUPTED' || s.state === 'TRACKING_PERMISSION_REQUIRED' || s.is_stale || !s.last_location_at) return 'silent';
-  // Overtime may be worked off-site, so it counts by where the phone is, like everyone else.
-  if (s.state === 'ON_BREAK' || s.last_classification === 'INSIDE') return 'onSite';
-  return 'outside';
+/** By the same marker kinds as the map's filters, so a tile's number is what the map shows when it is opened. */
+function stateOf(s: any): 'onSite' | 'outside' | 'silent' | 'other' {
+  if (!s.last_location_at) return 'silent';
+  const kind = kindFor(s);
+  if (kind === 'present' || kind === 'break') return 'onSite';
+  if (kind === 'away' || kind === 'prolonged') return 'outside';
+  if (kind === 'interrupted' || kind === 'stale') return 'silent';
+  return 'other'; // on the way, in review or on overtime: where they are says nothing about a problem
 }
 
 function Cell({ label, value, hint, tone, href, onClick }: { label: string; value: number; hint: string; tone?: 'good' | 'warn' | 'bad' | 'muted'; href?: string; onClick?: () => void }) {
@@ -47,7 +51,7 @@ export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotAr
   if (error) return <section className="rounded-lg border border-gray-200 bg-white shadow-card"><ErrorState error={error} onRetry={onRetry} /></section>;
   if (loading) return <div aria-busy className="h-[132px] animate-pulse rounded-lg border border-gray-200 bg-white" />;
 
-  const n = { onSite: 0, outside: 0, silent: 0 };
+  const n = { onSite: 0, outside: 0, silent: 0, other: 0 };
   for (const s of sessions) n[stateOf(s)]++;
   const notArrived = rows.filter((r) => running(r, now) && !r.attendance_id && !r.session_id && !r.on_leave && !r.holiday).length;
   const expected = sessions.length + notArrived;
@@ -71,6 +75,7 @@ export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotAr
     { key: 'site', value: n.onSite, cls: 'bg-teal-600' },
     { key: 'out', value: n.outside, cls: 'bg-amber-500' },
     { key: 'silent', value: n.silent, cls: 'bg-gray-400' },
+    { key: 'other', value: n.other, cls: 'bg-primary-500' },
     { key: 'missing', value: notArrived, cls: 'bg-red-600' },
   ].filter((p) => p.value > 0);
 
@@ -85,9 +90,10 @@ export function RightNow({ sessions, rows, now, loading, error, onRetry, onNotAr
         <div className="mt-3 flex h-2 gap-0.5 overflow-hidden rounded-full" aria-hidden>
           {parts.map((p) => <span key={p.key} className={p.cls} style={{ flexGrow: p.value, flexBasis: 0 }} />)}
         </div>
+        {n.other > 0 && <p className="mt-1.5 text-xs text-gray-500">{n.other} on overtime, in review or not yet on site</p>}
       </div>
       <div className="grid grid-cols-2 gap-px border-t border-gray-200 bg-gray-200 sm:grid-cols-4 xl:border-l xl:border-t-0">
-        <Cell label="On site" value={n.onSite} hint="inside the zone, or on a break" tone="good" href={mapHref('inside')} />
+        <Cell label="On site" value={n.onSite} hint="present, or on a break" tone="good" href={mapHref('inside')} />
         <Cell label="Outside" value={n.outside} hint="away from the zone" tone="warn" href={mapHref('outside')} />
         <Cell label="Phone silent" value={n.silent} hint="no fresh location" tone="muted" href={mapHref('silent')} />
         <Cell label="Not arrived" value={notArrived} hint="shift started, no check-in" tone="bad" onClick={onNotArrived} />

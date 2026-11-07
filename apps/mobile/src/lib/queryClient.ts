@@ -2,9 +2,12 @@ import { AppState } from 'react-native';
 import { focusManager, QueryClient } from '@tanstack/react-query';
 import { ApiError } from './api/client';
 
-// Coming back to the app counts as focus, so Home is fresh after the phone was put away.
-focusManager.setEventListener((handle) => {
-  const sub = AppState.addEventListener('change', (state) => handle(state === 'active'));
+// Coming back to the app refreshes what is stale. The app is never reported as unfocused: react-query
+// would then pause a failed query until it returned, and the tracking poll must keep running behind the lock screen.
+focusManager.setEventListener(() => {
+  const sub = AppState.addEventListener('change', (state) => {
+    if (state === 'active') focusManager.onFocus();
+  });
   return () => sub.remove();
 });
 

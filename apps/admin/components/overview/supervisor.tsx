@@ -2,7 +2,8 @@
 /**
  * The supervisor's overview: their people and their workplaces, nothing else. Every figure is scoped
  * by the API to the sites they supervise, so this page cannot show anyone else's employees whatever
- * is selected. Filtering by employee, workplace and date narrows every section together.
+ * is selected. Filtering by employee, workplace and date narrows the hours, attendance, charts and
+ * lists together. Approvals and the attention counts stay for the whole team, and say so.
  */
 import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
@@ -14,7 +15,7 @@ import { Button, ErrorState, LinkButton, PageHeader, SectionHeading, WhenVisible
 import { DateRangeSelect, defaultRange, EmployeeSelect, WorkplaceSelect, type DateRangeValue } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 import type { BoardTab, RosterRow } from '@/components/attendance-board';
-import { ChartCard, HBarList, Kpi, pctDelta, SERIES_COLORS, StatStrip, StatStripSkeleton } from '@/components/charts';
+import { absDelta, ChartCard, HBarList, Kpi, pctDelta, SERIES_COLORS, StatStrip, StatStripSkeleton } from '@/components/charts';
 import { RightNow } from '@/components/right-now';
 import { ActivityFeed, AttendanceTrend, AttentionPanel, EmployeesByLocation, ExportMenu, LocationTable, RefreshButton, TodayBoard, useOverview, WorkforceToday, WorkplaceModal } from './shared';
 
@@ -39,7 +40,7 @@ export function SupervisorOverview() {
   const s = d?.summary;
   const b = d?.todayStatus?.breakdown;
   const filtered = !!(workplaceId || employeeId);
-  const exceptions = d ? d.attention.noShowToday.length + d.attention.lateToday.length + d.attention.locationErrors.length + d.attention.missingCheckout.length : 0;
+  const exceptions = d ? d.attention.noShowToday.length + d.attention.lateToday.length + d.attention.locationErrors.length : 0;
   const toBoard = (t: BoardTab) => {
     setTab(t);
     document.getElementById('today-board')?.scrollIntoView({ behavior: 'smooth' });
@@ -58,6 +59,7 @@ export function SupervisorOverview() {
             <EmployeeSelect value={employeeId} onChange={setEmployeeId} />
             <DateRangeSelect value={range} onChange={setRange} />
             {filtered && <Button variant="ghost" onClick={() => { setWorkplaceId(''); setEmployeeId(''); }}>Reset</Button>}
+            <ExportMenu range={range} workplaceId={workplaceId} download={o.download} />
             <RefreshButton busy={o.dash.isFetching} onClick={o.refresh} />
           </>
         }
@@ -78,15 +80,26 @@ export function SupervisorOverview() {
 
           <SectionHeading title="Your team" description="Only the employees and workplaces assigned to you" />
           {!k || !s || !b ? (
-            <StatStripSkeleton label="Your team" count={6} />
+            <StatStripSkeleton label="Your team" count={5} />
           ) : (
-            <StatStrip label="Your team" count={6}>
+            <StatStrip label="Your team" count={5}>
               <Kpi label="Assigned employees" value={k.totalWorkers} sub={`at ${k.activeWorkspaces} workplace${k.activeWorkspaces === 1 ? '' : 's'}`} href="/employees" />
               <Kpi label="Active now" value={k.checkedIn} sub={`${k.liveLocated} with a fresh location`} href={`/map${qs({ workplaceId })}`} title="Open shifts with attendance recorded" />
               <Kpi label="Today’s attendance" value={b.onTime + b.late} sub={`of ${k.scheduledToday} rostered`} onClick={() => toBoard('in')} />
-              <Kpi label="Pending approvals" value={o.waiting} tone={o.waiting ? 'warn' : undefined} sub={s.pending ? `${s.pending} records not counted yet` : 'waiting for you'} href="/approvals" />
+              <Kpi label="Pending approvals" value={o.waiting ?? '—'} tone={o.waiting ? 'warn' : undefined} sub={o.waiting == null ? 'could not be loaded' : employeeId ? 'whole team' : s.pending ? `${s.pending} records not counted yet` : 'waiting for you'} href="/approvals" />
+              <Kpi label="Exceptions today" value={exceptions} tone={exceptions ? 'warn' : undefined} sub={k.incomplete ? `late, no-show, no location · ${k.incomplete} missing check-out this period` : 'late, no-show, no location'} href="/attendance" />
+            </StatStrip>
+          )}
+
+          <SectionHeading title="This period" description={d ? `Compared with ${prevLabel || 'the previous period'}` : undefined} />
+          {!s ? (
+            <StatStripSkeleton label="This period" count={4} />
+          ) : (
+            <StatStrip label="This period" count={4}>
+              <Kpi label="Attendance rate" value={s.attendanceRate == null ? '—' : Math.round(s.attendanceRate * 100)} unit={s.attendanceRate == null ? undefined : '%'} delta={p && s.attendanceRate != null ? absDelta(s.attendanceRate * 100, p.attendanceRate * 100, 'up', ' pts', `Previous period ${prevLabel}`) : null} sub={`${s.present} of ${s.expected} shifts`} href="/reports" />
               <Kpi label="Hours worked" value={(s.totalMinutes / 60).toFixed(s.totalMinutes >= 6000 ? 0 : 1)} unit="h" delta={p ? pctDelta(s.totalMinutes, p.totalMinutes, 'up', `Previous period ${prevLabel}`) : null} sub={s.overtimeMinutes ? `${(s.overtimeMinutes / 60).toFixed(1)} h overtime` : 'in this period'} href="/reports" />
-              <Kpi label="Exceptions" value={exceptions} tone={exceptions ? 'warn' : undefined} sub="late, no-show, no location, no check-out" href="/attendance" />
+              <Kpi label="Late arrivals" value={s.late} tone={s.late ? 'warn' : undefined} delta={p ? absDelta(s.late, p.late, 'down', '', `Previous period ${prevLabel}`) : null} sub={s.present ? `${Math.round((s.late / s.present) * 100)}% of check-ins` : 'in this period'} href="/attendance?late=true" />
+              <Kpi label="Absences" value={s.absent} tone={s.absent ? 'bad' : undefined} delta={p ? absDelta(s.absent, p.absent, 'down', '', `Previous period ${prevLabel}`) : null} sub="rostered shifts missed" href="/attendance" />
             </StatStrip>
           )}
 
