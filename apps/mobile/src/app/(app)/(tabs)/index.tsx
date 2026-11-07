@@ -3,7 +3,8 @@ import { router, useFocusEffect } from 'expo-router';
 import { runPhoneChecks } from '../../../lib/phone-health';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../../lib/api/client';
-import type { Earnings, Task } from '../../../lib/api/types';
+import type { AttendanceHistory, Earnings, Task } from '../../../lib/api/types';
+import { attendanceStatus, hoursMinutes, recordForToday } from '../../../lib/attendance-status';
 import { inr } from '../../../lib/money';
 import { qk } from '../../../lib/queryClient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -30,6 +31,7 @@ export default function HomeScreen() {
   const tasksToDo = (tasks.data ?? []).filter((t) => t.status === 'OPEN' || t.status === 'REOPENED').length;
   const messages = useQuery({ queryKey: ['me', 'messages'], queryFn: () => api<Array<{ read_at: string | null }>>('/broadcasts/mine') });
   const unreadMessages = (messages.data ?? []).filter((m) => !m.read_at).length;
+  const history = useQuery({ queryKey: qk.history, queryFn: () => api<AttendanceHistory>('/me/attendance?limit=60') });
   const [phoneIssues, setPhoneIssues] = useState<{ fail: number; warn: number } | null>(null);
   useFocusEffect(
     useCallback(() => {
@@ -41,10 +43,11 @@ export default function HomeScreen() {
       });
     }, []),
   );
-  const refreshing = assignment.isFetching || statusQ.isFetching;
+  // Only a pull shows the spinner: tying it to the 15-second poll made the screen flicker.
+  const [refreshing, setRefreshing] = useState(false);
   const refresh = () => {
-    void assignment.refetch();
-    void statusQ.refetch();
+    setRefreshing(true);
+    void Promise.allSettled([assignment.refetch(), statusQ.refetch(), tasks.refetch(), messages.refetch(), earnings.refetch(), history.refetch()]).finally(() => setRefreshing(false));
   };
 
   if (assignment.isPending) return <Loading label="Loading your assignment…" />;
@@ -52,6 +55,8 @@ export default function HomeScreen() {
     return (
       <Screen onRefresh={refresh} refreshing={refreshing}>
         <ErrorState message={errorMessage(assignment.error)} onRetry={refresh} />
+        {/* Help must not depend on a connection. The shift screen stays out of reach here: without the assignment it cannot apply the selfie rules. */}
+        <Button title="SOS — get help" variant="danger" onPress={() => router.push('/sos')} accessibilityHint="Opens emergency help" />
       </Screen>
     );
   }
@@ -122,6 +127,12 @@ export default function HomeScreen() {
           {snap.meta.stopped && Date.now() - Date.parse(snap.meta.stopped.at) < 12 * 3600_000 ? (
             <Banner tone="info" title="Tracking stopped" message={`${snap.meta.stopped.reason} · ${fmtTime(snap.meta.stopped.at)}`} />
           ) : null}
+          {!a.noticeAcknowledged ? (
+            <Banner tone="info" title="Accept the privacy notice" actionLabel="Open" onPress={() => router.push('/privacy')} />
+          ) : null}
+          {a.faceEnrollment?.required && !a.faceEnrollment.enrolled ? (
+            <Banner tone="info" title="Set up face photos" actionLabel="Start" onPress={() => router.push('/face-enroll')} />
+          ) : null}
           <Card tone="neutral">
             <Badge label="Off shift" />
             <H2>{startable ? 'Ready to start' : completedToday ? 'Shift completed' : 'No shift now'}</H2>
@@ -134,14 +145,10 @@ export default function HomeScreen() {
           </Card>
           {startable ? <Button title="Start shift" onPress={() => startShift(a, startable.id)} accessibilityHint="Explains location tracking, then starts your shift" /> : null}
           {!phoneIssues ? <Button title="Phone check" variant="ghost" onPress={() => router.push('/phone-check')} accessibilityHint="Checks location, GPS, battery and notification settings" /> : null}
-          {!a.noticeAcknowledged ? (
-            <Banner tone="info" title="Accept the privacy notice" actionLabel="Open" onPress={() => router.push('/privacy')} />
-          ) : null}
-          {a.faceEnrollment?.required && !a.faceEnrollment.enrolled ? (
-            <Banner tone="info" title="Set up face photos" actionLabel="Start" onPress={() => router.push('/face-enroll')} />
-          ) : null}
         </>
       )}
+
+      <TodayCard records={history.data?.attendance ?? []} />
 
       {a.workplace ? (
         <Card>
@@ -160,16 +167,10 @@ export default function HomeScreen() {
         </Card>
       )}
 
-      {tasks.data && tasks.data.length ? (
-        <Pressable onPress={() => router.push('/tasks')} accessibilityRole="button" accessibilityLabel="My tasks" style={({ pressed }) => pressed && { opacity: 0.85 }}>
-          <Card tone={tasksToDo ? 'warning' : undefined}>
-            <View style={st.rowBetween}>
-              <H2>{tasksToDo ? `${tasksToDo} task${tasksToDo > 1 ? 's' : ''} to do` : 'Tasks'}</H2>
-              <Text style={st.chev}>›</Text>
-            </View>
-          </Card>
-        </Pressable>
-      ) : null}
+      <Card>
+        <LinkRow title="Announcements" note={unreadMessages ? `${unreadMessages} new` : undefined} onPress={() => router.push('/messages')} />
+        <LinkRow title="Tasks" note={tasksToDo ? `${tasksToDo} to do` : undefined} onPress={() => router.push('/tasks')} />
+      </Card>
 
       {earnings.data && (earnings.data.estimate || earnings.data.payslips.length) ? (
         <Pressable onPress={() => router.push('/earnings')} accessibilityRole="button" accessibilityLabel="My earnings" style={({ pressed }) => pressed && { opacity: 0.85 }}>
@@ -185,7 +186,7 @@ export default function HomeScreen() {
         </Pressable>
       ) : null}
 
-      {a.workplace && activeShifts[0] ? <MyRules shift={activeShifts[0]} radiusM={a.workplace.radiusM} /> : null}
+      {a.workplace && activeShifts[0] ? <MyRules shift={startable ?? upcoming ?? activeShifts[0]} radiusM={a.workplace.radiusM} /> : null}
 
       {activeShifts.length ? (
         <Card>
@@ -196,6 +197,36 @@ export default function HomeScreen() {
         </Card>
       ) : null}
     </Screen>
+  );
+}
+
+/** Today at a glance. Hidden until there is a record; a pending one says plainly that it does not count yet. */
+function TodayCard({ records }: { records: AttendanceHistory['attendance'] }) {
+  const r = recordForToday(records, localISODate());
+  if (!r) return null;
+  const v = attendanceStatus(r.verification_status);
+  return (
+    <Card tone={v.counted ? undefined : 'warning'}>
+      <View style={st.rowBetween}>
+        <H2>Today</H2>
+        <Badge label={v.label} tone={v.tone} />
+      </View>
+      <Row label="Checked in" value={fmtTime(r.recorded_at)} strong />
+      {r.worked_minutes != null ? <Row label={r.in_progress ? 'Worked so far' : 'Worked'} value={hoursMinutes(r.worked_minutes)} strong /> : null}
+      {r.pending_minutes != null ? <Muted>{hoursMinutes(r.pending_minutes)} waiting for your manager. Not counted yet.</Muted> : null}
+    </Card>
+  );
+}
+
+function LinkRow({ title, note, onPress }: { title: string; note?: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={note ? `${title}, ${note}` : title} style={({ pressed }) => [st.linkRow, pressed && { backgroundColor: colors.navySoft }]}>
+      <Text style={st.shiftName}>{title}</Text>
+      <View style={st.linkEnd}>
+        {note ? <Badge label={note} tone="warning" /> : null}
+        <Text style={st.chev}>›</Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -254,6 +285,8 @@ const st = StyleSheet.create({
   shiftName: { fontSize: font.md, fontWeight: '700', color: colors.text },
   chev: { fontSize: 24, color: colors.textFaint },
   money: { fontSize: 28, fontWeight: '800', color: colors.navy },
-  sos: { minWidth: 56, height: 40, borderRadius: 20, backgroundColor: colors.danger, alignItems: 'center', justifyContent: 'center', paddingHorizontal: space.md },
+  linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 52 },
+  linkEnd: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  sos: { minWidth: 64, height: 48, borderRadius: 24, backgroundColor: colors.danger, alignItems: 'center', justifyContent: 'center', paddingHorizontal: space.md },
   sosText: { color: colors.white, fontWeight: '900', fontSize: font.md, letterSpacing: 1 },
 });

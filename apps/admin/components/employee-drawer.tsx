@@ -61,7 +61,7 @@ function EmployeeDetail({ id }: { id: string }) {
   );
 }
 
-/** Roster entries with add / remove (owners: any workspace; supervisors: their own — the API checks). */
+/** Roster entries with add / remove (owners: any workplace; supervisors: their own — the API checks). */
 function RosterList({ e, onChanged }: { e: any; onChanged: () => void }) {
   const [adding, setAdding] = useState(false);
   const removeShift = useMutation({ meta: { success: 'Roster entry removed', toastError: true }, mutationFn: (assignmentId: string) => del(`/employees/${e.id}/shifts/${assignmentId}`), onSuccess: onChanged });
@@ -119,7 +119,7 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
     mutationFn: () => patch(`/employees/${e.id}`, { ...form, phone: form.phone || null, department: form.department || null, designation: form.designation || null, joinedOn: form.joinedOn || null, leftOn: form.leftOn || null }),
     onSuccess: onChanged,
   });
-  const assignWp = useMutation({ meta: { success: 'Workspace changed', toastError: true }, mutationFn: (workplaceId: string | null) => put(`/employees/${e.id}/workplace`, { workplaceId }), onSuccess: onChanged });
+  const assignWp = useMutation({ meta: { success: 'Workplace changed', toastError: true }, mutationFn: (workplaceId: string | null) => put(`/employees/${e.id}/workplace`, { workplaceId }), onSuccess: onChanged });
   const deactivate = useMutation({ meta: { success: 'Employee deactivated' }, mutationFn: () => post(`/employees/${e.id}/deactivate`, { reason }), onSuccess: () => { setReasonFor(null); setReason(''); onChanged(); } });
   const reactivate = useMutation({ meta: { success: 'Employee reactivated', toastError: true }, mutationFn: () => post(`/employees/${e.id}/reactivate`), onSuccess: onChanged });
   const resetPw = useMutation({ mutationFn: () => post(`/employees/${e.id}/reset-password`), onSuccess: (r: any) => setTempPw(r.temporaryPassword) });
@@ -152,9 +152,9 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
         </form>
       </Card>
 
-      <Card title="Workspace, supervisor & roster">
+      <Card title="Workplace, supervisor & roster">
         <div className="space-y-4">
-          <Field label="Home workspace" hint="Their usual site. Days elsewhere go on the roster below.">
+          <Field label="Home workplace" hint="Their usual site. Days elsewhere go on the roster below.">
             <Select value={e.workplace_id ?? ''} onChange={(ev) => assignWp.mutate(ev.target.value || null)} disabled={assignWp.isPending}>
               <option value="">— Not assigned —</option>
               {wps.data?.map((w: any) => (
@@ -163,7 +163,7 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
             </Select>
           </Field>
           <InlineError error={assignWp.error} />
-          <Field label="Supervisor" hint={e.workplace_id ? 'Supervisors of the home workspace.' : 'Choose a home workspace first.'}>
+          <Field label="Supervisor" hint={e.workplace_id ? 'Supervisors of the home workplace.' : 'Choose a home workplace first.'}>
             <Select value={e.supervisor_id ?? ''} onChange={(ev) => assignSup.mutate(ev.target.value || null)} disabled={assignSup.isPending || !e.workplace_id}>
               <option value="">— None —</option>
               {sups.data?.filter((s: any) => s.site_ids.includes(e.workplace_id)).map((s: any) => (
@@ -215,7 +215,7 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
   );
 }
 
-/** Supervisors see the profile read-only, roster their workers at their own workspaces, and manage phones. */
+/** Supervisors see the profile read-only, roster their workers at their own workplaces, and manage phones. */
 function SupervisorProfile({ e, onChanged }: { e: any; onChanged: () => void }) {
   return (
     <div className="space-y-5">
@@ -226,11 +226,11 @@ function SupervisorProfile({ e, onChanged }: { e: any; onChanged: () => void }) 
             ['Phone', e.phone ?? '—'],
             ['Department', e.department ?? '—'],
             ['Designation', e.designation ?? '—'],
-            ['Workspace', e.workplace_name ?? '—'],
+            ['Workplace', e.workplace_name ?? '—'],
             ['Supervisor', e.supervisor_name ?? '—'],
           ]}
         />
-        <p className="mt-2 text-xs text-gray-500">Profile, home workspace and pay are changed by the owner.</p>
+        <p className="mt-2 text-xs text-gray-500">Profile, home workplace and pay are changed by the owner.</p>
       </Card>
       <Card title="Roster">
         <RosterList e={e} onChanged={onChanged} />

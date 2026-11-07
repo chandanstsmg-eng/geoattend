@@ -40,8 +40,7 @@ import { LiveProvider, useLive } from '@/lib/live';
 import type { Me } from '@/lib/me';
 import { AwayDialog, isAway, useSetAway } from '@/components/away-control';
 import { SosBanner } from '@/components/sos-banner';
-import { cx, ErrorState, Menu, Spinner } from '@/components/ui';
-import { MapsProvider } from '@/components/maps/google';
+import { cx, EmptyState, ErrorState, Menu, Spinner } from '@/components/ui';
 import { Lockup, Mark } from '@/components/brand';
 
 type NavItem = { href: string; label: string; icon: typeof Bell; owner?: boolean };
@@ -61,7 +60,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: '/employees', label: 'Employees', icon: Users },
       { href: '/team', label: 'Supervisors', icon: UserCog, owner: true },
-      { href: '/workplaces', label: 'Workspaces', icon: Building2, owner: true },
+      { href: '/workplaces', label: 'Workplaces', icon: Building2, owner: true },
       { href: '/roster', label: 'Rosters', icon: CalendarRange },
       // Creating and editing shifts is owner-only; supervisors pick existing shifts in the roster.
       { href: '/shifts', label: 'Shifts', icon: CalendarClock, owner: true },
@@ -159,14 +158,14 @@ function FindEmployee() {
   };
   return (
     <form role="search" onSubmit={submit} className="relative hidden w-64 md:block">
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" aria-hidden />
       <input
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Find an employee…"
         aria-label="Find an employee by name, email or ID"
-        className="h-9 w-full rounded-md border border-gray-200 bg-gray-50 pl-8 pr-3 text-sm text-gray-900 placeholder:text-gray-400 hover:border-gray-300 focus:bg-white"
+        className="h-9 w-full rounded-md border border-gray-200 bg-gray-50 pl-8 pr-3 text-sm text-gray-900 placeholder:text-gray-500 hover:border-gray-300 focus:bg-white"
       />
     </form>
   );
@@ -198,7 +197,7 @@ function UserMenu({ me, isOwner, onAway, onSignOut }: { me: Me; isOwner: boolean
             <span className="block max-w-40 truncate text-body-sm font-semibold text-gray-900">{me.user.fullName}</span>
             <span className="block text-xs text-gray-500">{isOwner ? 'Owner' : 'Supervisor'}{away ? ' · away' : ''}</span>
           </span>
-          <ChevronDown className="hidden h-4 w-4 text-gray-400 md:block" aria-hidden />
+          <ChevronDown className="hidden h-4 w-4 text-gray-500 md:block" aria-hidden />
         </>
       }
       items={[
@@ -247,6 +246,8 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
   };
 
   const isOwner = me.access?.role !== 'SUPERVISOR';
+  // The API refuses these for supervisors; without this a typed address showed controls that fail on save.
+  const ownerPage = NAV.flatMap((g) => g.items).some((n) => n.owner && isActive(n.href, path));
   // Supervisors see day-to-day pages only (the API refuses the rest anyway).
   const groups = (me.demoMode ? [...NAV, { title: 'Demo', items: [{ href: '/demo', label: 'Demo simulator', icon: FlaskConical, owner: true }] }] : NAV)
     .map((g) => ({ ...g, items: g.items.filter((n) => (isOwner || !n.owner) && (n.href !== '/payroll' || me.features?.payroll)) }))
@@ -292,7 +293,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
           )}
         >
           {active && <span className={cx('absolute inset-y-1.5 w-[3px] rounded-full bg-navy-800', rail ? '-left-[3px]' : '-left-2')} aria-hidden />}
-          <Icon className={cx('h-[18px] w-[18px] shrink-0', active ? 'text-navy-700' : 'text-gray-400')} aria-hidden />
+          <Icon className={cx('h-[18px] w-[18px] shrink-0', active ? 'text-navy-700' : 'text-gray-500')} aria-hidden />
           {!rail && <span className="truncate">{label}</span>}
           {count &&
             (rail ? (
@@ -309,6 +310,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
 
   return (
     <div className={cx('min-h-dvh pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] print:pl-0', prefs.rail ? 'lg:pl-16' : 'lg:pl-60')}>
+      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-navy-800 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-white">Skip to content</a>
       <aside
         className={cx(
           'fixed inset-y-0 left-0 z-40 flex w-[min(17rem,85vw)] flex-col border-r border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] transition-[transform,width] duration-200 print:hidden lg:translate-x-0',
@@ -340,7 +342,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
                     aria-expanded={expanded}
                     aria-controls={id}
                     onClick={() => update({ ...prefs, closed: expanded ? [...prefs.closed, g.title] : prefs.closed.filter((t) => t !== g.title) })}
-                    className="flex w-full items-center justify-between rounded px-3 py-1 text-caption font-semibold uppercase tracking-wider text-gray-400 hover:text-gray-600"
+                    className="flex w-full items-center justify-between rounded px-3 py-1 text-caption font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800"
                   >
                     {g.title}
                     <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', !expanded && '-rotate-90')} aria-hidden />
@@ -417,7 +419,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
       </header>
       <SosBanner />
       {me.sampleData && <SampleBanner />}
-      <main className="mx-auto max-w-[1600px] px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-[1600px] outline-none px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{ownerPage && !isOwner ? <EmptyState title="Not available">This page is for company owners.</EmptyState> : children}</main>
       <AwayDialog open={awayOpen} onOpenChange={setAwayOpen} />
     </div>
   );
@@ -476,9 +478,7 @@ export default function DashLayout({ children }: { children: ReactNode }) {
   if (me.data.user.mustChangePassword) return <ChangePassword />;
   return (
     <LiveProvider>
-      <MapsProvider>
-        <Shell me={me.data}>{children}</Shell>
-      </MapsProvider>
+      <Shell me={me.data}>{children}</Shell>
     </LiveProvider>
   );
 }

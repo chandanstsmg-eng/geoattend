@@ -4,13 +4,36 @@
  * and picking coordinates only — attendance eligibility is decided on the
  * server with geodesic distance, never by what the map draws.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { APIProvider, AdvancedMarker, Map, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { MapPinOff } from 'lucide-react';
 
 export const MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 export const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID';
 export const mapsConfigured = MAPS_KEY.length > 0;
+
+/**
+ * Google calls gm_authFailure when it refuses the key (wrong address, billing, quota). Without this
+ * the page kept a grey "Oops" box; with it the same fallback as an unconfigured key takes over.
+ */
+let refused = false;
+const listeners = new Set<() => void>();
+if (typeof window !== 'undefined') {
+  (window as unknown as { gm_authFailure?: () => void }).gm_authFailure = () => {
+    refused = true;
+    listeners.forEach((l) => l());
+  };
+}
+export function useMapsRefused() {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    () => refused,
+    () => false,
+  );
+}
 
 export function MapsProvider({ children }: { children: ReactNode }) {
   if (!mapsConfigured) return <>{children}</>;
@@ -21,7 +44,14 @@ export function MapsProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function MapSetupNotice({ compact }: { compact?: boolean }) {
+export function MapSetupNotice({ compact, refused: wasRefused }: { compact?: boolean; refused?: boolean }) {
+  if (wasRefused)
+    return (
+      <div role="note" className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        <MapPinOff className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+        <p className="min-w-0 font-medium">Google Maps refused this site’s key, so positions are shown on a diagram instead.</p>
+      </div>
+    );
   return (
     <div role="note" className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
       <MapPinOff className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
@@ -165,7 +195,7 @@ export function GeofenceEditorMap({ value, radius, onChange, onRadiusChange, onA
       <AdvancedMarker
         position={value}
         draggable
-        title="Workspace centre — drag to adjust"
+        title="Workplace centre — drag to adjust"
         onDragEnd={(e) => {
           const ll = e.latLng;
           if (ll) set({ lat: ll.lat(), lng: ll.lng() });

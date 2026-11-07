@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ImageOff, Plus } from 'lucide-react';
@@ -26,10 +26,10 @@ function LateChip({ minutes: m }: { minutes: number }) {
 const INFO_FLAGS = new Set(['SIMULATED', 'BACKGROUND_LOCATION_UNAVAILABLE']);
 
 /** 32 px selfie; a placeholder when there is no viewable photo. */
-function Selfie({ url, name }: { url?: string; name: string }) {
-  if (!url) return <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-gray-400"><ImageOff className="h-3.5 w-3.5" /></span>;
+function Selfie({ url, name, onExpired }: { url?: string; name: string; onExpired: () => void }) {
+  if (!url) return <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gray-100 text-gray-500"><ImageOff className="h-3.5 w-3.5" /></span>;
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt={`Check-in photo of ${name}`} className="h-8 w-8 shrink-0 rounded-full border border-gray-200 object-cover" referrerPolicy="no-referrer" loading="lazy" />;
+  return <img src={url} alt={`Check-in photo of ${name}`} className="h-8 w-8 shrink-0 rounded-full border border-gray-200 object-cover" referrerPolicy="no-referrer" loading="lazy" onError={onExpired} />;
 }
 
 const REVIEW: Record<string, { tone: 'amber' | 'green' | 'red'; label: string }> = {
@@ -149,12 +149,15 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
   // One audited request per page for the thumbnails (signed links that expire shortly).
   const photoIds: string[] = (list.data?.items ?? []).filter((r: any) => r.photo_id && r.photo_status === 'ATTACHED' && !r.is_simulated).map((r: any) => r.id);
   const thumbs = useQuery({
-    queryKey: ['attendance', 'thumbs', photoIds],
+    queryKey: ['attendance-thumbs', photoIds],
     queryFn: () => post('/attendance/photo-thumbnails', { ids: photoIds }),
     enabled: photoIds.length > 0,
     staleTime: 4 * 60_000,
   });
   const thumbUrls: Record<string, string> = (thumbs.data as any)?.urls ?? {};
+  // Each request is audited, so at most one a minute, and only when a link has really failed.
+  const renewed = useRef(0);
+  const renewThumbs = () => { if (Date.now() - renewed.current > 60_000) { renewed.current = Date.now(); thumbs.refetch(); } };
 
   const sm = list.data?.summary;
   return (
@@ -194,7 +197,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
         </Select>
         {/* The detailed export is owner-only on the server. */}
         {isOwner && (
-          <LinkButton className="sm:ml-auto" href={`/api/v1/reports/attendance.csv${qs({ from: f.from, to: f.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: 'true' })}`} title="Download these records as CSV (includes simulated records, marked SIMULATED)" size="sm" variant="ghost"><Download className="h-4 w-4" aria-hidden /> Export CSV</LinkButton>
+          <LinkButton className="sm:ml-auto" href={`/api/v1/reports/attendance.csv${qs({ from: f.from, to: f.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: 'true' })}`} title="Every status in this date range, for the workplace and employee chosen. The other filters do not apply to the file. Simulated records are included and marked SIMULATED." size="sm" variant="ghost"><Download className="h-4 w-4" aria-hidden /> CSV, all statuses</LinkButton>
         )}
       </Toolbar>
       <QueryState query={list} isEmpty={(d: any) => d.items.length === 0} empty={<EmptyState title="No attendance records in this range">Widen the dates or clear a filter.</EmptyState>}>
@@ -223,7 +226,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
                       <Td className="whitespace-nowrap tabular">{fmtDate(r.shift_date)}</Td>
                       <Td>
                         <div className="flex items-center gap-2.5">
-                          <Selfie url={thumbUrls[r.id]} name={r.full_name} />
+                          <Selfie url={thumbUrls[r.id]} name={r.full_name} onExpired={renewThumbs} />
                           <div className="min-w-0">
                             <span className="flex flex-wrap items-center gap-1.5">
                               <span className="font-medium text-gray-900">{r.full_name}</span>
@@ -248,7 +251,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
                         ) : r.in_progress ? (
                           <span className="text-xs text-gray-500">On shift</span>
                         ) : (
-                          <span className="text-gray-400">—</span>
+                          <span className="text-gray-500">—</span>
                         )}
                       </Td>
                       <Td className="whitespace-nowrap text-right tabular text-gray-600">{r.break_minutes ? minutes(r.break_minutes) : '—'}</Td>
@@ -264,7 +267,7 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
                             <div className="text-xs text-amber-800">pending, not counted</div>
                           </>
                         ) : (
-                          <span className="text-gray-400">—</span>
+                          <span className="text-gray-500">—</span>
                         )}
                       </Td>
                       <Td className="whitespace-nowrap text-right tabular">
@@ -273,13 +276,13 @@ function Records({ employeeId, late, record }: { employeeId: string; late: strin
                         ) : r.overtime_status && r.overtime_status !== 'APPROVED' ? (
                           <span className="text-xs text-gray-500">{r.overtime_status === 'RUNNING' ? 'running' : r.overtime_status.toLowerCase()}</span>
                         ) : (
-                          <span className="text-gray-400">—</span>
+                          <span className="text-gray-500">—</span>
                         )}
                       </Td>
                       <Td><VerificationBadge status={r.verification_status} /></Td>
                       <Td className="tabular text-xs text-gray-600">
                         {r.evidence_distance_m != null ? (
-                          <span title={`Distance from the workspace centre at check-in; geofence radius ${r.radius_m_at_record} m`} className="inline-flex whitespace-nowrap rounded-full bg-navy-50 px-1.5 py-px font-medium text-navy-800">
+                          <span title={`Distance from the workplace centre at check-in; geofence radius ${r.radius_m_at_record} m`} className="inline-flex whitespace-nowrap rounded-full bg-navy-50 px-1.5 py-px font-medium text-navy-800">
                             {metres(r.evidence_distance_m)} · ±{Math.round(r.evidence_accuracy_m)} m
                           </span>
                         ) : (

@@ -93,7 +93,7 @@ function StatusCell({ r }: { r: RosterRow }) {
   );
 }
 
-export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }: { rows: RosterRow[]; tab: BoardTab; onTab: (t: BoardTab) => void; onEmployee: (id: string) => void; showWorkplace: boolean }) {
+export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace, pageSize = PAGE }: { rows: RosterRow[]; tab: BoardTab; onTab: (t: BoardTab) => void; onEmployee: (id: string) => void; showWorkplace: boolean; pageSize?: number }) {
   const [search, setSearch] = useState('');
   const [shiftId, setShiftId] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'status', dir: 'asc' });
@@ -114,7 +114,7 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
     const list = base.filter(FILTERS[tab]).sort(SORTERS[sort.key]);
     return sort.dir === 'desc' ? list.reverse() : list;
   }, [base, tab, sort]);
-  const page = visible.slice(offset, offset + PAGE);
+  const page = visible.slice(offset, offset + pageSize);
   const reset = <T,>(fn: (v: T) => void) => (v: T) => {
     setOffset(0);
     fn(v);
@@ -195,7 +195,7 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
                         {r.verification_status !== 'VERIFIED' && <VerificationBadge status={r.verification_status} />}
                       </div>
                     ) : (
-                      <span className="text-gray-400" aria-label="Not recorded">—</span>
+                      <span className="text-gray-500" aria-label="Not recorded">—</span>
                     )}
                   </Td>
                   <Td>
@@ -217,7 +217,7 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
                         <span className="text-xs text-amber-800">pending, not counted</span>
                       </div>
                     ) : (
-                      <span className="text-gray-400" aria-label="None">—</span>
+                      <span className="text-gray-500" aria-label="None">—</span>
                     )}
                   </Td>
                   <Td className="row-actions w-12 text-right">
@@ -237,7 +237,7 @@ export function AttendanceBoard({ rows, tab, onTab, onEmployee, showWorkplace }:
               ))}
             </tbody>
           </Table>
-          <Pagination offset={offset} limit={PAGE} total={visible.length} onChange={setOffset} noun="scheduled shift" />
+          <Pagination offset={offset} limit={pageSize} total={visible.length} onChange={setOffset} noun="scheduled shift" />
         </>
       )}
     </section>

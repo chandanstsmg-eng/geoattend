@@ -156,11 +156,11 @@ export function RosterEntryForm({
   );
 }
 
-const RESULT_TEXT: Record<string, string> = { OUTSIDE_HOME_WORKPLACE: 'rostered away from their home workspace' };
+const RESULT_TEXT: Record<string, string> = { OUTSIDE_HOME_WORKPLACE: 'rostered away from their home workplace' };
 
 /**
  * Rosters several workers on one shift for a date range. Each worker succeeds or fails on its
- * own (clashing entries, workers or workspaces outside the user's scope); the result lists both.
+ * own (clashing entries, workers or workplaces outside the user's scope); the result lists both.
  */
 export function BulkAssignForm({ defaultWorkplaceId, defaultFrom, onDone, onCancel }: { defaultWorkplaceId?: string; defaultFrom?: string; onDone: () => void; onCancel: () => void }) {
   const qc = useQueryClient();
@@ -180,7 +180,7 @@ export function BulkAssignForm({ defaultWorkplaceId, defaultFrom, onDone, onCanc
   const shifts = useQuery({ queryKey: ['shifts', workplaceId], queryFn: () => get<any[]>(`/shifts${qs({ workplaceId })}`), enabled: !!workplaceId });
   const managers = useQuery({ queryKey: ['roster', 'managers', workplaceId], queryFn: () => get<any[]>(`/roster/managers${qs({ workplaceId })}`), enabled: !!workplaceId });
   const employees = useQuery({ queryKey: ['employees', 'active'], queryFn: () => get<any[]>('/employees?status=active') });
-  // This workspace's own workers first, then everyone else the user can see.
+  // This workplace's own workers first, then everyone else the user can see.
   const people = (employees.data ?? [])
     .filter((e) => !find || `${e.full_name} ${e.employee_code}`.toLowerCase().includes(find.toLowerCase()))
     .sort((a, b) => Number(b.workplace_id === workplaceId) - Number(a.workplace_id === workplaceId) || a.full_name.localeCompare(b.full_name));
@@ -222,7 +222,7 @@ export function BulkAssignForm({ defaultWorkplaceId, defaultFrom, onDone, onCanc
   return (
     <form className="space-y-4" onSubmit={(ev) => { ev.preventDefault(); save.mutate(); }}>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="1. Workspace">
+        <Field label="1. Workplace">
           <Select required value={workplaceId} onChange={(ev) => { setWorkplaceId(ev.target.value); setShiftId(''); setManagerId(''); }}>
             <option value="">Choose…</option>
             {active.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
@@ -256,7 +256,7 @@ export function BulkAssignForm({ defaultWorkplaceId, defaultFrom, onDone, onCanc
               <label className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-gray-50">
                 <input type="checkbox" checked={picked.has(e.id)} onChange={() => toggle(e.id)} />
                 <span className="flex-1 truncate">{e.full_name} <span className="text-xs text-gray-500">{e.employee_code}</span></span>
-                <span className={e.workplace_id === workplaceId ? 'text-xs text-gray-500' : 'text-xs text-amber-700'}>{e.workplace_name ?? 'no home workspace'}</span>
+                <span className={e.workplace_id === workplaceId ? 'text-xs text-gray-500' : 'text-xs text-amber-700'}>{e.workplace_name ?? 'no home workplace'}</span>
               </label>
             </li>
           ))}

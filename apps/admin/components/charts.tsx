@@ -246,7 +246,7 @@ export function LineChart(props: XYProps) {
 }
 
 /**
- * Horizontal bars with the category name on the left — for ranked lists (workspaces, people).
+ * Horizontal bars with the category name on the left — for ranked lists (workplaces, people).
  * Each row is a button when `onSelect` is given.
  */
 export function HBarList({ data, label, series, format = plain, name, onSelect, max: maxRows = 10 }: { data: Row[]; label: string; series: SeriesDef[]; format?: (v: number) => string; name: (r: Row) => ReactNode; onSelect?: (r: Row) => void; max?: number }) {
@@ -372,7 +372,7 @@ export function ChartCard({ title, subtitle, series, children, table, empty, act
           {table && !empty && (
             <div className="inline-flex rounded-md bg-gray-100 p-0.5" role="group" aria-label={`${title}: view`}>
               {(['chart', 'table'] as const).map((v) => (
-                <button key={v} type="button" aria-pressed={view === v} aria-label={v === 'chart' ? 'Chart view' : 'Table view'} title={v === 'chart' ? 'Chart' : 'Table'} onClick={() => setView(v)} className={cx('rounded px-1.5 py-1', view === v ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-500 hover:text-gray-800')}>
+                <button key={v} type="button" aria-pressed={view === v} aria-label={v === 'chart' ? 'Chart view' : 'Table view'} title={v === 'chart' ? 'Chart' : 'Table'} onClick={() => setView(v)} className={cx('rounded p-1.5', view === v ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-500 hover:text-gray-800')}>
                   {v === 'chart' ? <BarChart3 className="h-3.5 w-3.5" aria-hidden /> : <Table2 className="h-3.5 w-3.5" aria-hidden />}
                 </button>
               ))}
@@ -422,6 +422,16 @@ function DeltaChip({ d }: { d: NonNullable<Delta> }) {
       <Icon className="h-3 w-3" aria-hidden />
       {d.text}
       <span className="sr-only"> {d.title}</span>
+    </span>
+  );
+}
+
+/** A thin bar under a figure in a table. Decorative: the figure beside it carries the meaning. */
+export function Meter({ value, max = 1, tone = 'navy' }: { value: number; max?: number; tone?: 'navy' | 'warn' }) {
+  const share = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  return (
+    <span className="mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-gray-100" aria-hidden>
+      <span className={cx('block h-full rounded-full', tone === 'warn' ? 'bg-amber-500' : 'bg-navy-600')} style={{ width: `${share * 100}%` }} />
     </span>
   );
 }
@@ -481,7 +491,7 @@ export function Kpi({ label, value, unit, sub, tone, title, onClick, href, delta
       <span className="flex items-center gap-1 text-body-sm font-medium text-gray-600">
         {label}
         {info && (
-          <span title={info} className="inline-flex text-gray-400 hover:text-gray-600">
+          <span title={info} className="inline-flex text-gray-500 hover:text-gray-600">
             <Info className="h-3.5 w-3.5" aria-hidden />
             <span className="sr-only">{info}</span>
           </span>

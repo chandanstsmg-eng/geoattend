@@ -7,8 +7,8 @@
  *   accent-600 #BA5700 the orange used behind white text (primary buttons): #EE7600 with white
  *     text is only 2.9:1, this is 4.7:1 (WCAG AA).
  *   primary-*  the navy-blue family for links, focus rings, tabs and selection.
- * The gray scale is the brand's slate: gray-200 #DCE5ED = borders, gray-500 #66788A = secondary
- * text (4.5:1 on white), gray-900 #172B3A = primary text.
+ * The gray scale is the brand's slate: gray-200 #DCE5ED = borders, gray-500 #5D6E80 = secondary
+ * text (5.2:1 on white, 4.7:1 on the tinted panels and the page background; gray-400 is for borders and decoration only), gray-900 #172B3A = primary text.
  * Colour has one job each: orange = the primary action; navy = headings, selection and the main
  * chart series; amber = watch; red = critical or a breach; teal = positive or resolved.
  */
@@ -39,7 +39,7 @@
   --color-gray-200: #dce5ed;
   --color-gray-300: #cbd5e1;
   --color-gray-400: #94a3b8;
-  --color-gray-500: #66788a;
+  --color-gray-500: #5d6e80;
   --color-gray-600: #4e5d71;
   --color-gray-700: #36475a;
   --color-gray-800: #243546;
@@ -161,6 +161,20 @@ input[type='radio'] {
   .rtable td[data-label='']::before,
   .rtable td:not([data-label])::before {
     content: none;
+  }
+}
+
+/* Touch screens: a row of small links stays easy to hit. Links inside a sentence are left alone. */
+@media (pointer: coarse) {
+  main button,
+  main a[class*='inline-flex'],
+  main a[class*='flex'] {
+    min-height: 2rem;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 1.5rem;
+    height: 1.5rem;
   }
 }
 

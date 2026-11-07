@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Camera, Check, MapPin, Plus, RotateCcw } from 'lucide-react';
 import { get, post, qs } from '@/lib/api';
 import { ago, fmtDate, fmtDateTime, metres, todayISO } from '@/lib/format';
-import { rowKeys, Badge, Button, Card, Drawer, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, rowLink, Table, Tabs, Td, Textarea, Th } from '@/components/ui';
+import { rowKeys, Badge, Button, Card, CutNotice, Drawer, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, rowLink, Table, Tabs, Td, Textarea, Th } from '@/components/ui';
 import { useEmployees } from '@/components/filters';
 
 type Status = 'SUBMITTED' | 'OPEN' | 'REOPENED' | 'APPROVED' | 'ALL';
@@ -35,11 +35,11 @@ export default function TasksPage() {
                 {rows.map((t) => (
                   <tr key={t.id} className={rowLink} tabIndex={0} onClick={() => setOpen(t.id)} onKeyDown={rowKeys(() => setOpen(t.id))} aria-label={`${t.title}, open task`}>
                     <Td>
-                      <span className="font-medium text-gray-900">{t.title}</span> {t.requires_photo && <Camera className="inline h-3.5 w-3.5 text-gray-400" aria-label="Photo required" />}
+                      <span className="font-medium text-gray-900">{t.title}</span> {t.requires_photo && <Camera className="inline h-3.5 w-3.5 text-gray-500" aria-label="Photo required" />}
                       {t.details && <div className="line-clamp-1 text-xs text-gray-500">{t.details}</div>}
                     </Td>
                     <Td>{t.assignee_name} <span className="text-xs text-gray-500">{t.employee_code}</span></Td>
-                    <Td className={`tabular ${t.due_date && t.due_date < todayISO() && ['OPEN', 'REOPENED'].includes(t.status) ? 'font-semibold text-red-700' : ''}`}>{t.due_date ? fmtDate(t.due_date) : '—'}</Td>
+                    <Td className={`tabular ${t.due_date && t.due_date < todayISO() && ['OPEN', 'REOPENED'].includes(t.status) ? 'font-semibold text-red-700' : ''}`}>{t.due_date ? fmtDate(t.due_date) : '—'}{t.due_date && t.due_date < todayISO() && ['OPEN', 'REOPENED'].includes(t.status) ? ' · overdue' : ''}</Td>
                     <Td><Badge dot tone={TONE[t.status as keyof typeof TONE]}>{LABEL[t.status as keyof typeof LABEL]}</Badge></Td>
                     <Td className="text-xs text-gray-500">{ago(t.updated_at)}</Td>
                   </tr>
@@ -48,6 +48,7 @@ export default function TasksPage() {
             </Table>
           )}
         </QueryState>
+        <CutNotice shown={list.data?.length ?? 0} cap={200} noun="tasks" />
       </Card>
       <AssignTask open={creating} onClose={() => setCreating(false)} />
       <Drawer open={!!open} onOpenChange={(o) => !o && setOpen(null)} title="Task" subtitle="Proof of work and review">

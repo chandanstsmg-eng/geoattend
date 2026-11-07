@@ -6,9 +6,10 @@ import { Plus, Upload, X } from 'lucide-react';
 import { Kpi, StatStrip, StatStripSkeleton } from '@/components/charts';
 import { ImportEmployees } from '@/components/import-employees';
 import { useMe } from '@/lib/me';
+import { useDebounced } from '@/lib/use-debounced';
 import { get, post, qs } from '@/lib/api';
 import { ago } from '@/lib/format';
-import { Badge, Button, Card, cx, DemoTag, EmptyState, Field, InlineError, Input, Modal, PageHeader, Pagination, QueryState, rowLink, SearchInput, Select, SortTh, Table, Td, Th, Toolbar, type SortDir } from '@/components/ui';
+import { Badge, Button, Card, cx, DemoTag, EmptyState, Field, InlineError, Input, Modal, PageHeader, Pagination, QueryState, rowKeys, rowLink, SearchInput, Select, SortTh, Table, Td, Th, Toolbar, type SortDir } from '@/components/ui';
 import { StateBadge } from '@/components/state-badge';
 import { SupervisorSelect, WorkplaceSelect, useEmployees, useWorkplaces } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
@@ -27,7 +28,8 @@ export default function EmployeesPage() {
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const { isOwner } = useMe();
-  const list = useQuery({ queryKey: ['employees', search, workplaceId, status, supervisorId], queryFn: () => get<any[]>(`/employees${qs({ search, workplaceId, status, supervisorId })}`) });
+  const term = useDebounced(search);
+  const list = useQuery({ queryKey: ['employees', term, workplaceId, status, supervisorId], queryFn: () => get<any[]>(`/employees${qs({ search: term, workplaceId, status, supervisorId })}`), placeholderData: (p) => p });
   // Directory figures over everyone the caller may see (independent of the table filters).
   const everyone = useEmployees();
   const all = everyone.data ?? [];
@@ -42,22 +44,22 @@ export default function EmployeesPage() {
   };
   // Quick filters for the gaps above (applied to the loaded list), sorting and paging.
   const [gap, setGap] = useState<'' | 'onShift' | 'noWorkspace' | 'noShift'>('');
-  const [sort, setSort] = useState<{ key: 'name' | 'code' | 'workspace' | 'signin'; dir: SortDir }>({ key: 'name', dir: 'asc' });
+  const [sort, setSort] = useState<{ key: 'name' | 'code' | 'workplace' | 'signin'; dir: SortDir }>({ key: 'name', dir: 'asc' });
   const [offset, setOffset] = useState(0);
   const PAGE = 25;
   const rows = useMemo(() => {
     const keep = (list.data ?? []).filter((e) => (gap === 'onShift' ? e.open_session : gap === 'noWorkspace' ? !e.workplace_id : gap === 'noShift' ? !(e.shifts ?? []).length : true));
-    const val = (e: any) => (sort.key === 'name' ? e.full_name.toLowerCase() : sort.key === 'code' ? String(e.employee_code ?? '') : sort.key === 'workspace' ? (e.workplace_name ?? '~').toLowerCase() : e.last_login_at ?? '');
+    const val = (e: any) => (sort.key === 'name' ? e.full_name.toLowerCase() : sort.key === 'code' ? String(e.employee_code ?? '') : sort.key === 'workplace' ? (e.workplace_name ?? '~').toLowerCase() : e.last_login_at ?? '');
     return keep.sort((a, b) => (val(a) < val(b) ? -1 : val(a) > val(b) ? 1 : 0) * (sort.dir === 'asc' ? 1 : -1));
   }, [list.data, gap, sort]);
-  useEffect(() => setOffset(0), [search, workplaceId, status, supervisorId, gap]);
+  useEffect(() => setOffset(0), [term, workplaceId, status, supervisorId, gap]);
   const quick = (key: typeof gap) => () => setGap(gap === key ? '' : key);
 
   return (
     <>
       <PageHeader
         title="Employees"
-        description="Accounts, workspaces, supervisors and rosters."
+        description="Accounts, workplaces, supervisors and rosters."
         actions={
           isOwner && <>
             <Button onClick={() => setImporting(true)}>
@@ -75,7 +77,7 @@ export default function EmployeesPage() {
         <StatStrip label="Directory figures" count={5} className="mb-4">
             <Kpi label="Employees" value={stats.total} sub={`${stats.active} active · ${stats.total - stats.active} deactivated`} />
             <Kpi label="On shift now" value={stats.onShift} sub="open shift session" onClick={quick('onShift')} title="Show only people on shift (click again to clear)" />
-            <Kpi label="No workspace" value={stats.noWorkspace} tone={stats.noWorkspace ? 'warn' : undefined} sub="cannot be rostered yet" onClick={quick('noWorkspace')} title="Active employees without a home workspace" />
+            <Kpi label="No workplace" value={stats.noWorkspace} tone={stats.noWorkspace ? 'warn' : undefined} sub="cannot be rostered yet" onClick={quick('noWorkspace')} title="Active employees without a home workplace" />
             <Kpi label="No shift assigned" value={stats.noShift} tone={stats.noShift ? 'warn' : undefined} sub="not on any roster" onClick={quick('noShift')} title="Active employees with no roster entry" />
             <Kpi label="No supervisor" value={stats.noSupervisor} sub="reports to nobody" onClick={isOwner ? () => setSupervisorId(supervisorId === 'none' ? '' : 'none') : undefined} title="Active employees without a supervisor" />
         </StatStrip>
@@ -84,7 +86,7 @@ export default function EmployeesPage() {
         <Toolbar>
           {gap && (
             <Button size="sm" variant="subtle" onClick={() => setGap('')} aria-label="Clear quick filter">
-              {gap === 'onShift' ? 'On shift now' : gap === 'noWorkspace' ? 'No workspace' : 'No shift assigned'} <X className="h-3.5 w-3.5" aria-hidden />
+              {gap === 'onShift' ? 'On shift now' : gap === 'noWorkspace' ? 'No workplace' : 'No shift assigned'} <X className="h-3.5 w-3.5" aria-hidden />
             </Button>
           )}
           <SearchInput aria-label="Search employees" placeholder="Name, email or employee ID" value={search} onChange={(e) => setSearch(e.target.value)} className="sm:w-72" />
@@ -107,7 +109,7 @@ export default function EmployeesPage() {
                 <tr>
                   <SortTh k="name" sort={sort} onSort={setSort}>Employee</SortTh>
                   <SortTh k="code" sort={sort} onSort={setSort}>Employee ID</SortTh>
-                  <SortTh k="workspace" sort={sort} onSort={setSort}>Workspace &amp; shifts</SortTh>
+                  <SortTh k="workplace" sort={sort} onSort={setSort}>Workplace &amp; shifts</SortTh>
                   <Th>Supervisor</Th>
                   <Th>Right now</Th>
                   <SortTh k="signin" sort={sort} onSort={setSort}>Last sign-in</SortTh>
@@ -115,7 +117,7 @@ export default function EmployeesPage() {
               </thead>
               <tbody>
                 {rows.slice(offset, offset + PAGE).map((e) => (
-                  <tr key={e.id} className={cx(rowLink, !e.is_active && 'text-gray-500')} onClick={() => setSelected(e.id)} tabIndex={0} onKeyDown={(ev) => ev.key === 'Enter' && setSelected(e.id)} aria-label={`${e.full_name}, open employee`}>
+                  <tr key={e.id} className={cx(rowLink, !e.is_active && 'text-gray-500')} onClick={() => setSelected(e.id)} tabIndex={0} onKeyDown={rowKeys(() => setSelected(e.id))} aria-label={`${e.full_name}, open employee`}>
                     <Td>
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-gray-900">{e.full_name}</span>
@@ -125,10 +127,10 @@ export default function EmployeesPage() {
                     </Td>
                     <Td className="tabular">{e.employee_code}</Td>
                     <Td>
-                      {e.workplace_name ?? <span className="text-gray-500">No workspace</span>}
+                      {e.workplace_name ?? <span className="text-gray-500">No workplace</span>}
                       <div className="text-xs text-gray-500">{(e.shifts ?? []).map((s: any) => s.name).join(', ') || 'No shift assigned'}</div>
                     </Td>
-                    <Td className="text-body-sm">{e.supervisor_name ?? <span className="text-gray-400">—</span>}</Td>
+                    <Td className="text-body-sm">{e.supervisor_name ?? <span className="text-gray-500">—</span>}</Td>
                     <Td>
                       {!e.is_active ? <Badge dot tone="gray">Deactivated</Badge> : e.open_session ? <StateBadge state={e.open_session.state} /> : <span className="text-body-sm text-gray-500">Off shift</span>}
                     </Td>

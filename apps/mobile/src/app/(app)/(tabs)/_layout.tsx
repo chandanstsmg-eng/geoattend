@@ -15,7 +15,7 @@ export default function TabsLayout() {
         headerTitleStyle: { fontWeight: '700' },
         tabBarActiveTintColor: colors.orange,
         tabBarInactiveTintColor: colors.textMuted,
-        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '700' },
         tabBarStyle: { minHeight: 60 },
       }}
     >

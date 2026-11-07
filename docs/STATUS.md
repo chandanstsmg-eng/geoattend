@@ -167,3 +167,7 @@ Branch `phase-f-jobs-monitoring`, stacked on `phase-e-dates-isolation`; neither 
 - Fixed: the failure record itself failed after 31 failures in a row; shutdown cut jobs off mid-way; one stuck outside call could stop every job; photo deletion failures showed as a good run; pending attendance records were never raised to owners.
 - New: job time limit, clean shutdown, separate worker, delivery claims, missing check-out and pending alerts, weekly summaries and reminders before a shift (both off by default), health check of every part, operational alerts, backup manifests with verification and pruning.
 - Real alert delivery, an outside monitor, and browser checks of the new page remain open. See [BACKGROUND-JOBS.md](BACKGROUND-JOBS.md) and [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).
+
+## Phase G: UI/UX and performance
+
+Merged into `production-remediation` for development only, not deployed. Audit, baseline and outcome: [PHASE-G-AUDIT.md](PHASE-G-AUDIT.md). No migration and no new dependency. The phone screens changed in this phase have not run on a phone, and real Google Maps has not been seen: see [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).

@@ -1,3 +1,4 @@
+import { attendanceStatus } from '../../lib/attendance-status';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Banner, Body, Button, Card, ErrorState, H2, Loading, Muted, Row, Screen } from '../../components/ui';
 import { errorMessage } from '../../lib/api/client';
@@ -38,7 +39,7 @@ export default function ShiftDetailsScreen() {
         <Row label="Time zone" value={shift.timezone} />
         <Row label="Arrival grace" value={`${shift.arrivalGraceMinutes} min`} />
         {shift.absenceThresholdMinutes != null ? <Row label="Absence alert after" value={`${shift.absenceThresholdMinutes} min away`} /> : null}
-        {a.workplace ? <Row label="Workspace" value={a.workplace.name} /> : null}
+        {a.workplace ? <Row label="Workplace" value={a.workplace.name} /> : null}
         {a.supervisor ? <Row label="Supervisor" value={a.supervisor.phone ? `${a.supervisor.fullName} · ${a.supervisor.phone}` : a.supervisor.fullName} /> : range?.managerName ? <Row label="Manager" value={range.managerName} /> : null}
         {range?.notes ? <Row label="Assigned work" value={range.notes} /> : null}
         {!shift.isActive ? <Banner tone="warning" title="This shift is not active for your current workplace" /> : null}
@@ -53,7 +54,7 @@ export default function ShiftDetailsScreen() {
             <Row label="Ends" value={fmtTime(cur.endsAt)} />
             <Row label="Tracking allowed" value={`${fmtTime(cur.windowOpensAt)}–${fmtTime(cur.windowClosesAt)}`} />
             <Row label="Status" value={cur.completed ? 'Completed' : open ? open.session.stateLabel : 'Not started'} strong />
-            {open?.attendance ? <Row label="Attendance recorded" value={fmtTime(open.attendance.recordedAt)} /> : null}
+            {open?.attendance ? <Row label="Checked in" value={`${fmtTime(open.attendance.recordedAt)} · ${attendanceStatus(open.attendance.verificationStatus).label}`} /> : null}
           </>
         ) : (
           <Muted>The shift window is not open right now.</Muted>

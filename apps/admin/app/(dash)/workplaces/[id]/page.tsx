@@ -7,7 +7,7 @@ import { ArrowLeft } from 'lucide-react';
 import { get, patch, post, put } from '@/lib/api';
 import { useSupervisors } from '@/components/filters';
 import { ConfirmButton, Badge, Button, Card, cx, DemoTag, ErrorState, Field, InlineError, Input, PageHeader, Spinner, Textarea } from '@/components/ui';
-import { GeofenceEditorMap, MapSetupNotice, mapsConfigured, PlaceSearch } from '@/components/maps/google';
+import { GeofenceEditorMap, MapSetupNotice, mapsConfigured, PlaceSearch, useMapsRefused } from '@/components/maps/google';
 import { SchematicMap } from '@/components/maps/schematic';
 
 const TIMEZONES = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : ['UTC', 'Asia/Kolkata'];
@@ -26,7 +26,7 @@ interface Form {
   reason: string;
 }
 
-/** Which supervisors manage this workspace (it is added to or removed from their sites). */
+/** Which supervisors manage this workplace (it is added to or removed from their sites). */
 function SupervisorsCard({ workplaceId, current }: { workplaceId: string; current: string[] }) {
   const qc = useQueryClient();
   const sups = useSupervisors();
@@ -76,6 +76,8 @@ function SupervisorsCard({ workplaceId, current }: { workplaceId: string; curren
 }
 
 export default function WorkplaceEditorPage() {
+  const refused = useMapsRefused();
+  const mapsUsable = mapsConfigured && !refused;
   const { id } = useParams<{ id: string }>();
   const isNew = id === 'new';
   const router = useRouter();
@@ -92,7 +94,7 @@ export default function WorkplaceEditorPage() {
     }
   }, [wp.data, f]);
 
-  const save = useMutation({ meta: { success: 'Workspace saved' },
+  const save = useMutation({ meta: { success: 'Workplace saved' },
     mutationFn: () => {
       const body = { ...f!, address: f!.address || null, minStaff: f!.minStaff === '' ? null : Number(f!.minStaff), reason: f!.reason || undefined };
       if (isNew) {
@@ -107,7 +109,7 @@ export default function WorkplaceEditorPage() {
       else setF((cur) => (cur ? { ...cur, reason: '' } : cur));
     },
   });
-  const toggle = useMutation({ meta: { success: 'Workspace updated', toastError: true },
+  const toggle = useMutation({ meta: { success: 'Workplace updated', toastError: true },
     mutationFn: (isActive: boolean) => post(`/workplaces/${id}/status`, { isActive }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workplaces'] }),
   });
@@ -121,10 +123,10 @@ export default function WorkplaceEditorPage() {
   return (
     <>
       <Link href="/workplaces" className="mb-3 inline-flex items-center gap-1 text-sm text-primary-700 hover:underline">
-        <ArrowLeft className="h-4 w-4" aria-hidden /> All workspaces
+        <ArrowLeft className="h-4 w-4" aria-hidden /> All workplaces
       </Link>
       <PageHeader
-        title={isNew ? 'New workspace' : f.name || 'Workspace'}
+        title={isNew ? 'New workplace' : f.name || 'Workplace'}
         description="The circle on the map is the attendance area. Attendance is verified on the server from each phone's GPS reading."
         actions={
           !isNew && wp.data ? (
@@ -132,9 +134,9 @@ export default function WorkplaceEditorPage() {
               {wp.data.is_demo && <DemoTag />}
               <Badge dot tone={wp.data.is_active ? 'green' : 'gray'}>{wp.data.is_active ? 'Active' : 'Disabled'}</Badge>
               {wp.data.is_active ? (
-                <ConfirmButton title="Disable this workspace?" description="People can no longer start shifts here and it leaves the roster and the map. Past attendance is kept, and you can enable it again." confirmLabel="Disable workspace" danger loading={toggle.isPending} onConfirm={() => toggle.mutate(false)}>Disable workspace</ConfirmButton>
+                <ConfirmButton title="Disable this workplace?" description="People can no longer start shifts here and it leaves the roster and the map. Past attendance is kept, and you can enable it again." confirmLabel="Disable workplace" danger loading={toggle.isPending} onConfirm={() => toggle.mutate(false)}>Disable workplace</ConfirmButton>
               ) : (
-                <Button onClick={() => toggle.mutate(true)} loading={toggle.isPending}>Enable workspace</Button>
+                <Button onClick={() => toggle.mutate(true)} loading={toggle.isPending}>Enable workplace</Button>
               )}
             </>
           ) : null
@@ -142,7 +144,7 @@ export default function WorkplaceEditorPage() {
       />
       <div className="grid items-start gap-5 xl:grid-cols-5">
         <Card className="xl:sticky xl:top-[5.5rem] xl:col-span-3 xl:self-start" title="Location and geofence" description="Search, then drag the orange pin to the exact point. Drag the circle edge to resize.">
-          {mapsConfigured ? (
+          {mapsUsable ? (
             <div className="space-y-3">
               <PlaceSearch
                 onPlace={(p) => {
@@ -170,7 +172,7 @@ export default function WorkplaceEditorPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              <MapSetupNotice />
+              <MapSetupNotice refused={refused} />
               <SchematicMap center={center} radiusM={f.radiusM} height={300} />
             </div>
           )}
@@ -249,11 +251,11 @@ export default function WorkplaceEditorPage() {
                 <Textarea value={f.reason} onChange={(e) => set('reason', e.target.value)} placeholder="e.g. Marker moved to the main gate" />
               </Field>
             )}
-            {isNew && !placed && mapsConfigured && <p className="text-xs text-amber-700">Search for an address or click the map to place the workspace.</p>}
+            {isNew && !placed && mapsUsable && <p className="text-xs text-amber-700">Search for an address or click the map to place the workplace.</p>}
             <InlineError error={save.error ?? toggle.error} />
             <div className="flex items-center gap-2">
               <Button type="submit" variant="primary" loading={save.isPending}>
-                {isNew ? 'Create workspace' : 'Save changes'}
+                {isNew ? 'Create workplace' : 'Save changes'}
               </Button>
               {save.isSuccess && !isNew && <span className="text-xs text-teal-700">Saved — version {(save.data as any)?.config_version}</span>}
             </div>
@@ -263,7 +265,7 @@ export default function WorkplaceEditorPage() {
       {!isNew && wp.data && <SupervisorsCard workplaceId={id} current={(wp.data.supervisors ?? []).map((s: any) => s.id)} />}
       {!isNew && wp.data && (
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <Card title="Shifts at this workspace" actions={<Link className="text-xs font-medium text-primary-700 hover:underline" href="/shifts">Manage shifts</Link>}>
+          <Card title="Shifts at this workplace" actions={<Link className="text-xs font-medium text-primary-700 hover:underline" href="/shifts">Manage shifts</Link>}>
             {wp.data.shifts.length ? (
               <ul className="space-y-1 text-sm">
                 {wp.data.shifts.map((s: any) => (

@@ -9,10 +9,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Maximize2, Search, X } from 'lucide-react';
 import { ControlPosition, MapControl, useMap } from '@vis.gl/react-google-maps';
-import { AdvancedMarker, GeofenceCircle, Map, MAP_ID, MapSetupNotice, mapsConfigured, Pin, PlaceSearch } from './maps/google';
-import { SchematicMap } from './maps/schematic';
+import { AdvancedMarker, GeofenceCircle, Map, MAP_ID, MapSetupNotice, MapsProvider, mapsConfigured, Pin, PlaceSearch, useMapsRefused } from './maps/google';
+import { SchematicMap, SiteOverview } from './maps/schematic';
 import { BODY_STYLE, MARKER_STYLE, initialsOf, kindFor } from './maps/markers';
-import { Select, cx } from './ui';
+import { Button, Select, cx } from './ui';
 
 export interface MapWorkplace {
   id: string;
@@ -60,36 +60,39 @@ function fitTo(map: google.maps.Map, pts: google.maps.LatLngLiteral[]) {
   map.fitBounds(b, 56);
 }
 
-function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[]; located: any[]; search: boolean }) {
+function Controls({ workplaces, located, search, pending }: { workplaces: MapWorkplace[]; located: any[]; search: boolean; pending: boolean }) {
   const map = useMap();
   const [found, setFound] = useState<google.maps.LatLngLiteral | null>(null);
   const [searching, setSearching] = useState(false);
   const all = () => [...located.map((s) => ({ lat: s.last_latitude, lng: s.last_longitude })), ...workplaces.map((w) => ({ lat: w.latitude, lng: w.longitude }))];
   // First view: the people on shift (fresh positions) and their workplaces, so two distant sites
   // do not zoom the map out to a whole state; "Fit all" shows everything.
-  const [fitted, setFitted] = useState(false);
+  // A different set of workplaces (a filter) is a new view, so it fits again.
+  const view = workplaces.map((w) => w.id).join();
+  const [fitted, setFitted] = useState<string | null>(null);
   useEffect(() => {
-    if (!map || fitted || !(located.length || workplaces.length)) return;
-    // Prefer fresh positions, then any last-known positions, then the workspaces themselves.
+    // `pending`: these are still the previous filter's people, so wait for the new ones.
+    if (!map || pending || fitted === view || !(located.length || workplaces.length)) return;
+    // Prefer fresh positions, then any last-known positions, then the workplaces themselves.
     const live = located.filter((s) => !s.is_stale && !s.ended_at);
     const people = live.length ? live : located;
-    // With nobody located, show the workspaces that have staff rather than every site in the company.
+    // With nobody located, show the workplaces that have staff rather than every site in the company.
     const staffed = workplaces.filter((w: any) => (w.homeWorkers ?? w.home_workers ?? 1) > 0);
     const sites = people.length ? workplaces.filter((w) => people.some((s) => s.workplace_id === w.id)) : staffed.length ? staffed : workplaces;
     fitTo(map, [...people.map((s) => ({ lat: s.last_latitude, lng: s.last_longitude })), ...sites.map((w) => ({ lat: w.latitude, lng: w.longitude }))]);
-    setFitted(true);
+    setFitted(view);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, located.length, workplaces.length]);
+  }, [map, located.length, view, pending]);
   return (
     <>
       <MapControl position={ControlPosition.TOP_LEFT}>
         <div className="m-2.5 flex max-w-[calc(100vw-5rem)] flex-wrap items-start gap-1.5">
-          <button type="button" onClick={() => map && fitTo(map, all())} className={ctrlBtn} title="Fit all people and workspaces">
+          <button type="button" onClick={() => map && fitTo(map, all())} className={ctrlBtn} title="Fit all people and workplaces">
             <Maximize2 className="h-3.5 w-3.5" aria-hidden /> Fit all
           </button>
           {workplaces.length > 1 && (
             <Select
-              aria-label="Go to workspace"
+              aria-label="Go to workplace"
               value=""
               onChange={(e) => {
                 const w = workplaces.find((x) => x.id === e.target.value);
@@ -100,7 +103,7 @@ function Controls({ workplaces, located, search }: { workplaces: MapWorkplace[];
               }}
               className="h-9 w-48 border-gray-200 bg-white text-body-sm shadow-sm"
             >
-              <option value="">Go to workspace…</option>
+              <option value="">Go to workplace…</option>
               {workplaces.map((w) => (
                 <option key={w.id} value={w.id}>{w.name}</option>
               ))}
@@ -218,19 +221,21 @@ function Markers({ located, selected, onSelect }: { located: any[]; selected: st
   );
 }
 
-/** Four states people actually scan for; the exact state is in each marker's tooltip and the side panel. */
+/** The states people scan for. Each says only what is known; the exact state is in the marker's tooltip and the side panel. */
 const LEGEND: Array<{ label: string; body: keyof typeof BODY_STYLE; dot?: string; hint: string }> = [
-  { label: 'Inside zone', body: 'normal', dot: MARKER_STYLE.present.color, hint: 'On shift with a fresh position inside the geofence (overtime and arriving share the navy marker)' },
-  { label: 'Outside zone', body: 'attention', dot: MARKER_STYLE.away.color, hint: 'Away from the geofence, prolonged absence or waiting for review' },
-  { label: 'On break', body: 'normal', dot: MARKER_STYLE.break.color, hint: 'On a declared break' },
-  { label: 'Last known', body: 'hollow', hint: 'No fresh position: stale, location unavailable or shift ended. The marker is where the phone last reported.' },
+  { label: 'On site', body: 'normal', dot: MARKER_STYLE.present.color, hint: 'Present at the workplace. A single reading outside is not acted on until it is confirmed.' },
+  { label: 'On break', body: 'normal', dot: MARKER_STYLE.break.color, hint: 'On a declared break, which may be taken off-site' },
+  { label: 'Not yet on site', body: 'normal', dot: MARKER_STYLE.arriving.color, hint: 'On shift, not verified inside the geofence yet' },
+  { label: 'On overtime', body: 'normal', dot: MARKER_STYLE.overtime.color, hint: 'Overtime may be worked off-site, so this says nothing about the zone' },
+  { label: 'Needs attention', body: 'attention', dot: MARKER_STYLE.away.color, hint: 'Away from the geofence, prolonged absence or manual review' },
+  { label: 'Last known', body: 'hollow', hint: 'No fresh position: stale, location unavailable or shift ended. The marker is where the phone last reported, not where the person is now.' },
 ];
 
 export function MapLegend({ className }: { className?: string }) {
   return (
     <details open className={cx('group text-xs text-gray-600', className)}>
       <summary className="inline-flex cursor-pointer select-none items-center gap-1 rounded-full border border-gray-200 bg-white px-2.5 py-1 font-medium text-gray-700 hover:bg-gray-50">
-        Legend <span aria-hidden className="text-gray-400 group-open:rotate-180">▾</span>
+        Legend <span aria-hidden className="text-gray-500 group-open:rotate-180">▾</span>
       </summary>
       <ul className="mt-2 flex flex-wrap items-center gap-2" aria-label="Map legend">
         {LEGEND.map((l) => (
@@ -241,30 +246,53 @@ export function MapLegend({ className }: { className?: string }) {
             {l.label}
           </li>
         ))}
-        <li className="text-gray-500">Numbered circle = group, click to zoom</li>
+        <li className="text-gray-500">Numbered circle = group, select to zoom · People with no location yet are in the list, not on the map</li>
       </ul>
     </details>
   );
 }
 
-export function WorkforceMap({ sessions, workplaces, selected, onSelect, className, search = true }: { sessions: any[]; workplaces: MapWorkplace[]; selected: string | null; onSelect: (id: string) => void; className?: string; search?: boolean }) {
+export function WorkforceMap({ sessions, workplaces, selected, onSelect, className, search = true, pending = false }: { sessions: any[]; workplaces: MapWorkplace[]; selected: string | null; onSelect: (id: string) => void; className?: string; search?: boolean; pending?: boolean }) {
   const located = useMemo(() => sessions.filter((s) => s.last_latitude != null), [sessions]);
   const first = workplaces[0];
   const center = first ? { lat: first.latitude, lng: first.longitude } : located[0] ? { lat: located[0].last_latitude, lng: located[0].last_longitude } : null;
   const [schematicWp, setSchematicWp] = useState<string>('');
-  if (!center) return <div className={cx('flex items-center justify-center bg-gray-50 text-sm text-gray-500', className)}>No active workspace to show</div>;
+  const refused = useMapsRefused();
+  // Touch screens keep one-finger scrolling for the page; two fingers move the map.
+  const [gestures, setGestures] = useState<'greedy' | 'cooperative'>('greedy');
+  useEffect(() => setGestures(window.matchMedia('(pointer: coarse)').matches ? 'cooperative' : 'greedy'), []);
+  // A person selected at another workplace brings that workplace up.
+  const selectedWp = sessions.find((s) => s.id === selected)?.workplace_id as string | undefined;
+  useEffect(() => {
+    if (selectedWp) setSchematicWp(selectedWp);
+  }, [selectedWp]);
+  if (!center) return <div className={cx('flex items-center justify-center bg-gray-50 text-sm text-gray-500', className)}>No active workplace to show</div>;
 
-  if (!mapsConfigured) {
-    const w = workplaces.find((x) => x.id === schematicWp) ?? first;
+  if (!mapsConfigured || refused) {
+    const w = workplaces.find((x) => x.id === schematicWp) ?? (workplaces.length === 1 ? first : undefined);
     const c = w ? { lat: w.latitude, lng: w.longitude } : center;
+    const open = sessions.filter((s) => s.is_open !== false);
     return (
       <div className="space-y-3 p-4">
-        <MapSetupNotice compact />
+        <MapSetupNotice compact refused={refused} />
         {workplaces.length > 1 && (
-          <Select aria-label="Workspace shown" value={w?.id ?? ''} onChange={(e) => setSchematicWp(e.target.value)} className="w-56">
-            {workplaces.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-          </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select aria-label="Workplace shown" value={w?.id ?? ''} onChange={(e) => setSchematicWp(e.target.value)} className="w-56">
+              <option value="">All workplaces</option>
+              {workplaces.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </Select>
+            {w && <Button size="sm" variant="ghost" onClick={() => setSchematicWp('')}>Back to all</Button>}
+          </div>
         )}
+        {!w && workplaces.length ? (
+          <SiteOverview
+            sites={workplaces.map((x) => {
+              const here = open.filter((s) => s.workplace_id === x.id);
+              return { id: x.id, name: x.name, lat: x.latitude, lng: x.longitude, onShift: here.length, needsLook: here.filter((s) => MARKER_STYLE[kindFor(s)].body !== 'normal').length };
+            })}
+            onOpen={setSchematicWp}
+          />
+        ) : (
         <SchematicMap
           center={c}
           radiusM={w ? radiusOf(w) : 100}
@@ -273,18 +301,20 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
           onSelect={onSelect}
           height={380}
         />
+        )}
       </div>
     );
   }
 
   return (
     <div className={cx('relative', className)}>
+      <MapsProvider>
       <Map
         className="h-full w-full"
         defaultCenter={center}
         defaultZoom={16}
         mapId={MAP_ID}
-        gestureHandling="greedy"
+        gestureHandling={gestures}
         clickableIcons={false}
         streetViewControl={false}
         mapTypeControlOptions={{ position: ControlPosition.LEFT_BOTTOM }}
@@ -293,9 +323,15 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
         {workplaces.map((w) => (
           <GeofenceCircle key={w.id} center={{ lat: w.latitude, lng: w.longitude }} radius={radiusOf(w)} />
         ))}
+        {workplaces.map((w) => (
+          <AdvancedMarker key={`label-${w.id}`} position={{ lat: w.latitude, lng: w.longitude }} title={`${w.name}: ${radiusOf(w)} m permitted radius`} zIndex={1}>
+            <span className="rounded bg-navy-800/90 px-1.5 py-0.5 text-caption font-semibold text-white shadow-sm">{w.name} · {radiusOf(w)} m</span>
+          </AdvancedMarker>
+        ))}
         <Markers located={located} selected={selected} onSelect={onSelect} />
-        <Controls workplaces={workplaces} located={located} search={search} />
+        <Controls workplaces={workplaces} located={located} search={search} pending={pending} />
       </Map>
+      </MapsProvider>
     </div>
   );
 }

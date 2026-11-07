@@ -32,21 +32,21 @@ export default function TeamPage() {
     <>
       <PageHeader
         title="Supervisors"
-        description="Owners see everything. Supervisors manage their own workspaces only."
+        description="Owners see everything. Supervisors manage their own workplaces only."
         actions={<Button variant="primary" onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden /> Add person</Button>}
       />
       <Card padded={false}>
         <QueryState query={list}>
           {(rows) => (
             <Table>
-              <thead><tr><Th>Name</Th><Th>Role</Th><Th>Workspaces</Th><Th className="text-right">Workers</Th><Th>Status</Th><Th>Last sign-in</Th><Th /></tr></thead>
+              <thead><tr><Th>Name</Th><Th>Role</Th><Th>Workplaces</Th><Th className="text-right">Workers</Th><Th>Status</Th><Th>Last sign-in</Th><Th /></tr></thead>
               <tbody>
                 {rows.map((a) => (
                   <tr key={a.id}>
                     <Td><span className="font-medium text-gray-900">{a.full_name}</span><div className="text-xs text-gray-500">{a.email}</div></Td>
                     <Td className="text-gray-800">{a.access === 'OWNER' ? 'Owner' : 'Supervisor'}</Td>
                     <Td className="text-xs">{a.access === 'OWNER' ? 'All' : (a.site_names ?? []).join(', ') || '—'}</Td>
-                    <Td className="text-right tabular">{a.access === 'OWNER' ? '—' : <span title={`${a.site_workers_count} at their workspaces, ${a.reports_count} reporting directly`}>{a.site_workers_count}{a.reports_count ? <span className="text-xs text-gray-500"> ({a.reports_count} direct)</span> : null}</span>}</Td>
+                    <Td className="text-right tabular">{a.access === 'OWNER' ? '—' : <span title={`${a.site_workers_count} at their workplaces, ${a.reports_count} reporting directly`}>{a.site_workers_count}{a.reports_count ? <span className="text-xs text-gray-500"> ({a.reports_count} direct)</span> : null}</span>}</Td>
                     <Td>
                       {!a.is_active ? <Badge dot tone="gray">Deactivated</Badge> : a.away_until && a.away_until >= todayISO() ? <Badge dot tone="amber">Away until {fmtDate(a.away_until)}</Badge> : <Badge dot tone="green">Active</Badge>}
                     </Td>

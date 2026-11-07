@@ -25,7 +25,7 @@ export default function AppLayout() {
         <Stack.Screen name="face-enroll" options={{ title: 'Set up your face' }} />
         <Stack.Screen name="end-shift" options={{ title: 'End shift', headerShown: false }} />
         <Stack.Screen name="capture" options={{ title: 'Attendance photo', headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="success" options={{ title: 'Attendance recorded', headerBackVisible: false, gestureEnabled: false }} />
+        <Stack.Screen name="success" options={{ title: 'Attendance', headerBackVisible: false, gestureEnabled: false }} />
         <Stack.Screen name="phone-check" options={{ title: 'Phone check' }} />
         <Stack.Screen name="earnings" options={{ title: 'My earnings' }} />
         <Stack.Screen name="payslip" options={{ title: 'Payslip' }} />

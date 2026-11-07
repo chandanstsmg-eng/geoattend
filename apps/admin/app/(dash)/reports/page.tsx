@@ -5,10 +5,12 @@ import { Download } from 'lucide-react';
 import { useIncludeSimulated } from '@/lib/sim-pref';
 import { get, qs } from '@/lib/api';
 import { hrsNum, shortDay, fmtDate, todayISO } from '@/lib/format';
-import { LinkButton, Button, Card, cx, EmptyState, ErrorState, Field, Input, PageHeader, QueryState, SortTh, Table, Td, Th, type SortDir } from '@/components/ui';
+import { LinkButton, Button, Card, cx, EmptyState, ErrorState, Field, Input, PageHeader, QueryState, SectionHeading, SortTh, Table, Td, Th, type SortDir } from '@/components/ui';
 import { absDelta, BarChart, ChartCard, Composition, DataTable, HBarList, Kpi, StatStrip, StatStripSkeleton, LineChart, pctDelta, SERIES_COLORS } from '@/components/charts';
 import { useMe } from '@/lib/me';
 import { DateRangeSelect, defaultRange, EmployeeSelect, SupervisorSelect, WorkplaceSelect, type DateRangeValue } from '@/components/filters';
+import { HoursChart, LocationTable, SupervisorTable, WorkplaceModal } from '@/components/overview/shared';
+import { EmployeeDrawer } from '@/components/employee-drawer';
 
 // Overtime is part of total hours: the chart splits each total into regular + overtime, never adds them.
 const HOURS_SERIES = [
@@ -25,6 +27,7 @@ function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string
   return (
     <Card
       title="Monthly summary"
+      description="Follows the workplace filter only. Employee, supervisor and date range do not apply; choose a month here."
       className="lg:col-span-3"
       padded={false}
       actions={
@@ -85,14 +88,9 @@ function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string
 
 /**
  * Days and hours per employee: the default export (three columns) and the separate overtime
- * export, for the page's filters. Supervisors get their own workspaces only — the API applies the scope.
+ * export, for the page's filters. Supervisors get their own workplaces only — the API applies the scope.
  */
-const linkBtn = (primary: boolean, disabled: boolean) =>
-  cx(
-    'inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-body-sm font-medium shadow-xs sm:h-8 sm:px-2.5',
-    primary ? 'bg-accent-600 font-semibold text-white hover:bg-accent-700' : 'border border-gray-300 bg-white text-gray-800 hover:bg-gray-50',
-    disabled && 'pointer-events-none opacity-50',
-  );
+const off = (disabled: boolean) => (disabled ? 'pointer-events-none opacity-50' : undefined);
 
 type Filters = { from: string; to: string; workplaceId: string; supervisorId: string; employeeId: string; includeSimulated: boolean };
 
@@ -112,16 +110,16 @@ function HoursSummary({ params }: { params: Filters }) {
       padded={false}
       actions={
         <>
-          <a className={linkBtn(true, none)} href={none ? undefined : `/api/v1/reports/hours.csv${qs(params)}`} aria-disabled={none} title="Employee Name, Total Days Worked, Total Hours Worked">
+          <LinkButton size="sm" variant="primary" className={off(none)} href={`/api/v1/reports/hours.csv${qs(params)}`} aria-disabled={none} tabIndex={none ? -1 : undefined} title="Employee Name, Total Days Worked, Total Hours Worked">
             <Download className="h-4 w-4" aria-hidden /> Download CSV
-          </a>
-          <a className={linkBtn(false, none)} href={none ? undefined : `/api/v1/reports/overtime.csv${qs(params)}`} aria-disabled={none} title="Employee Name, Total Overtime Hours">
+          </LinkButton>
+          <LinkButton size="sm" className={off(none)} href={`/api/v1/reports/overtime.csv${qs(params)}`} aria-disabled={none} tabIndex={none ? -1 : undefined} title="Employee Name, Total Overtime Hours">
             <Download className="h-4 w-4" aria-hidden /> Overtime CSV
-          </a>
+          </LinkButton>
         </>
       }
     >
-      <QueryState query={q} isEmpty={() => none} empty={<EmptyState title="No attendance in this period">Choose another date range, workspace or employee.</EmptyState>}>
+      <QueryState query={q} isEmpty={() => none} empty={<EmptyState title="No attendance in this period">Choose another date range, workplace or employee.</EmptyState>}>
         {() => (
           <>
             <Table>
@@ -169,10 +167,11 @@ const PUNCT = [
   { key: 'late', label: 'Late', color: SERIES_COLORS[1] },
 ];
 const OT_SERIES = [{ key: 'overtime', label: 'Approved overtime (h)', color: SERIES_COLORS[1] }];
-const WS_SERIES = [{ key: 'rate', label: 'Attendance rate %', color: SERIES_COLORS[0] }];
 
 /** Analytics for the page's filters: every figure comes from /analytics/dashboard, the same engine as the overview. */
-function Analytics({ params }: { params: Filters }) {
+function Analytics({ params, onSupervisor }: { params: Filters; onSupervisor: (id: string) => void }) {
+  const [place, setPlace] = useState<any | null>(null);
+  const [employee, setEmployee] = useState<string | null>(null);
   const q = useQuery({ queryKey: ['reports', 'analytics', params], queryFn: () => get(`/analytics/dashboard${qs({ ...params, compare: 'true' })}`), placeholderData: (p) => p });
   const d = q.data;
   if (q.isLoading) return <StatStripSkeleton label="Key figures" count={6} />;
@@ -185,11 +184,10 @@ function Analytics({ params }: { params: Filters }) {
   // Days with nobody rostered (weekly off, holidays) have no rate: left out rather than drawn as 0%.
   const rateTrend = trend.filter((t: any) => t.expected > 0);
   const otDays = d.hoursByDay.map((x: any) => ({ date: x.date, overtime: hrsNum(x.overtime) }));
-  const ws = d.byWorkspace.filter((w: any) => w.expected > 0 || w.totalMinutes > 0).map((w: any) => ({ ...w, rate: w.expected ? Math.round((w.present / w.expected) * 100) : 0, hours: hrsNum(w.totalMinutes) }));
   const ots = d.overtimeStatus;
   // Per-day series behind the sparklines (same days as the charts below).
   const sparkRate = trend.filter((t: any) => t.expected > 0).map((t: any) => t.rate);
-  const sparkHours = d.hoursByDay.map((x: any) => (x.worked ?? 0) + (x.overtime ?? 0));
+  const sparkHours = d.hoursByDay.map((x: any) => x.worked ?? 0);
   const sparkOt = d.hoursByDay.map((x: any) => x.overtime ?? 0);
   const sparkLate = d.trend.map((t: any) => t.late);
   return (
@@ -257,14 +255,24 @@ function Analytics({ params }: { params: Filters }) {
         </ChartCard>
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+      <SectionHeading title="Working hours" description="Net worked time plus approved overtime" />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <HoursChart d={d} />
         <ChartCard title="Hours worked by employee" subtitle="Regular and overtime hours (overtime is part of the total, never added twice)" series={HOURS_SERIES} empty={!d.hoursByEmployee.length} table={<DataTable data={d.hoursByEmployee.map((e: any) => ({ ...e, regular: hrsNum(e.totalMinutes - e.overtimeMinutes), overtime: hrsNum(e.overtimeMinutes), days: e.days }))} x="name" series={[...HOURS_SERIES, { key: 'days', label: 'Days', color: '' }]} />}>
           <HBarList data={d.hoursByEmployee.map((e: any) => ({ ...e, regular: hrsNum(e.totalMinutes - e.overtimeMinutes), overtime: hrsNum(e.overtimeMinutes) }))} label="Regular and overtime hours by employee" series={HOURS_SERIES} format={(v) => `${v} h`} name={(r) => r.name} max={10} />
         </ChartCard>
-        <ChartCard title="Workspace comparison" subtitle="Attendance rate and hours per workspace" series={WS_SERIES} empty={!ws.length} table={<DataTable data={ws} x="name" series={[{ key: 'rate', label: 'Rate %', color: '' }, { key: 'present', label: 'Attended', color: '' }, { key: 'expected', label: 'Rostered', color: '' }, { key: 'late', label: 'Late', color: '' }, { key: 'hours', label: 'Hours', color: '' }]} />}>
-          <HBarList data={ws} label="Attendance rate by workspace" series={WS_SERIES} format={(v) => `${v}%`} name={(r) => <span>{r.name} <span className="text-xs text-gray-500">· {r.hours} h · {r.late} late</span></span>} max={10} />
-        </ChartCard>
       </div>
+
+      <SectionHeading title="By location" description="The same figures, per workplace" />
+      <LocationTable d={d} onOpen={setPlace} />
+      {d.supervisors && (
+        <>
+          <SectionHeading title="By supervisor" description="A workplace shared by two supervisors counts for both, so these rows do not add up to the company total" />
+          <SupervisorTable rows={d.supervisors} onPick={onSupervisor} />
+        </>
+      )}
+      <WorkplaceModal w={place} onClose={() => setPlace(null)} onEmployee={setEmployee} />
+      <EmployeeDrawer employeeId={employee} onClose={() => setEmployee(null)} />
     </>
   );
 }
@@ -285,8 +293,8 @@ export default function ReportsPage() {
 
   return (
     <>
-      <PageHeader title="Reports" description="Attendance, hours and overtime analytics. Every figure, chart, table and export below follows these filters." />
-      <div className="sticky top-16 z-10 -mx-4 mb-5 border-b border-gray-200 bg-canvas/95 px-4 py-3 backdrop-blur-sm sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <PageHeader title="Reports" description="Attendance, hours and overtime analytics. Figures, charts and the employee summary follow these filters; the sections further down say what they cover." />
+      <div className="-mx-4 mb-5 border-b sm:sticky sm:top-16 sm:z-10 border-gray-200 bg-canvas/95 px-4 py-3 backdrop-blur-sm sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
           <DateRangeSelect value={f.range} onChange={(range) => setF({ ...f, range })} />
           <WorkplaceSelect value={f.workplaceId} onChange={(workplaceId) => setF({ ...f, workplaceId })} />
@@ -301,7 +309,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <Analytics params={params} />
+      <Analytics params={params} onSupervisor={(supervisorId) => setF({ ...f, supervisorId })} />
 
       <div className="mt-5">
         <HoursSummary params={params} />
@@ -309,21 +317,21 @@ export default function ReportsPage() {
 
       {isOwner && (
         <div className="mt-5 grid gap-5 lg:grid-cols-3">
-          <Card title="Detailed exports" description="Raw records for the filters above (UTC server times)" className="lg:col-span-1">
+          <Card title="Detailed exports" description="Raw records for the date range, workplace and employee above, in UTC server times. The supervisor filter does not apply." className="lg:col-span-1">
             <div className="flex flex-col gap-2">
-              <a className={linkBtn(true, false)} href={`/api/v1/reports/attendance.csv${qs(exportQs)}`}><Download className="h-4 w-4" aria-hidden /> Attendance records (CSV)</a>
-              <a className={linkBtn(false, false)} href={`/api/v1/reports/absences.csv${qs(exportQs)}`}><Download className="h-4 w-4" aria-hidden /> Absence intervals (CSV)</a>
+              <LinkButton size="sm" variant="primary" href={`/api/v1/reports/attendance.csv${qs(exportQs)}`}><Download className="h-4 w-4" aria-hidden /> Attendance records (CSV)</LinkButton>
+              <LinkButton size="sm" href={`/api/v1/reports/absences.csv${qs(exportQs)}`}><Download className="h-4 w-4" aria-hidden /> Absence intervals (CSV)</LinkButton>
               <hr className="my-1 border-gray-200" />
-              <Field label="Shift roster for one day (includes employees with no attendance)"><Input type="date" value={day} onChange={(e) => setDay(e.target.value)} /></Field>
-              <a className={linkBtn(false, !day)} href={`/api/v1/reports/shift.csv${qs({ date: day, workplaceId: f.workplaceId, includeSimulated: exportQs.includeSimulated })}`}><Download className="h-4 w-4" aria-hidden /> Shift roster (CSV)</a>
+              <Field label="Shift roster for one day (includes employees with no attendance)" hint="Follows the workplace filter only."><Input type="date" value={day} onChange={(e) => setDay(e.target.value)} /></Field>
+              <LinkButton size="sm" className={off(!day)} href={`/api/v1/reports/shift.csv${qs({ date: day, workplaceId: f.workplaceId, includeSimulated: exportQs.includeSimulated })}`}><Download className="h-4 w-4" aria-hidden /> Shift roster (CSV)</LinkButton>
             </div>
           </Card>
-          <Card title="Daily attendance by workspace" className="lg:col-span-2" padded={false}>
+          <Card title="Daily attendance by workplace" description="Follows the date range and workplace filters only." className="lg:col-span-2" padded={false}>
             <QueryState query={summary} isEmpty={(rows) => rows.length === 0} empty={<EmptyState title="No attendance in this range" />}>
               {(rows) => (
-                <div className="max-h-96 overflow-y-auto">
+                <div className="max-h-96 overflow-y-auto" tabIndex={0} role="region" aria-label="Table, scrolls">
                   <Table>
-                    <thead><tr><Th>Date</Th><Th>Workspace</Th><Th className="text-right">Attended</Th><Th className="text-right">Late</Th><Th className="text-right">Manual</Th></tr></thead>
+                    <thead><tr><Th>Date</Th><Th>Workplace</Th><Th className="text-right">Attended</Th><Th className="text-right">Late</Th><Th className="text-right">Manual</Th></tr></thead>
                     <tbody>
                       {rows.map((r) => (
                         <tr key={`${r.shift_date}-${r.workplace_name}`}>

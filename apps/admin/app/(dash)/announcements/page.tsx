@@ -4,9 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, Megaphone, Pencil, Pin, PinOff, Plus, Send } from 'lucide-react';
 import { get, patch, post, qs } from '@/lib/api';
 import { ago, fmtDateTime } from '@/lib/format';
-import { Badge, Button, Callout, ConfirmButton, cx, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, SearchInput, Select, Tabs, Textarea, Toolbar } from '@/components/ui';
+import { Badge, Button, Callout, ConfirmButton, CutNotice, cx, EmptyState, Field, InlineError, Input, Modal, PageHeader, QueryState, SearchInput, Select, Tabs, Textarea, Toolbar } from '@/components/ui';
 import { WorkplaceSelect, useWorkplaces } from '@/components/filters';
 import { useMe } from '@/lib/me';
+import { useDebounced } from '@/lib/use-debounced';
 
 type Status = 'live' | 'archived';
 
@@ -27,7 +28,7 @@ function Composer({ initial, onDone }: { initial?: any; onDone: () => void }) {
       {!initial && (
         <Field label="Audience">
           <Select value={f.workplaceId} onChange={(e) => setF({ ...f, workplaceId: e.target.value })} required={!isOwner}>
-            {isOwner ? <option value="">Everyone in the company</option> : <option value="">Choose a workspace…</option>}
+            {isOwner ? <option value="">Everyone in the company</option> : <option value="">Choose a workplace…</option>}
             {wps.data?.filter((w: any) => w.is_active).map((w: any) => <option key={w.id} value={w.id}>Everyone at {w.name}</option>)}
           </Select>
         </Field>
@@ -119,7 +120,8 @@ export default function AnnouncementsPage() {
   const [compose, setCompose] = useState(false);
   const [open, setOpen] = useState<any | null>(null);
   const [editing, setEditing] = useState<any | null>(null);
-  const list = useQuery({ queryKey: ['broadcasts', status, search, workplaceId], queryFn: () => get<any[]>(`/broadcasts${qs({ status, search, workplaceId })}`), placeholderData: (p) => p });
+  const term = useDebounced(search);
+  const list = useQuery({ queryKey: ['broadcasts', status, term, workplaceId], queryFn: () => get<any[]>(`/broadcasts${qs({ status, search: term, workplaceId })}`), placeholderData: (p) => p });
   const canManage = (a: any) => canPublish && (isOwner || a.created_by === me?.user.id);
 
   return (
@@ -169,6 +171,7 @@ export default function AnnouncementsPage() {
             </ul>
           )}
         </QueryState>
+        <CutNotice shown={list.data?.length ?? 0} cap={200} noun="announcements" />
       </section>
 
       <Modal open={compose} onOpenChange={setCompose} title="New announcement" description="Workers see it in their app straight away.">

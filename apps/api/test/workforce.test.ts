@@ -302,6 +302,30 @@ describe('attendance totals, CSV exports and scope', () => {
     }
   });
 
+  it('counts deactivated employees in the total only, within the caller\'s scope', async () => {
+    const url = `/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`;
+    const before = (await owner.agent.get(url).expect(200)).body.kpis;
+    expect(before.allWorkers).toBe(before.totalWorkers);
+    await q(`UPDATE users SET is_active = false WHERE id = $1`, [empB1.id]);
+    try {
+      const o = (await owner.agent.get(url).expect(200)).body.kpis;
+      expect(o.totalWorkers).toBe(before.totalWorkers - 1);
+      expect(o.allWorkers).toBe(before.allWorkers);
+      const s = (await sup.agent.get(url).expect(200)).body.kpis;
+      expect(s.allWorkers).toBeLessThan(o.allWorkers); // the other site's people are not theirs to count
+    } finally {
+      await q(`UPDATE users SET is_active = true WHERE id = $1`, [empB1.id]);
+    }
+  });
+
+  it('does not report a workplace as short of staff when the view is one employee', async () => {
+    const one = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false&employeeId=${empB1.id}`).expect(200)).body;
+    expect(one.byWorkspace.find((w: any) => w.id === siteB)).toMatchObject({ minStaff: 3, shortage: 0 });
+    expect(one.byWorkspace.some((w: any) => w.status === 'SHORT')).toBe(false);
+    const all = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`).expect(200)).body;
+    expect(all.byWorkspace.find((w: any) => w.id === siteB).shortage).toBe(Math.max(0, 3 - all.byWorkspace.find((w: any) => w.id === siteB).assignedToday));
+  });
+
   it('builds the dashboard from the same figures, scoped per role', async () => {
     const o = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`).expect(200)).body;
     const hours = (await owner.agent.get(`/api/v1/reports/hours?from=${d1}&to=${d3}`).expect(200)).body.rows;
@@ -311,6 +335,7 @@ describe('attendance totals, CSV exports and scope', () => {
     expect(o.kpis.activeWorkspaces).toBe(2);
     expect(o.hoursByDay.reduce((n: number, d: any) => n + d.worked, 0)).toBe(o.kpis.totalMinutes);
     expect(o.byWorkspace.reduce((n: number, w: any) => n + w.totalMinutes, 0)).toBe(o.kpis.totalMinutes);
+    expect(o.byWorkspace.reduce((n: number, w: any) => n + w.expected, 0)).toBe(o.summary.expected);
     expect(o.kpis.incomplete).toBe(1);
     expect(o.attention.missingCheckout[0]).toMatchObject({ name: 'Cara B2', date: d3 });
     expect(o.supervisors.map((s: any) => s.name)).toEqual(['Sam Supervisor']);

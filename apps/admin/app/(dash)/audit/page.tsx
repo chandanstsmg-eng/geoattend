@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { get, qs } from '@/lib/api';
+import { useDebounced } from '@/lib/use-debounced';
 import { fmtDateTime } from '@/lib/format';
 import { Card, EmptyState, Input, PageHeader, Pagination, QueryState, Select, Table, Td, Th, Toolbar } from '@/components/ui';
 
@@ -11,7 +12,8 @@ export default function AuditPage() {
   const [f, setF] = useState({ action: '', resourceType: '', from: '', to: '' });
   const [offset, setOffset] = useState(0);
   const limit = 100;
-  const list = useQuery({ queryKey: ['audit', f, offset], queryFn: () => get(`/audit-logs${qs({ ...f, limit, offset })}`) });
+  const filters = useDebounced(f);
+  const list = useQuery({ queryKey: ['audit', filters, offset], queryFn: () => get(`/audit-logs${qs({ ...filters, limit, offset })}`), placeholderData: (p) => p });
   const set = (k: keyof typeof f) => (v: string) => { setOffset(0); setF({ ...f, [k]: v }); };
 
   return (
@@ -50,7 +52,7 @@ export default function AuditPage() {
                             </div>
                           </details>
                         )}
-                        {a.ip && <div className="text-caption text-gray-400">{a.ip}</div>}
+                        {a.ip && <div className="text-caption text-gray-500">{a.ip}</div>}
                       </Td>
                     </tr>
                   ))}

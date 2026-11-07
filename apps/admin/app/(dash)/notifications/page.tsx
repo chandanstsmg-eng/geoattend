@@ -122,7 +122,7 @@ export default function NotificationsPage() {
                   <li key={n.id} className={cx('flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-start', !n.read_at && 'bg-primary-50/40')}>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        {!n.read_at && <span className="h-2 w-2 rounded-full bg-primary-500" aria-label="Unread" />}
+                        {!n.read_at && <span className="h-2 w-2 rounded-full bg-primary-500" role="img" aria-label="Unread" />}
                         {n.severity !== 'INFO' && <SeverityBadge severity={n.severity} />}
                         <span className={cx('text-gray-900', !n.read_at && 'font-medium')}>{n.title}</span>
                         {n.is_simulated && <SimBadge />}

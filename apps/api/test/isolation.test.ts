@@ -9,9 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { DateTime } from 'luxon';
-import { asSystem, currentOrg, databaseRoleProblems, getTenantPool, one, q, tx, withOrg } from '../src/db/pool.js';
+import { asSystem, currentOrg, databaseRoleProblems, getTenantPool, one, q, qPrepared, tx, withOrg } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { signAccessToken } from '../src/lib/auth.js';
+import { roster } from '../src/modules/reports/reports.routes.js';
 import { HttpError } from '../src/lib/errors.js';
 import { mount, registry, route } from '../src/lib/http.js';
 import { adminAgent, createEmployee, createTestDatabase, mobileLogin, PASSWORD, seedBase, testSettings } from './helpers.js';
@@ -161,6 +162,32 @@ describe('a query that forgets its company filter', () => {
       }
     } finally {
       client.release(new Error('do not reuse')); // its company is unknown to the pool's bookkeeping
+    }
+  });
+});
+
+describe('a prepared query, whose plan a connection keeps', () => {
+  it('still shows each company only its own rows once the plan is cached', async () => {
+    // Past the five runs after which PostgreSQL may switch to a cached plan, alternating companies on the same connections.
+    const sql = `SELECT id, org_id FROM users`;
+    for (let i = 0; i < 12; i++) {
+      for (const c of [A, B]) {
+        const rows = await withOrg(c.org, () => qPrepared('isolation-check', sql, []));
+        expect(rows.length).toBeGreaterThan(0);
+        expect(new Set(rows.map((r) => r.org_id))).toEqual(new Set([c.org]));
+      }
+    }
+  });
+
+  it('keeps the roster to one company, with the company filter removed from the picture', async () => {
+    const date = DateTime.utc().toISODate()!;
+    for (let i = 0; i < 12; i++) {
+      for (const [mine, other] of [[A, B], [B, A]] as const) {
+        const own = await withOrg(mine.org, () => roster(mine.org, date, null));
+        expect(own.some((r) => r.employee_id === other.emp.id)).toBe(false);
+        // Asking for the other company by id, from inside this one, finds nobody: row security stands behind the filter.
+        expect(await withOrg(mine.org, () => roster(other.org, date, null))).toEqual([]);
+      }
     }
   });
 });

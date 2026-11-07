@@ -2,6 +2,7 @@
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { Banner, Body, Button, Card, Muted, Row, Screen } from '../../components/ui';
+import { attendanceStatus } from '../../lib/attendance-status';
 import { fmtDate, fmtTimeSec } from '../../lib/format';
 import { colors, font, space } from '../../lib/theme';
 
@@ -13,7 +14,7 @@ export default function SuccessScreen() {
     // Saved, not recorded: the server has not seen it, so nothing here may read as confirmed.
     return (
       <Screen>
-        <View style={st.saved} accessibilityRole="summary" accessibilityLabel={`Check-in saved on this phone at ${fmtTimeSec(p.capturedAt)}. Not recorded yet.`}>
+        <View accessible style={st.saved} accessibilityRole="summary" accessibilityLabel={`Check-in saved on this phone at ${fmtTimeSec(p.capturedAt)}. Not recorded yet.`}>
           <Text style={st.savedTitle}>Saved on this phone</Text>
           <Text style={st.time}>Taken at: {fmtTimeSec(p.capturedAt)}</Text>
           <Muted center>Not recorded yet</Muted>
@@ -29,22 +30,27 @@ export default function SuccessScreen() {
     // Defensive: never claim success without the server's timestamp.
     return <Redirect href="/shift" />;
   }
+  // The server has this record, but it may still be waiting for a person: only a counted record looks confirmed.
+  const v = attendanceStatus(p.verification);
   return (
     <Screen>
-      <View style={st.hero} accessibilityRole="summary" accessibilityLabel={`Attendance recorded at ${fmtTimeSec(p.recordedAt)}`}>
-        <View style={st.check}>
-          <Text style={st.checkText}>✓</Text>
-        </View>
-        <Text style={st.title}>Attendance recorded</Text>
+      <View accessible style={v.counted ? st.hero : st.saved} accessibilityRole="summary" accessibilityLabel={`${v.counted ? 'Attendance recorded' : 'Received, not counted yet'} at ${fmtTimeSec(p.recordedAt)}. ${v.label}`}>
+        {v.counted ? (
+          <View style={st.check}>
+            <Text style={st.checkText}>✓</Text>
+          </View>
+        ) : null}
+        <Text style={v.counted ? st.title : st.savedTitle}>{v.counted ? 'Attendance recorded' : 'Received, not counted yet'}</Text>
         <Text style={st.time}>Recorded at: {fmtTimeSec(p.recordedAt)}</Text>
         <Muted center>{fmtDate(p.recordedAt)} · server time</Muted>
         {receipt ? <Text style={st.receipt} selectable>Receipt {receipt}</Text> : null}
       </View>
       {p.replay ? <Banner tone="info" title="This attendance was already recorded" message="The server returned the original record; nothing was duplicated." /> : null}
       <Card>
-        <Row label="Verification" value={p.verification ?? 'VERIFIED'} />
+        <Row label="Status" value={v.label} />
         {p.isLate ? <Row label="Late by" value={`${p.lateBy} min`} /> : <Row label="Arrival" value="On time" />}
       </Card>
+      {v.counted ? null : <Banner tone="warning" title="Your manager checks this record" message="It counts once they approve it. You can follow it in History." />}
       <Body>Location tracking continues until you end the shift or the shift window closes.</Body>
       <Button title="Go to live shift" onPress={() => router.replace('/shift')} />
     </Screen>
