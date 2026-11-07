@@ -9,7 +9,7 @@ import { useMe } from '@/lib/me';
 import { useDebounced } from '@/lib/use-debounced';
 import { get, post, qs } from '@/lib/api';
 import { ago } from '@/lib/format';
-import { Badge, Button, Card, cx, DemoTag, EmptyState, Field, InlineError, Input, Modal, PageHeader, Pagination, QueryState, rowLink, SearchInput, Select, SortTh, Table, Td, Th, Toolbar, type SortDir } from '@/components/ui';
+import { Badge, Button, Card, cx, DemoTag, EmptyState, Field, InlineError, Input, Modal, PageHeader, Pagination, QueryState, rowKeys, rowLink, SearchInput, Select, SortTh, Table, Td, Th, Toolbar, type SortDir } from '@/components/ui';
 import { StateBadge } from '@/components/state-badge';
 import { SupervisorSelect, WorkplaceSelect, useEmployees, useWorkplaces } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
@@ -117,7 +117,7 @@ export default function EmployeesPage() {
               </thead>
               <tbody>
                 {rows.slice(offset, offset + PAGE).map((e) => (
-                  <tr key={e.id} className={cx(rowLink, !e.is_active && 'text-gray-500')} onClick={() => setSelected(e.id)} tabIndex={0} onKeyDown={(ev) => ev.key === 'Enter' && setSelected(e.id)} aria-label={`${e.full_name}, open employee`}>
+                  <tr key={e.id} className={cx(rowLink, !e.is_active && 'text-gray-500')} onClick={() => setSelected(e.id)} tabIndex={0} onKeyDown={rowKeys(() => setSelected(e.id))} aria-label={`${e.full_name}, open employee`}>
                     <Td>
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-gray-900">{e.full_name}</span>

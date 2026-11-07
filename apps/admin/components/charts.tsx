@@ -372,7 +372,7 @@ export function ChartCard({ title, subtitle, series, children, table, empty, act
           {table && !empty && (
             <div className="inline-flex rounded-md bg-gray-100 p-0.5" role="group" aria-label={`${title}: view`}>
               {(['chart', 'table'] as const).map((v) => (
-                <button key={v} type="button" aria-pressed={view === v} aria-label={v === 'chart' ? 'Chart view' : 'Table view'} title={v === 'chart' ? 'Chart' : 'Table'} onClick={() => setView(v)} className={cx('rounded px-1.5 py-1', view === v ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-500 hover:text-gray-800')}>
+                <button key={v} type="button" aria-pressed={view === v} aria-label={v === 'chart' ? 'Chart view' : 'Table view'} title={v === 'chart' ? 'Chart' : 'Table'} onClick={() => setView(v)} className={cx('rounded p-1.5', view === v ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-500 hover:text-gray-800')}>
                   {v === 'chart' ? <BarChart3 className="h-3.5 w-3.5" aria-hidden /> : <Table2 className="h-3.5 w-3.5" aria-hidden />}
                 </button>
               ))}

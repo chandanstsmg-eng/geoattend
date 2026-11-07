@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, Plus, UsersRound } from 'lucide-react';
 import { get, qs } from '@/lib/api';
 import { DAY_NAMES, todayISO } from '@/lib/format';
 import { useMe } from '@/lib/me';
-import { Badge, Button, Card, cx, EmptyState, Modal, PageHeader, QueryState, Select } from '@/components/ui';
+import { Badge, Button, Card, cx, EmptyState, Modal, PageHeader, QueryState, Select, useKeyboardScroll } from '@/components/ui';
 import { WorkplaceSelect } from '@/components/filters';
 import { BulkAssignForm, RosterEntryForm } from '@/components/roster-form';
 import { Kpi, StatStrip, StatStripSkeleton } from '@/components/charts';
@@ -62,10 +62,11 @@ function CoverageSummary({ roster, staffing, employees }: { roster?: any[]; staf
 
 /** Rostered people per workplace and day against the workplace's target (if it has one). */
 function Staffing({ data, days, today }: { data: any; days: number[]; today: number }) {
+  const scroller = useKeyboardScroll<HTMLDivElement>();
   if (!data?.workplaces?.length) return null;
   return (
     <Card padded={false} className="mb-4" title="Staffing" description="People rostered per workplace and day, against the workplace's daily target">
-      <div className="relative overflow-x-auto">
+      <div ref={scroller} className="relative overflow-x-auto">
         <table className="w-full min-w-[920px] table-fixed text-left text-sm">
           <thead>
             <tr>
@@ -174,7 +175,8 @@ export default function RosterPage() {
         }
         actions={week !== mondayOf(todayISO()) && <Button size="sm" onClick={() => setWeek(mondayOf(todayISO()))}>This week</Button>}
       >
-        <QueryState query={roster} isEmpty={() => rows.length === 0} empty={<EmptyState title="Nobody rostered for this filter this week" />}>
+        {/* The rows are built from the employee list too: without it, "nobody rostered" would be untrue. */}
+        <QueryState query={employees.error ? (employees as typeof roster) : roster} isEmpty={() => rows.length === 0} empty={<EmptyState title="Nobody rostered for this filter this week" />}>
           {() => (
             <>
             <div className="sm:hidden">

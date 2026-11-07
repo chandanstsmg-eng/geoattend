@@ -310,6 +310,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
 
   return (
     <div className={cx('min-h-dvh pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] print:pl-0', prefs.rail ? 'lg:pl-16' : 'lg:pl-60')}>
+      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-navy-800 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-white">Skip to content</a>
       <aside
         className={cx(
           'fixed inset-y-0 left-0 z-40 flex w-[min(17rem,85vw)] flex-col border-r border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] transition-[transform,width] duration-200 print:hidden lg:translate-x-0',
@@ -418,7 +419,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
       </header>
       <SosBanner />
       {me.sampleData && <SampleBanner />}
-      <main className="mx-auto max-w-[1600px] px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{ownerPage && !isOwner ? <EmptyState title="Not available">This page is for company owners.</EmptyState> : children}</main>
+      <main id="main" tabIndex={-1} className="mx-auto max-w-[1600px] outline-none px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{ownerPage && !isOwner ? <EmptyState title="Not available">This page is for company owners.</EmptyState> : children}</main>
       <AwayDialog open={awayOpen} onOpenChange={setAwayOpen} />
     </div>
   );

@@ -39,7 +39,7 @@ export default function TasksPage() {
                       {t.details && <div className="line-clamp-1 text-xs text-gray-500">{t.details}</div>}
                     </Td>
                     <Td>{t.assignee_name} <span className="text-xs text-gray-500">{t.employee_code}</span></Td>
-                    <Td className={`tabular ${t.due_date && t.due_date < todayISO() && ['OPEN', 'REOPENED'].includes(t.status) ? 'font-semibold text-red-700' : ''}`}>{t.due_date ? fmtDate(t.due_date) : '—'}</Td>
+                    <Td className={`tabular ${t.due_date && t.due_date < todayISO() && ['OPEN', 'REOPENED'].includes(t.status) ? 'font-semibold text-red-700' : ''}`}>{t.due_date ? fmtDate(t.due_date) : '—'}{t.due_date && t.due_date < todayISO() && ['OPEN', 'REOPENED'].includes(t.status) ? ' · overdue' : ''}</Td>
                     <Td><Badge dot tone={TONE[t.status as keyof typeof TONE]}>{LABEL[t.status as keyof typeof LABEL]}</Badge></Td>
                     <Td className="text-xs text-gray-500">{ago(t.updated_at)}</Td>
                   </tr>

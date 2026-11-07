@@ -164,6 +164,15 @@ input[type='radio'] {
   }
 }
 
+/* Touch screens: a row of small links stays easy to hit. Links inside a sentence are left alone. */
+@media (pointer: coarse) {
+  main button,
+  main a[class*='inline-flex'],
+  main a[class*='flex'] {
+    min-height: 2rem;
+  }
+}
+
 .tabular {
   font-variant-numeric: tabular-nums;
 }
