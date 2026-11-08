@@ -415,7 +415,7 @@ function RecordDetail({ id }: { id: string }) {
                 <Field label="Verification status">
                   <Select value={corr.verificationStatus} onChange={(e) => setCorr({ ...corr, verificationStatus: e.target.value })}>
                     <option value="">Keep ({r.verification_status.toLowerCase()})</option>
-                    {['CORRECTED', 'MANUAL_APPROVED', 'VERIFIED', 'DISPUTED', 'VOIDED'].map((s) => <option key={s} value={s}>{s.replace('_', ' ').toLowerCase()}</option>)}
+                    {['CORRECTED', 'MANUAL_APPROVED', ...(r.verification_status === 'VERIFIED' ? ['VERIFIED'] : []), 'DISPUTED', 'VOIDED'].map((s) => <option key={s} value={s}>{s.replace('_', ' ').toLowerCase()}</option>)}
                   </Select>
                 </Field>
                 <Field label="Late">
@@ -563,7 +563,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
   const create = useMutation({ meta: { success: isOwner ? 'Attendance added' : 'Sent to the owner for approval' },
     mutationFn: () => {
       const { workedHours, ...rest } = f;
-      return post('/attendance/manual', { ...rest, recordedAt: businessInstant(f.recordedAt), workedMinutes: workedHours ? Math.round(Number(workedHours) * 60) : undefined });
+      return post('/attendance/manual', { ...rest, recordedAt: businessInstant(f.recordedAt), workedMinutes: Math.round(Number(workedHours) * 60) });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['attendance'] }); qc.invalidateQueries({ queryKey: ['overview'] }); onClose(); },
   });
@@ -588,7 +588,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
         </div>
         <Field label="Shift date"><Input type="date" required value={f.shiftDate} onChange={(e) => setF({ ...f, shiftDate: e.target.value })} /></Field>
         <Field label="Attendance time"><Input type="datetime-local" required value={f.recordedAt} onChange={(e) => setF({ ...f, recordedAt: e.target.value })} /></Field>
-        <Field label="Hours worked (optional)" hint="Without this the day counts, but its hours stay unmeasured."><Input type="number" min={0} max={24} step="0.25" value={f.workedHours} onChange={(e) => setF({ ...f, workedHours: e.target.value })} /></Field>
+        <Field label="Hours worked" hint="Up to the shift's length; extra time is recorded as overtime."><Input type="number" required min={0} max={24} step="0.25" value={f.workedHours} onChange={(e) => setF({ ...f, workedHours: e.target.value })} /></Field>
         <div className="sm:col-span-2"><Field label="Reason (required)"><Textarea required minLength={5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
         <div className="sm:col-span-2"><InlineError error={create.error} /></div>
         <div className="sm:col-span-2 flex justify-end gap-2">

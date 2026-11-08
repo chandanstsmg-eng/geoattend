@@ -9,7 +9,7 @@ import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
-import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, workJoin } from '../../lib/tenancy.js';
+import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, workJoin } from '../../lib/tenancy.js';
 import { badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { computeHours, hoursText, loadPendingHours, loadWorkRecords, withPendingHours } from './hours.js';
@@ -104,13 +104,17 @@ export function workFlags(
  * absence is never counted twice (`missed_shifts` keeps the shifts missed on days worked).
  * Hours come from the same engine as the hours report, so the two always agree.
  */
-export async function monthlySummary(orgId: string, month: string, workplaceId: string | null, includeSimulated: boolean) {
+export async function monthlySummary(orgId: string, month: string, workplaceId: string | null, includeSimulated: boolean, scope: SummaryScope = {}) {
   const first = DateTime.fromISO(`${month}-01`);
-  return { month, ...(await periodSummary(orgId, first.toISODate()!, first.endOf('month').toISODate()!, workplaceId, includeSimulated)) };
+  return { month, ...(await periodSummary(orgId, first.toISODate()!, first.endOf('month').toISODate()!, workplaceId, includeSimulated, scope)) };
 }
 
+/** Narrows a summary to one supervisor's workplaces and/or one employee, as the other reports do. */
+type SummaryScope = { supervisorId?: string | null; employeeId?: string | null };
+
 /** The same summary for any run of days. */
-export async function periodSummary(orgId: string, from: string, until: string, workplaceId: string | null, includeSimulated: boolean) {
+export async function periodSummary(orgId: string, from: string, until: string, workplaceId: string | null, includeSimulated: boolean, scope: SummaryScope = {}) {
+  const sites: string[] | null = scope.supervisorId ? (await one(`SELECT ${SUPERVISOR_SITES('$1')} AS s`, [scope.supervisorId])).s : null;
   const first = DateTime.fromISO(from);
   const today = DateTime.fromISO(await defaultDate(orgId, workplaceId));
   const last = DateTime.min(DateTime.fromISO(until), today);
@@ -119,7 +123,8 @@ export async function periodSummary(orgId: string, from: string, until: string, 
     const date = d.toISODate()!;
     const isToday = date === today.toISODate();
     const byEmployee = new Map<string, any[]>();
-    for (const r of await withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated))) {
+    for (const r of await withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated, sites))) {
+      if (scope.employeeId && r.employee_id !== scope.employeeId) continue;
       byEmployee.set(r.employee_id, [...(byEmployee.get(r.employee_id) ?? []), r]);
     }
     for (const [employeeId, shifts] of byEmployee) {
@@ -158,7 +163,7 @@ export async function periodSummary(orgId: string, from: string, until: string, 
   const to = last >= first ? last.toISODate()! : null;
   if (to) {
     const { workforce } = await getSettings(orgId);
-    const records = await loadWorkRecords({ orgId, sites: null }, { from: first.toISODate()!, to, workplaceId, includeSimulated });
+    const records = await loadWorkRecords({ orgId, sites: null }, { from: first.toISODate()!, to, workplaceId, includeSimulated, supervisorId: scope.supervisorId ?? null, employeeId: scope.employeeId ?? null });
     for (const h of computeHours(records, workforce, first.toISODate()!, to)) {
       const t = totals.get(h.employee_id);
       if (t) {
@@ -196,6 +201,8 @@ const rangeQuery = z.object({
   to: isoDate,
   workplaceId: z.uuid().optional(),
   employeeId: z.uuid().optional(),
+  /** The workplaces of this supervisor, as everywhere else. */
+  supervisorId: z.uuid().optional(),
   includeSimulated: z.enum(['true', 'false']).default('false'),
 });
 
@@ -343,9 +350,9 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     summary: 'Per-employee month totals: present, late, leave, holidays, absent, hours, overtime',
     access: 'admin',
     ownerOnly: true,
-    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('true'), limit: z.coerce.number().int().min(1).max(500).optional(), offset: z.coerce.number().int().min(0).default(0) }),
+    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), supervisorId: z.uuid().optional(), employeeId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('true'), limit: z.coerce.number().int().min(1).max(500).optional(), offset: z.coerce.number().int().min(0).default(0) }),
     handler: async ({ query, user }) => {
-      const s = await monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true');
+      const s = await monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true', query);
       return { ...s, total: s.rows.length, rows: pageOf(s.rows, query) };
     },
   }),
@@ -356,9 +363,9 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     access: 'admin',
     ownerOnly: true,
     raw: true,
-    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('false') }),
+    query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'Expected YYYY-MM'), workplaceId: z.uuid().optional(), supervisorId: z.uuid().optional(), employeeId: z.uuid().optional(), includeSimulated: z.enum(['true', 'false']).default('false') }),
     handler: async ({ query, res, user, req }) => {
-      const s = await monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true');
+      const s = await monthlySummary(user.orgId, query.month, query.workplaceId ?? null, query.includeSimulated === 'true', query);
       await audit({ actor: user, action: 'report.export', resourceType: 'monthly_csv', after: { ...query, rows: s.rows.length }, req });
       sendCsv(
         res,
@@ -385,8 +392,9 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 count(*) FILTER (WHERE ar.verification_status = 'PENDING_VERIFICATION')::int AS pending_verification
          FROM attendance_records ar JOIN workplaces w ON w.id = ar.workplace_id
          WHERE w.org_id = $5 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4 OR NOT ar.is_simulated) AND ar.verification_status <> 'VOIDED'
+           AND ($6::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$6')}))
          GROUP BY ar.shift_date, w.name ORDER BY ar.shift_date DESC, w.name`,
-        [query.from, query.to, query.workplaceId ?? null, query.includeSimulated === 'true', user.orgId],
+        [query.from, query.to, query.workplaceId ?? null, query.includeSimulated === 'true', user.orgId, query.supervisorId ?? null],
       ),
   }),
   route({
@@ -413,8 +421,9 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN tracking_sessions s ON s.id = ar.session_id
          LEFT JOIN ${workJoin()}
          WHERE u.org_id = $6 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4::uuid IS NULL OR ar.employee_id = $4) AND ($5 OR NOT ar.is_simulated)
+           AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
          ORDER BY ar.shift_date, w.name, sh.name, u.full_name, ar.id`,
-        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
+        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId, query.supervisorId ?? null],
       );
       const range = await narrowedRange(
         `SELECT min(ar.shift_date) AS first, max(ar.shift_date) AS last FROM attendance_records ar JOIN users u ON u.id = ar.employee_id WHERE u.org_id = $3 AND ar.shift_date BETWEEN $1 AND $2`,
@@ -446,8 +455,9 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 ROUND(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at)) / 60)::int AS minutes, a.is_simulated, w.timezone
          FROM absence_intervals a JOIN users u ON u.id = a.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id JOIN workplaces w ON w.id = a.workplace_id
          WHERE u.org_id = $6 AND a.started_at >= ${dayStartSql('$1', '$6')} AND a.started_at < ${dayEndSql('$2', '$6')} AND ($3::uuid IS NULL OR a.workplace_id = $3) AND ($4::uuid IS NULL OR a.employee_id = $4) AND ($5 OR NOT a.is_simulated)
+           AND ($7::uuid IS NULL OR a.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
          ORDER BY a.started_at, a.id`,
-        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId],
+        [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId, query.supervisorId ?? null],
       );
       const range = await narrowedRange(
         `SELECT (min(a.started_at) AT TIME ZONE ${orgTimezoneSql('$3')})::date AS first, (max(a.started_at) AT TIME ZONE ${orgTimezoneSql('$3')})::date AS last

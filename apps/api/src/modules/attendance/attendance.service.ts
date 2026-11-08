@@ -491,6 +491,9 @@ async function applyCorrection(db: Queryable, outbox: Outbox, approver: AuthUser
   if (before.verification_status === 'PENDING_VERIFICATION' && c.verificationStatus === 'VERIFIED') {
     throw conflict('NEEDS_VERIFICATION', 'This record was sent late from the phone. Decide it in Approvals.');
   }
+  if (c.verificationStatus === 'VERIFIED' && before.verification_status !== 'VERIFIED') {
+    throw badRequest('NOT_GPS_VERIFIED', 'Only the phone and the server can mark a record GPS-verified. Use Corrected or Approved by manager.');
+  }
   // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
   let isLate = c.isLate ?? null;
   let lateBy = c.lateByMinutes ?? null;

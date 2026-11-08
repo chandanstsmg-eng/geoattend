@@ -193,6 +193,212 @@ describe('reports keep their history and their definitions', () => {
   });
 });
 
+describe('half-day leave (existing rules, pinned)', () => {
+  const setup = async (leaveType: string, worked: boolean) => {
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    // rostered for that one day only, so the month's figures are about it alone
+    await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from, effective_to) VALUES ($1,$2,$3,$3)`, [emp.id, base.shiftId, day(-2)]);
+    await as(owner).post('/leave', { employeeId: emp.id, leaveType, startDate: day(-2), endDate: day(-2), halfDay: true, reason: 'Half day for a family matter' }).expect(201);
+    if (worked) await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T13:00:00Z`, workedMinutes: 240, reason: 'Phone was broken' }).expect(201);
+    const monthly = (await owner.agent.get(`/api/v1/reports/monthly?month=${day(-2).slice(0, 7)}`).expect(200)).body.rows.find((r: any) => r.employee_id === emp.id);
+    const dash = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-2)}&to=${day(-2)}&employeeId=${emp.id}`).expect(200)).body.summary;
+    return { monthly, dash };
+  };
+
+  it('worked on a paid half day: half present, half paid leave, not absent', async () => {
+    const { monthly, dash } = await setup('CASUAL', true);
+    expect(monthly).toMatchObject({ present: 0.5, leave: 0.5, paid_leave: 0.5, unpaid_leave: 0, absent: 0 });
+    // The dashboard rate leaves leave days out, half or full, on both sides.
+    expect([dash.expected, dash.present]).toEqual([0, 0]);
+  });
+
+  it('did not work on an unpaid half day: half unpaid leave, half absent', async () => {
+    const { monthly } = await setup('UNPAID', false);
+    expect(monthly).toMatchObject({ present: 0, leave: 0.5, paid_leave: 0, unpaid_leave: 0.5, absent: 0.5 });
+  });
+
+  it('a half day must be a single date', async () => {
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const r = await as(owner).post('/leave', { employeeId: emp.id, leaveType: 'CASUAL', startDate: day(-3), endDate: day(-2), halfDay: true, reason: 'Two half days at once' }).expect(400);
+    expect(r.body.error.code).toBe('BAD_RANGE');
+  });
+});
+
+describe('analytics ranges and export filters', () => {
+  let siteX: string;
+  let shiftX: string;
+  let inScope: string;
+  let outScope: string;
+  beforeAll(async () => {
+    siteX = (await one(`INSERT INTO workplaces (name, latitude, longitude, radius_m, timezone, org_id) VALUES ('Range site', 13.1, 77.8, 50, 'UTC', $1) RETURNING id`, [DEFAULT_ORG_ID])).id;
+    shiftX = (await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1, 'X shift', '00:00', '23:59', 'UTC', '{1,2,3,4,5,6,7}', 240) RETURNING id`, [siteX])).id;
+    // One worker at the supervisor's site and one at site X, each with one old and one recent record.
+    for (const [site, shift] of [[base.workplaceId, base.shiftId], [siteX, shiftX]] as const) {
+      const emp = await createEmployee({ workplaceId: site });
+      await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from, effective_to) VALUES ($1,$2,$3,$4)`, [emp.id, shift, day(-100), day(-1)]);
+      for (const d of [-80, -5]) await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: shift, shiftDate: day(d), recordedAt: `${day(d)}T08:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201);
+      if (site === siteX) outScope = emp.id;
+      else inScope = emp.id;
+    }
+  });
+
+  it('attendance figures cover the whole range, not just its last 62 days', async () => {
+    const d = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-89)}&to=${day(-1)}&workplaceId=${siteX}&includeSimulated=false`).expect(200)).body;
+    expect(d.trend).toHaveLength(89);
+    expect(d.summary.present).toBe(2);
+    expect(d.summary.totalMinutes).toBe(600); // hours and attendance describe the same days
+  });
+
+  it('answers a range longer than a year for its latest year, says so, and keeps hours and attendance on the same days', async () => {
+    const d = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-400)}&to=${day(-1)}&workplaceId=${siteX}&includeSimulated=false`).expect(200)).body;
+    expect(d.limited).toBe(true);
+    expect(d.requestedFrom).toBe(day(-400));
+    expect(d.from).toBe(day(-366));
+    expect(d.trend).toHaveLength(366);
+    expect([d.summary.present, d.summary.totalMinutes]).toEqual([2, 600]);
+    const short = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-30)}&to=${day(0)}`).expect(200)).body;
+    expect(short.limited).toBe(false);
+  });
+
+  it('the supervisor filter applies to the attendance, absences and daily exports', async () => {
+    const csv = (await owner.agent.get(`/api/v1/reports/attendance.csv?from=${day(-90)}&to=${day(0)}&supervisorId=${sup.id}`).expect(200)).text;
+    const ids = await q('SELECT id, full_name FROM users WHERE id = ANY($1)', [[inScope, outScope]]);
+    const name = (id: string) => ids.find((u: any) => u.id === id).full_name;
+    expect(csv).toContain(name(inScope));
+    expect(csv).not.toContain(name(outScope));
+    await owner.agent.get(`/api/v1/reports/absences.csv?from=${day(-90)}&to=${day(0)}&supervisorId=${sup.id}`).expect(200);
+    const daily = (await owner.agent.get(`/api/v1/reports/daily-summary?from=${day(-90)}&to=${day(0)}&supervisorId=${sup.id}`).expect(200)).body;
+    expect(daily.every((r: any) => r.workplace_name !== 'Range site')).toBe(true);
+  });
+
+  it('the monthly summary follows the supervisor and employee filters', async () => {
+    const month = day(-5).slice(0, 7);
+    const bySup = (await owner.agent.get(`/api/v1/reports/monthly?month=${month}&supervisorId=${sup.id}`).expect(200)).body.rows.map((r: any) => r.employee_id);
+    expect(bySup).toContain(inScope);
+    expect(bySup).not.toContain(outScope);
+    const byEmp = (await owner.agent.get(`/api/v1/reports/monthly?month=${month}&employeeId=${outScope}`).expect(200)).body.rows;
+    expect(byEmp.map((r: any) => r.employee_id)).toEqual([outScope]);
+    const csv = (await owner.agent.get(`/api/v1/reports/monthly.csv?month=${month}&employeeId=${outScope}`).expect(200)).text.trim().split(/\r?\n/);
+    expect(csv).toHaveLength(2);
+  });
+
+  it('a supervisor still cannot use these exports', async () => {
+    expect((await sup.agent.get(`/api/v1/reports/attendance.csv?from=${day(-9)}&to=${day(0)}&supervisorId=${sup.id}`)).status).toBe(403);
+    expect((await sup.agent.get(`/api/v1/reports/monthly?month=${day(0).slice(0, 7)}`)).status).toBe(403);
+  });
+});
+
+describe('remaining QA findings', () => {
+  const rostered = async (from = -10) => {
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const a = await one(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3) RETURNING id`, [emp.id, base.shiftId, day(from)]);
+    return { ...emp, assignmentId: a.id as string };
+  };
+
+  it('AT1: a correction cannot make a record GPS-verified', async () => {
+    const emp = await rostered();
+    const rec = (await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T08:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201)).body;
+    const r = await as(owner).post(`/attendance/${rec.id}/corrections`, { verificationStatus: 'VERIFIED', reason: 'Make it look verified' }).expect(400);
+    expect(r.body.error.code).toBe('NOT_GPS_VERIFIED');
+    await as(owner).post(`/attendance/${rec.id}/corrections`, { verificationStatus: 'CORRECTED', reason: 'Checked with the site' }).expect(200);
+  });
+
+  it('AT4: manual attendance must state the hours worked', async () => {
+    const emp = await rostered();
+    await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T08:00:00Z`, reason: 'Phone was broken' }).expect(400);
+  });
+
+  it('R3: a supervisor cannot roster a day that has passed; the owner can', async () => {
+    const a = await createEmployee({ workplaceId: base.workplaceId });
+    expect((await as(sup).post(`/employees/${a.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(-7) }).expect(400)).body.error.code).toBe('PAST_DATE');
+    await as(sup).post(`/employees/${a.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(1) }).expect(200);
+    const b = await createEmployee({ workplaceId: base.workplaceId });
+    await as(owner).post(`/employees/${b.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(-7) }).expect(200);
+  });
+
+  it('R2: leaving ends the roster, so time away is not absence after a return', async () => {
+    const emp = await rostered(-30);
+    const future = await one(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3) RETURNING id`, [emp.id, (await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week) VALUES ($1,'Later','00:00','01:00','UTC','{1}') RETURNING id`, [base.workplaceId])).id, day(20)]);
+    await as(owner).post(`/employees/${emp.id}/deactivate`, { reason: 'Left the company', lastWorkingDay: day(-10) }).expect(200);
+    expect((await one('SELECT effective_to::text AS t FROM employee_shift_assignments WHERE id = $1', [emp.assignmentId])).t).toBe(day(-10));
+    expect(await one('SELECT 1 FROM employee_shift_assignments WHERE id = $1', [future.id])).toBeNull();
+    await as(owner).post(`/employees/${emp.id}/reactivate`).expect(200);
+    const row = (await owner.agent.get(`/api/v1/reports/monthly?month=${day(-5).slice(0, 7)}&employeeId=${emp.id}`).expect(200)).body.rows[0];
+    // Only days up to the last working day can be absences; the days away are not rostered.
+    expect(row?.absent ?? 0).toBeLessThanOrEqual(Math.max(0, DateTime.fromISO(day(-10)).day));
+    expect(await one('SELECT 1 FROM employee_shift_assignments WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2)', [emp.id, day(-10)])).toBeNull();
+  });
+
+  it('A2: changing your password keeps this browser signed in and ends the others', async () => {
+    const email = `pw-${crypto.randomUUID()}@qa.test`;
+    const added = (await as(owner).post('/team', { fullName: 'Pat Password', email, access: 'SUPERVISOR', siteIds: [base.workplaceId] }).expect(201)).body;
+    const here = request.agent(app);
+    const other = request.agent(app);
+    const login = await here.post('/api/v1/auth/login').send({ email, password: added.temporaryPassword, client: 'web' }).expect(200);
+    await other.post('/api/v1/auth/login').send({ email, password: added.temporaryPassword, client: 'web' }).expect(200);
+    const r = await here.post('/api/v1/auth/change-password').set('X-CSRF-Token', login.body.csrfToken).send({ currentPassword: added.temporaryPassword, newPassword: 'A-much-better-pass-2026' }).expect(200);
+    expect(r.body.csrfToken).toBeTruthy();
+    await here.post('/api/v1/auth/refresh').send({}).expect(200);
+    await other.post('/api/v1/auth/refresh').send({}).expect(401);
+  });
+
+  it('D2: a signed-out or revoked phone stops getting pushes', async () => {
+    await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'OFF' }, null);
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const phone = `push-${crypto.randomUUID()}`;
+    const body = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile', deviceId: phone, platform: 'android' }).expect(200)).body;
+    await q(`INSERT INTO device_registrations (user_id, device_id, platform, status, push_token) VALUES ($1,$2,'android','APPROVED','ExponentPushToken[a]') ON CONFLICT (user_id, device_id) DO UPDATE SET push_token = 'ExponentPushToken[a]', status = 'APPROVED'`, [emp.id, phone]);
+    await request(app).post('/api/v1/auth/logout').send({ refreshToken: body.refreshToken }).expect(200);
+    expect((await one('SELECT push_token FROM device_registrations WHERE user_id = $1 AND device_id = $2', [emp.id, phone])).push_token).toBeNull();
+    await q(`UPDATE device_registrations SET push_token = 'ExponentPushToken[b]' WHERE user_id = $1 AND device_id = $2`, [emp.id, phone]);
+    const d = await one('SELECT id FROM device_registrations WHERE user_id = $1 AND device_id = $2', [emp.id, phone]);
+    await as(owner).post(`/devices/${d.id}/revoke`, { note: 'Lost' }).expect(200);
+    expect((await one('SELECT push_token FROM device_registrations WHERE id = $1', [d.id])).push_token).toBeNull();
+  });
+
+  it('S1: an SOS reaches administrators who are marked away', async () => {
+    const { config } = await import('../src/config.js');
+    const smtp = config.email.smtpUrl;
+    (config.email as any).smtpUrl = 'smtp://test.invalid';
+    try {
+      await owner.agent.put('/api/v1/team/me/away').set('X-CSRF-Token', owner.csrf).send({ awayUntil: day(5) }).expect(200);
+      const emp = await createEmployee({ workplaceId: base.workplaceId });
+      const token = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body.accessToken;
+      const sos = (await request(app).post('/api/v1/sos/mine').set({ Authorization: `Bearer ${token}` }).send({ message: 'Help' }).expect(200)).body;
+      const sent = await q(`SELECT d.target FROM notification_deliveries d JOIN notifications n ON n.id = d.notification_id WHERE n.data->>'sosId' = $1 AND d.channel = 'EMAIL'`, [sos.id]);
+      expect(sent.map((s: any) => s.target)).toContain(base.adminEmail);
+    } finally {
+      (config.email as any).smtpUrl = smtp;
+      await owner.agent.put('/api/v1/team/me/away').set('X-CSRF-Token', owner.csrf).send({ awayUntil: null }).expect(200);
+    }
+  });
+
+  it('LOW: an SOS is closed once; tasks go to active employees; payroll pay setup is off with payroll', async () => {
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const token = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body.accessToken;
+    const sos = (await request(app).post('/api/v1/sos/mine').set({ Authorization: `Bearer ${token}` }).send({}).expect(200)).body;
+    await as(owner).post(`/sos/${sos.id}/resolve`, { note: 'Called, all fine' }).expect(200);
+    expect((await as(owner).post(`/sos/${sos.id}/resolve`, { note: 'Again' }).expect(409)).body.error.code).toBe('ALREADY_RESOLVED');
+    await q('UPDATE users SET is_active = false WHERE id = $1', [emp.id]);
+    expect((await as(owner).post('/tasks', { assigneeIds: [emp.id], title: 'Count stock' }).expect(400)).body.error.code).toBe('INACTIVE_EMPLOYEE');
+    const { config } = await import('../src/config.js');
+    config.payrollEnabled = false; // as in a release; tests turn it on for the payroll suites
+    try {
+      const r = await owner.agent.get(`/api/v1/payroll/pay/${emp.id}`).expect(403);
+      expect(r.body.error.code).toBe('PAYROLL_DISABLED');
+    } finally {
+      config.payrollEnabled = true;
+    }
+  });
+
+  it('L7: the dashboard employee filter narrows pending overtime and corrections', async () => {
+    const emp = await rostered();
+    const d = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-3)}&to=${day(0)}&employeeId=${emp.id}`).expect(200)).body;
+    expect(d.attention.overtimePending).toBe(0);
+    expect(d.attention.pendingCorrections).toBe(0);
+  });
+});
+
 describe('a refresh whose answer was lost (D1)', () => {
   const login = async () => {
     const emp = await createEmployee({ workplaceId: base.workplaceId });

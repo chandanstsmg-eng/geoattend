@@ -108,12 +108,12 @@ async function decide(id: string, status: 'APPROVED' | 'REVOKED', note: string |
       );
       if (other) throw conflict('DEVICE_IN_USE', `This phone is approved for ${other.full_name}. Remove it from their account first.`);
       // One phone per employee: approving a new phone retires the old one and signs it out.
-      const old = await q(`UPDATE device_registrations SET status = 'REVOKED', decided_by = $2, decided_at = now(), status_note = 'Replaced by a newer phone' WHERE user_id = $1 AND status = 'APPROVED' AND id <> $3 RETURNING device_id`, [d.user_id, admin.id, id], db);
+      const old = await q(`UPDATE device_registrations SET status = 'REVOKED', decided_by = $2, decided_at = now(), status_note = 'Replaced by a newer phone', push_token = NULL WHERE user_id = $1 AND status = 'APPROVED' AND id <> $3 RETURNING device_id`, [d.user_id, admin.id, id], db);
       for (const o of old) await q(`UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL`, [d.user_id, o.device_id], db);
     } else {
       await q(`UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL`, [d.user_id, d.device_id], db);
     }
-    await q(`UPDATE device_registrations SET status = $2, decided_by = $3, decided_at = now(), status_note = $4 WHERE id = $1`, [id, status, admin.id, note ?? null], db);
+    await q(`UPDATE device_registrations SET status = $2, decided_by = $3, decided_at = now(), status_note = $4, push_token = CASE WHEN $2 = 'REVOKED' THEN NULL ELSE push_token END WHERE id = $1`, [id, status, admin.id, note ?? null], db);
     await audit({ actor: admin, action: status === 'APPROVED' ? 'device.approve' : 'device.revoke', resourceType: 'device', resourceId: id, before: { status: d.status }, after: { status }, reason: note, req }, db);
     return one(`${SELECT} WHERE d.id = $1`, [id], db);
   });

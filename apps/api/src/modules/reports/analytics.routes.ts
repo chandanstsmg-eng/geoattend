@@ -41,7 +41,9 @@ import { attended, defaultDate, isPending, roster, withLeaveAndNoShow } from './
 import { computeHours, loadPendingHours, loadWorkRecords, splitRecords } from './hours.js';
 import { dayEndSql } from '../../lib/dates.js';
 
-const MAX_TREND_DAYS = 62;
+/** Longest range the dashboard answers. Attendance and hours always cover the same days; longer asks are refused. */
+export const MAX_RANGE_DAYS = 366;
+const MAX_TREND_DAYS = MAX_RANGE_DAYS;
 const ACTIVITY_TYPES = [
   'ATTENDANCE_MARKED', 'SHIFT_COMPLETED', 'LATE_ARRIVAL', 'NO_SHOW', 'PERMISSION_REVOKED', 'BACKGROUND_UNAVAILABLE',
   'TRACKING_INTERRUPTED', 'ATTENDANCE_SUBMISSION_FAILED', 'MOCK_LOCATION_FLAGGED', 'MANUAL_REVIEW_REQUESTED', 'TECHNICAL_ISSUE_REPORTED', 'TRACKING_TERMINATED',
@@ -121,8 +123,14 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const settings = await getSettings(user.orgId);
   const today = await defaultDate(user.orgId, query.workplaceId);
   const to = query.to ?? today;
-  const from = query.from ?? DateTime.fromISO(to).minus({ days: 13 }).toISODate()!;
-  if (to < from) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
+  const askedFrom = query.from ?? DateTime.fromISO(to).minus({ days: 13 }).toISODate()!;
+  if (to < askedFrom) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
+  // At most a year, ending at the last day that has happened. Hours and attendance always cover these same days;
+  // a longer request is answered for its latest year, and `limited` says so.
+  const lastReal = to < today ? to : today;
+  const earliest = DateTime.fromISO(lastReal).minus({ days: MAX_RANGE_DAYS - 1 }).toISODate()!;
+  const from = askedFrom < earliest ? earliest : askedFrom;
+  const limited = from !== askedFrom;
   const includeSim = query.includeSimulated === 'true';
   const wp = query.workplaceId ?? null;
   const sup = query.supervisorId ?? null;
@@ -166,7 +174,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const outside = located.filter((s) => s.last_classification === 'OUTSIDE' && s.state !== 'ON_BREAK');
 
   // ── daily roster outcomes (same rules as the overview and monthly summary) ──
-  // Days after today have no outcome yet; long ranges show their latest MAX_TREND_DAYS days.
+  // Days after today have no outcome yet.
   const trendTo = to < today ? to : today;
   const days = trendTo >= from ? isoDays(lastDays(from, trendTo), trendTo) : [];
   const expectedByWp = new Map<string, number>();
@@ -352,13 +360,14 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const pendingCorrections = await one(
     `SELECT count(*)::int AS n FROM review_requests r JOIN users u ON u.id = r.employee_id
      WHERE r.status = 'OPEN' AND (r.kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') OR (r.kind = 'ADMIN_CORRECTION' AND $2::uuid[] IS NULL))
-       AND u.org_id = $1 AND ${inScope(employeeSite('u.id'))}`, // supervisors' corrections wait for an owner, as in Approvals
-    P.slice(0, 4),
+       AND u.org_id = $1 AND ${inScope(employeeSite('u.id'))} AND ($5::uuid IS NULL OR r.employee_id = $5)`, // supervisors' corrections wait for an owner, as in Approvals
+    [...P.slice(0, 4), emp],
   );
   const overtimePending = await one(
     `SELECT count(*)::int AS n FROM overtime_entries o JOIN users u ON u.id = o.employee_id
-     WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated) AND ${overtimeCounts()}`,
-    P,
+     WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated) AND ${overtimeCounts()}
+       AND ($6::uuid IS NULL OR o.employee_id = $6)`,
+    [...P, emp],
   );
   const activity = await q(
     `SELECT n.id, n.type, n.severity, n.title, n.body, n.created_at, n.employee_id, u.full_name AS employee_name, w.name AS workplace_name, n.is_simulated
@@ -382,6 +391,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   return {
     from,
     to,
+    requestedFrom: askedFrom,
+    limited,
     today,
     serverTime: new Date(nowMs),
     staleAfterSec: settings.tracking.staleAfterSec,

@@ -213,7 +213,7 @@ mount(authRouter, '/api/v1/auth', 'auth', [
     access: 'authenticated',
     pre: [passwordLimiter],
     body: z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().max(200) }),
-    handler: async ({ body, user, req }) => {
+    handler: async ({ body, user, req, res }) => {
       const u = await one('SELECT password_hash FROM users WHERE id = $1', [user.id]);
       if (!(await verifyPassword(body.currentPassword, u.password_hash))) throw badRequest('WRONG_PASSWORD', 'Current password is incorrect.');
       const policy = passwordPolicyError(body.newPassword);
@@ -221,6 +221,12 @@ mount(authRouter, '/api/v1/auth', 'auth', [
       await q('UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1', [user.id, await hashPassword(body.newPassword)]);
       await revokeAllForUser(user.id);
       await audit({ actor: user, action: 'auth.change_password', resourceType: 'user', resourceId: user.id, req });
+      // The dashboard signs in with cookies: give this browser a fresh sign-in, so it is not logged out minutes later.
+      if (req.cookies?.[REFRESH_COOKIE]) {
+        const accessToken = await signAccessToken({ id: user.id, role: user.role }, null);
+        const refresh = await issueRefreshToken(user.id, 'web', null);
+        return { ok: true, csrfToken: setWebCookies(res, accessToken, refresh.token) };
+      }
       return { ok: true };
     },
   }),

@@ -37,6 +37,9 @@ const previousMonth = (today: string) => {
   const to = last.toISOString().slice(0, 10);
   return { from: `${to.slice(0, 7)}-01`, to };
 };
+/** An ISO date moved by whole days (calendar arithmetic, no time zone involved). */
+const shiftDays = (iso: string, days: number) => new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10) + days)).toISOString().slice(0, 10);
+
 export const RANGE_PRESETS = [
   { key: 'today', label: 'Today', range: () => ({ from: todayISO(), to: todayISO() }) },
   { key: '7d', label: 'Last 7 days', range: () => ({ from: daysAgoISO(6), to: todayISO() }) },
@@ -61,8 +64,8 @@ export function DateRangeSelect({ value, onChange }: { value: DateRangeValue; on
       </Select>
       {value.preset === 'custom' && (
         <>
-          <input type="date" aria-label="From" value={value.from} max={value.to} onChange={(e) => e.target.value && onChange({ ...value, from: e.target.value })} className="h-10 rounded-md border border-gray-300 bg-white px-2 text-sm sm:h-9.5" />
-          <input type="date" aria-label="To" value={value.to} min={value.from} onChange={(e) => e.target.value && onChange({ ...value, to: e.target.value })} className="h-10 rounded-md border border-gray-300 bg-white px-2 text-sm sm:h-9.5" />
+          <input type="date" aria-label="From" value={value.from} max={value.to} min={shiftDays(value.to, -365)} title="At most a year" onChange={(e) => e.target.value && onChange({ ...value, from: e.target.value })} className="h-10 rounded-md border border-gray-300 bg-white px-2 text-sm sm:h-9.5" />
+          <input type="date" aria-label="To" value={value.to} min={value.from} max={shiftDays(value.from, 365)} title="At most a year" onChange={(e) => e.target.value && onChange({ ...value, to: e.target.value })} className="h-10 rounded-md border border-gray-300 bg-white px-2 text-sm sm:h-9.5" />
         </>
       )}
     </>

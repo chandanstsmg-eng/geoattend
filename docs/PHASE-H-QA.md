@@ -121,3 +121,66 @@ All fixes have tests in `apps/api/test/final-qa.test.ts`, and each test was show
 | 500 employees, 200 attendance rows | 6 ms, 28 ms |
 
 Larger companies are not measured. The sample has 42 employees and about 2,900 shifts.
+
+## Finalisation: resolution of the open findings (8 November 2026)
+
+Every fix below has a test in `apps/api/test/final-qa.test.ts` or `apps/mobile/src/lib/api/auth-rules.test.ts`. Each API fix was undone on its own to confirm its test then fails.
+
+### D1: a lost token refresh (HIGH), resolved
+
+**What happened before.** If a refresh reached the server but the phone never got the answer, the phone kept its old token. The server accepted a retry only within 60 seconds; after that it treated the old token as stolen, revoked every sign-in of that phone, and tracking stopped.
+
+**The fix, which does not loosen theft detection:**
+- **The phone** creates a one-time request id for each refresh and saves it before sending. It repeats that id only when retrying the same refresh, and clears it on success or sign-out. Refreshes still run one at a time.
+- **The server** stores the new token encrypted with AES-256-GCM. The key is derived from the old raw token and that request id. Raw tokens are stored only as hashes, so a copy of the database cannot open it.
+- **A true retry** (same old token, same request id, new token not yet used, account active, sign-in not revoked) gets the *same* new token back. No second live token is created, and nothing is logged as theft.
+- **Everything else is unchanged.** An old token without the matching id, or after its new token has been used, still revokes the whole family and is audited as reuse. Sign-out, revocation, deactivation and expiry still end the sign-in.
+- **Queued records:** check-ins, check-outs and readings stay on the phone across a sign-out and are sent after the next sign-in (unchanged).
+- **A further hole closed:** the new tests showed that, within 60 seconds of a refresh, an old token could revive a sign-in that had just been signed out. The 60-second retry now also requires the newer token to be still valid.
+- **Database:** migration `030_refresh_redelivery` adds two nullable columns to `refresh_tokens`. Rollback: `docs/migrations/030_rollback.sql`.
+- **Compatibility:** older app builds send no request id and behave exactly as before.
+
+**Not verified on a phone.** This is tested on the server and in the phone's rule tests only.
+
+### Half-day leave: rules confirmed and pinned by tests
+| Situation | Monthly summary and payroll basis | Dashboard rate |
+|---|---|---|
+| Worked on a paid half day | 0.5 present, 0.5 paid leave | Left out of expected and present |
+| Did not work on an unpaid half day | 0.5 unpaid leave, 0.5 absent | Left out |
+| A half day across two dates | Refused (`BAD_RANGE`) | — |
+
+**Not decided, and not invented:** a leave request records only "half day", not which half, so the system cannot know whether a 13:00 arrival is late. A late arrival is still marked as on any other day. Deciding it needs a business rule, such as recording first or second half on the request.
+
+### Analytics and exports, resolved
+- **Long ranges:** attendance figures now cover the whole range, up to a year (366 days), so they always describe the same days as hours. A longer request is answered for its latest year: the response gives the period covered (`from`) and the one asked for (`requestedFrom`), and sets `limited`. The custom range picker stops at a year.
+- **Supervisor filter:** it now applies to the attendance, absences and daily-summary exports and to the monthly summary and its CSV. The monthly summary also follows the employee filter. The Reports page says so.
+- **Dashboard employee filter:** it now narrows pending overtime and pending corrections.
+- **Scope unchanged:** these exports remain owner-only, and supervisors still get 403.
+
+### Other findings resolved
+| # | Finding | Fix |
+|---|---|---|
+| AT1 | An owner could relabel any record as GPS-verified | Refused with `NOT_GPS_VERIFIED`; only the phone and server set it. The option is shown only for records already verified |
+| AT4 | A manual record without hours counted as present with 0 hours | Hours are required, up to the shift's length |
+| R2 | Reactivating an employee turned their time away into absences | Deactivation ends roster entries on the last working day and removes ones not started; the owner rosters them again on return |
+| R3 | Rosters could be backdated without limit, by supervisors too | Only the owner can roster a past day |
+| A2 | A new administrator was signed out about 15 minutes after choosing a password | This browser gets a fresh sign-in; every other sign-in still ends |
+| D2 | Push tokens survived sign-out and revocation | Cleared on phone sign-out, revocation and replacement |
+| S1 | Administrators marked away got no SOS | An SOS ignores "away" |
+| LOW | An SOS could be resolved twice; tasks could go to deactivated employees; `GET /payroll/pay/:id` answered with payroll off | Refused (`ALREADY_RESOLVED`, `INACTIVE_EMPLOYEE`, `PAYROLL_DISABLED`) |
+
+### Deferred on purpose
+| # | Severity | Finding | Impact | Reason |
+|---|---|---|---|---|
+| Half-day lateness | MEDIUM | Second-half arrivals are marked late | Late counts can be high for half-day leave | Needs a business rule; the data does not say which half |
+| OT1 | MEDIUM | Weekly overtime differs in workplace- or supervisor-filtered views for people working at two sites | Those filtered views only. Company-wide figures, the monthly summary and the payroll basis see every site and are correct | The fix changes the core hours engine shared by every report; too risky to change at the end of QA without a dedicated pass |
+| SC1 | MEDIUM | Approvals routes some items by the employee's home workplace and others by the record's workplace | A supervisor of the other site may not see an item; owners always do | It changes authorization scope across Approvals and needs its own design and tests |
+| L1 | MEDIUM | Approved leave cannot be cancelled or corrected by an administrator | A mistaken leave stays | It needs a rule for cancelling leave already taken, which affects payroll |
+| AT2 | MEDIUM | A check-out cannot be corrected | Workaround: void the record and enter it manually | New correction field and rules |
+| AT3 | MEDIUM | Rejecting a late-sent shift end voids a GPS-verified check-in | The whole day is lost to a late end | The pending-record flow needs a "reject the end only" decision |
+| D5 | MEDIUM | A slow network during check-in saves the record as pending | A person must approve it | This follows your rule that late records are never verified automatically |
+| M2 | MEDIUM | Offline cold start: Continue and End shift unreachable | — | Waiting for a decision (Phase G) |
+| D3, D4, D6–D9 | MEDIUM and LOW | Phone wording and push timing | — | Phone UI changes cannot be verified without a device |
+| Admin password | LOW | No dashboard menu to change a non-temporary password; no e-mail self-service reset | Owners can reset others; an operator can reset an owner | The e-mail reset needs working SMTP |
+| AN2, AN3, N1 | LOW | Disabled-workplace rows, the simulated-data default on Overtime, and unread counts | Small reporting differences | Low impact |
+| Null island, rounding, CSP, Map ID, duplicate request | LOW | See the LOW list above | — | Configuration, or no user effect |

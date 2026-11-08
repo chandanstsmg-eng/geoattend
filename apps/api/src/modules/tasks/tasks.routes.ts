@@ -134,6 +134,7 @@ mount(tasksRouter, '/api/v1/tasks', 'tasks', [
     }),
     handler: async ({ body, user, req, res }) => {
       for (const id of body.assigneeIds) await assertInOrg('employee', id, user.orgId, user.sites);
+      if (await one('SELECT 1 FROM users WHERE id = ANY($1::uuid[]) AND NOT is_active', [body.assigneeIds])) throw badRequest('INACTIVE_EMPLOYEE', 'Tasks can only be given to active employees.');
       const outbox = new Outbox();
       const ids = await tx(async (db) => {
         const created: string[] = [];

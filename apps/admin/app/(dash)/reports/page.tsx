@@ -21,19 +21,20 @@ const HOURS_SERIES = [
 const hours = (m: number) => (m / 60).toFixed(1);
 
 /** Per-employee month totals. */
-function MonthlySummary({ workplaceId, includeSimulated }: { workplaceId: string; includeSimulated: string }) {
+function MonthlySummary({ workplaceId, supervisorId, employeeId, includeSimulated }: { workplaceId: string; supervisorId: string; employeeId: string; includeSimulated: string }) {
   const [month, setMonth] = useState(todayISO().slice(0, 7));
-  const q = useQuery({ queryKey: ['reports', 'monthly', month, workplaceId, includeSimulated], queryFn: () => get(`/reports/monthly${qs({ month, workplaceId, includeSimulated })}`) });
+  const filters = { month, workplaceId, supervisorId, employeeId, includeSimulated };
+  const q = useQuery({ queryKey: ['reports', 'monthly', filters], queryFn: () => get(`/reports/monthly${qs(filters)}`) });
   return (
     <Card
       title="Monthly summary"
-      description="Follows the workplace filter only. Employee, supervisor and date range do not apply; choose a month here."
+      description="Follows the workplace, supervisor and employee filters. The date range does not apply; choose a month here."
       className="lg:col-span-3"
       padded={false}
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Input type="month" aria-label="Month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-auto" />
-          <LinkButton href={`/api/v1/reports/monthly.csv${qs({ month, workplaceId, includeSimulated })}`} size="sm"><Download className="h-4 w-4" aria-hidden /> Download CSV</LinkButton>
+          <LinkButton href={`/api/v1/reports/monthly.csv${qs(filters)}`} size="sm"><Download className="h-4 w-4" aria-hidden /> Download CSV</LinkButton>
         </div>
       }
     >
@@ -288,8 +289,8 @@ export default function ReportsPage() {
   const [day, setDay] = useState(todayISO());
   const params: Filters = { from: f.range.from, to: f.range.to, workplaceId: f.workplaceId, supervisorId: isOwner ? f.supervisorId : '', employeeId: f.employeeId, includeSimulated: f.includeSimulated };
   const dirty = f.workplaceId || f.supervisorId || f.employeeId || f.range.preset !== '30d';
-  const exportQs = { from: f.range.from, to: f.range.to, workplaceId: f.workplaceId, employeeId: f.employeeId, includeSimulated: String(f.includeSimulated) };
-  const summary = useQuery({ queryKey: ['reports', 'daily', exportQs], queryFn: () => get<any[]>(`/reports/daily-summary${qs({ from: exportQs.from, to: exportQs.to, workplaceId: exportQs.workplaceId, includeSimulated: exportQs.includeSimulated })}`), enabled: isOwner });
+  const exportQs = { from: f.range.from, to: f.range.to, workplaceId: f.workplaceId, supervisorId: params.supervisorId, employeeId: f.employeeId, includeSimulated: String(f.includeSimulated) };
+  const summary = useQuery({ queryKey: ['reports', 'daily', exportQs], queryFn: () => get<any[]>(`/reports/daily-summary${qs({ from: exportQs.from, to: exportQs.to, workplaceId: exportQs.workplaceId, supervisorId: exportQs.supervisorId, includeSimulated: exportQs.includeSimulated })}`), enabled: isOwner });
 
   return (
     <>
@@ -317,7 +318,7 @@ export default function ReportsPage() {
 
       {isOwner && (
         <div className="mt-5 grid gap-5 lg:grid-cols-3">
-          <Card title="Detailed exports" description="Raw records for the date range, workplace and employee above, in UTC server times. The supervisor filter does not apply." className="lg:col-span-1">
+          <Card title="Detailed exports" description="Raw records for the date range, workplace, supervisor and employee above, in UTC server times." className="lg:col-span-1">
             <div className="flex flex-col gap-2">
               <LinkButton size="sm" variant="primary" href={`/api/v1/reports/attendance.csv${qs(exportQs)}`}><Download className="h-4 w-4" aria-hidden /> Attendance records (CSV)</LinkButton>
               <LinkButton size="sm" href={`/api/v1/reports/absences.csv${qs(exportQs)}`}><Download className="h-4 w-4" aria-hidden /> Absence intervals (CSV)</LinkButton>
@@ -326,7 +327,7 @@ export default function ReportsPage() {
               <LinkButton size="sm" className={off(!day)} href={`/api/v1/reports/shift.csv${qs({ date: day, workplaceId: f.workplaceId, includeSimulated: exportQs.includeSimulated })}`}><Download className="h-4 w-4" aria-hidden /> Shift roster (CSV)</LinkButton>
             </div>
           </Card>
-          <Card title="Daily attendance by workplace" description="Follows the date range and workplace filters only." className="lg:col-span-2" padded={false}>
+          <Card title="Daily attendance by workplace" description="Follows the date range, workplace and supervisor filters." className="lg:col-span-2" padded={false}>
             <QueryState query={summary} isEmpty={(rows) => rows.length === 0} empty={<EmptyState title="No attendance in this range" />}>
               {(rows) => (
                 <div className="max-h-96 overflow-y-auto" tabIndex={0} role="region" aria-label="Table, scrolls">
@@ -348,7 +349,7 @@ export default function ReportsPage() {
               )}
             </QueryState>
           </Card>
-          <MonthlySummary workplaceId={f.workplaceId} includeSimulated={exportQs.includeSimulated} />
+          <MonthlySummary workplaceId={f.workplaceId} supervisorId={params.supervisorId} employeeId={f.employeeId} includeSimulated={exportQs.includeSimulated} />
         </div>
       )}
     </>

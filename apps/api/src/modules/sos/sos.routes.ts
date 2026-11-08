@@ -130,7 +130,8 @@ mount(sosRouter, '/api/v1/sos', 'sos', [
     scope: 'sos',
     body: z.object({ note: z.string().trim().min(3).max(500) }),
     handler: async ({ params, body, user, req }) => {
-      await q(`UPDATE sos_alerts SET status = 'RESOLVED', resolved_by = $2, resolved_at = now(), resolution_note = $3, updated_at = now() WHERE id = $1`, [params.id, user.id, body.note]);
+      const done = await one(`UPDATE sos_alerts SET status = 'RESOLVED', resolved_by = $2, resolved_at = now(), resolution_note = $3, updated_at = now() WHERE id = $1 AND status <> 'RESOLVED' RETURNING id`, [params.id, user.id, body.note]);
+      if (!done) throw conflict('ALREADY_RESOLVED', 'This SOS was already closed. Its resolution is kept as it was.');
       await audit({ actor: user, action: 'sos.resolve', resourceType: 'sos', resourceId: params.id, reason: body.note, req });
       return one(`${SOS_SELECT} WHERE s.id = $1`, [params.id]);
     },

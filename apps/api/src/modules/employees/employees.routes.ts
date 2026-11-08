@@ -250,6 +250,10 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       await tx(async (db) => {
         await q('UPDATE users SET is_active = false, updated_at = now() WHERE id = $1', [params.id], db);
         await q('UPDATE employee_profiles SET left_on = GREATEST($2::date, joined_on) WHERE user_id = $1', [params.id, lastDay], db);
+        // Roster entries end on the last working day (entries not started by then are removed, as when ending one by hand),
+        // so a later reactivation does not turn the time away into absences.
+        await q('DELETE FROM employee_shift_assignments WHERE employee_id = $1 AND effective_from > $2::date', [params.id, lastDay], db);
+        await q('UPDATE employee_shift_assignments SET effective_to = $2::date WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2::date)', [params.id, lastDay], db);
       });
       await revokeAllForUser(params.id);
       await audit({ actor: user, action: 'employee.deactivate', resourceType: 'user', resourceId: params.id, reason: body.reason, req });

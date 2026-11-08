@@ -146,8 +146,10 @@ export async function rotateRefreshToken(token: string, requestId?: string) {
 }
 
 export async function revokeRefreshToken(token: string) {
-  const row = await one('SELECT family_id, user_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
+  const row = await one('SELECT family_id, user_id, client, device_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
   if (row) await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id]);
+  // Signed out on a phone: that phone stops receiving this person's notifications.
+  if (row?.client === 'mobile' && row.device_id) await q('UPDATE device_registrations SET push_token = NULL WHERE user_id = $1 AND device_id = $2', [row.user_id, row.device_id]);
   return (row?.user_id as string | undefined) ?? null;
 }
 
