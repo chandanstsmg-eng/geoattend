@@ -13,6 +13,7 @@ const K = {
   refresh: 'geoattend.refreshToken',
   user: 'geoattend.user',
   deviceId: 'geoattend.deviceId',
+  refreshRequest: 'geoattend.refreshRequest',
 };
 
 export interface Tokens {
@@ -33,7 +34,21 @@ export async function setTokens(t: Tokens): Promise<void> {
 }
 
 export async function clearCredentials(): Promise<void> {
-  await Promise.all([SecureStore.deleteItemAsync(K.access, OPTS), SecureStore.deleteItemAsync(K.refresh, OPTS), SecureStore.deleteItemAsync(K.user, OPTS)]);
+  await Promise.all([SecureStore.deleteItemAsync(K.access, OPTS), SecureStore.deleteItemAsync(K.refresh, OPTS), SecureStore.deleteItemAsync(K.user, OPTS), SecureStore.deleteItemAsync(K.refreshRequest, OPTS)]);
+}
+
+/** The refresh being attempted, kept until it succeeds so a retry repeats the same request id. */
+export async function getRefreshRequest(): Promise<{ token: string; id: string } | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(K.refreshRequest, OPTS);
+    return raw ? (JSON.parse(raw) as { token: string; id: string }) : null;
+  } catch {
+    return null;
+  }
+}
+export async function setRefreshRequest(r: { token: string; id: string } | null): Promise<void> {
+  if (r) await SecureStore.setItemAsync(K.refreshRequest, JSON.stringify(r), OPTS);
+  else await SecureStore.deleteItemAsync(K.refreshRequest, OPTS);
 }
 
 export async function getCachedUser(): Promise<ApiUser | null> {

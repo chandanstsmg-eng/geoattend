@@ -193,6 +193,68 @@ describe('reports keep their history and their definitions', () => {
   });
 });
 
+describe('a refresh whose answer was lost (D1)', () => {
+  const login = async () => {
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const body = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body;
+    return { emp, token: body.refreshToken as string };
+  };
+  const refresh = (refreshToken: string, requestId?: string) => request(app).post('/api/v1/auth/refresh').send({ refreshToken, requestId });
+  const later = (userId: string) => q(`UPDATE refresh_tokens SET revoked_at = now() - interval '5 minutes' WHERE user_id = $1 AND revoked_at IS NOT NULL`, [userId]);
+  const id = () => crypto.randomBytes(16).toString('hex');
+
+  it('answers a retry of the same refresh with the same new token, long after the grace period', async () => {
+    const { emp, token } = await login();
+    const rid = id();
+    const lost = (await refresh(token, rid).expect(200)).body.refreshToken;
+    await later(emp.id);
+    const again = (await refresh(token, rid).expect(200)).body;
+    expect(again.refreshToken).toBe(lost); // no second live token
+    await refresh(again.refreshToken, id()).expect(200);
+    expect(await one(`SELECT 1 FROM audit_logs WHERE action = 'auth.refresh_reuse' AND resource_id = $1`, [emp.id])).toBeNull();
+  });
+
+  it('still treats the old token as stolen without the same request id, and revokes the family', async () => {
+    const { emp, token } = await login();
+    const next = (await refresh(token, id()).expect(200)).body.refreshToken;
+    await later(emp.id);
+    await refresh(token, id()).expect(401);
+    await refresh(next).expect(401);
+    expect(await one(`SELECT 1 FROM audit_logs WHERE action = 'auth.refresh_reuse' AND resource_id = $1`, [emp.id])).not.toBeNull();
+  });
+
+  it('refuses the retry once the new token has been used, and revokes the family', async () => {
+    const { emp, token } = await login();
+    const rid = id();
+    const next = (await refresh(token, rid).expect(200)).body.refreshToken;
+    const newest = (await refresh(next, id()).expect(200)).body.refreshToken;
+    await later(emp.id);
+    await refresh(token, rid).expect(401);
+    await refresh(newest).expect(401);
+  });
+
+  it('refuses the retry after sign-out or deactivation', async () => {
+    const a = await login();
+    const ra = id();
+    await refresh(a.token, ra).expect(200);
+    await request(app).post('/api/v1/auth/logout').send({ refreshToken: a.token }).expect(200);
+    await refresh(a.token, ra).expect(401);
+    const b = await login();
+    const rb = id();
+    await refresh(b.token, rb).expect(200);
+    await q('UPDATE users SET is_active = false WHERE id = $1', [b.emp.id]);
+    await refresh(b.token, rb).expect(401);
+  });
+
+  it('keeps nothing in the database that could be used without the old token', async () => {
+    const { emp, token } = await login();
+    const fresh = (await refresh(token, id()).expect(200)).body.refreshToken;
+    const rows = await q('SELECT token_hash, successor_box, rotation_key_hash FROM refresh_tokens WHERE user_id = $1', [emp.id]);
+    expect(JSON.stringify(rows)).not.toContain(fresh);
+    expect(rows.some((r: any) => r.successor_box)).toBe(true);
+  });
+});
+
 describe('a phone that is no longer approved', () => {
   it('cannot keep a shift alive: locations, permission reports and ending are refused', async () => {
     await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'ENFORCE' }, null);

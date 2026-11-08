@@ -122,11 +122,15 @@ mount(authRouter, '/api/v1/auth', 'auth', [
     path: '/refresh',
     summary: 'Rotate refresh token (mobile: body; web: cookie)',
     access: 'public',
-    body: z.object({ refreshToken: z.string().min(20).max(200).optional() }),
+    body: z.object({
+      refreshToken: z.string().min(20).max(200).optional(),
+      /** One-time id for this refresh, repeated only when retrying it after a lost answer. */
+      requestId: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
+    }),
     handler: async ({ body, req, res }) => {
       const token = body.refreshToken ?? req.cookies?.[REFRESH_COOKIE];
       if (!token) throw unauthorized('No refresh token');
-      const r = await rotateRefreshToken(token);
+      const r = await rotateRefreshToken(token, body.requestId);
       if (r.client === 'web') {
         const csrfToken = setWebCookies(res, r.accessToken, r.refreshToken);
         return { ok: true, csrfToken };
