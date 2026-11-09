@@ -162,7 +162,7 @@ Every fix below has a test in `apps/api/test/final-qa.test.ts` or `apps/mobile/s
 |---|---|---|
 | AT1 | An owner could relabel any record as GPS-verified | Refused with `NOT_GPS_VERIFIED`; only the phone and server set it. The option is shown only for records already verified |
 | AT4 | A manual record without hours counted as present with 0 hours | Hours are required, up to the shift's length |
-| R2 | Reactivating an employee turned their time away into absences | Deactivation ends roster entries on the last working day and removes ones not started; the owner rosters them again on return |
+| R2 | Reactivating an employee turned their time away into absences | Deactivation changes no roster. Reactivation ends the roster in force at the leaving date and removes entries that only began after it; the changed rows are kept in the audit entry. The owner rosters them again on return |
 | R3 | Rosters could be backdated without limit, by supervisors too | Only the owner can roster a past day |
 | A2 | A new administrator was signed out about 15 minutes after choosing a password | This browser gets a fresh sign-in; every other sign-in still ends |
 | D2 | Push tokens survived sign-out and revocation | Cleared on phone sign-out, revocation and replacement |
@@ -182,5 +182,29 @@ Every fix below has a test in `apps/api/test/final-qa.test.ts` or `apps/mobile/s
 | M2 | MEDIUM | Offline cold start: Continue and End shift unreachable | — | Waiting for a decision (Phase G) |
 | D3, D4, D6–D9 | MEDIUM and LOW | Phone wording and push timing | — | Phone UI changes cannot be verified without a device |
 | Admin password | LOW | No dashboard menu to change a non-temporary password; no e-mail self-service reset | Owners can reset others; an operator can reset an owner | The e-mail reset needs working SMTP |
+| Silent Google Maps failure | MEDIUM | When Google fails without reporting a refused key (seen on 9 November: its own requests blocked, then its "can't load Google Maps correctly" box), the map shows Google's grey error box instead of the diagram. The People and Workplaces lists still work | The live map is unusable in that state, but nothing is lost or wrong | Needs detection that does not rely on Google's callback (for example, no tiles within a time limit). Real Google Maps on the production domain is NOT VERIFIED either way |
+| Year-long dashboard cost | LOW | A year runs one roster query per day, in sequence | Measured 0.9–1.3 s on the sample data, which has only 90 days of history; real companies are not measured | Watch it on staging; batch the queries if it is slow |
 | AN2, AN3, N1 | LOW | Disabled-workplace rows, the simulated-data default on Overtime, and unread counts | Small reporting differences | Low impact |
 | Null island, rounding, CSP, Map ID, duplicate request | LOW | See the LOW list above | — | Configuration, or no user effect |
+
+### Independent review of the finalisation
+A reviewer with no part in this work read the whole Phase H diff (`b2639ec..0993183`). It found no CRITICAL or HIGH issue, and confirmed that refresh-token replay detection is not weakened: the 60-second grace change makes it stricter. All of its MEDIUM findings and six of its LOW ones were fixed, each with a test that fails when its fix is undone:
+
+| # | Finding | Fix |
+|---|---|---|
+| M1 | Clearing a used refresh answer scanned `refresh_tokens` without an index | Partial index on `replaced_by`, in migration 030 |
+| M2 | A backdated deactivation deleted and shortened roster entries, changing closed months | Deactivation no longer touches the roster; the change moved to reactivation and is audited |
+| M3 | A year-long dashboard runs one roster query per day | Measured, not changed: 0.9–1.3 s on the sample data. Listed above |
+| L1 | Possible deadlock between re-delivery and rotation | The used answer is cleared after the rotation commits |
+| L2 | A lost answer could be asked for again with no time limit | 24 hours at most |
+| L5 | A supervisor's own pending entries appeared in their queue but could not be decided | Left out of supervisors' queues and counts |
+| L6 | Manual hours were checked against today's shift length | Checked against the shift as it was that day |
+| L7 | The hours chart could start later than the totals for a future end date | Same days as the totals |
+| L8 | One owner could reset another owner and receive the password | Owners reset supervisors; another owner is reset by the server operator |
+
+Not changed:
+- **L3, L4:** secure-store write failures and a replaced phone's open session. Nothing is lost; the reviewer marked both as safe.
+- **L9:** a map failure is remembered until the page reloads.
+- **L10:** the dashboard does not yet show `limited`, but the date picker cannot ask for more than a year.
+
+**Migration 030** was rehearsed on the disposable copy: rollback, then apply again. Columns and index were removed and recreated, and the 2,820 attendance records were unchanged.
