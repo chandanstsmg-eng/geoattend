@@ -680,7 +680,14 @@ export async function createManualAttendance(admin: AuthUser, input: { employeeI
     const today = (await one('SELECT (now() AT TIME ZONE $1)::date::text AS d', [shift.timezone], db)).d as string;
     if (input.shiftDate > today) throw new HttpError(400, 'FUTURE_DATE', 'Attendance cannot be entered for a day that has not happened yet.');
     if (new Date(input.recordedAt).getTime() > Date.now() + 5 * 60_000) throw new HttpError(400, 'FUTURE_TIME', 'The arrival time is in the future.');
-    const scheduled = shiftMinutes(shift.start_time, shift.end_time);
+    const asThen = await one(
+      `SELECT COALESCE(rev.start_time, sh.start_time)::text AS start_time, COALESCE(rev.end_time, sh.end_time)::text AS end_time FROM shifts sh
+       LEFT JOIN LATERAL (SELECT r.* FROM shift_revisions r WHERE r.shift_id = sh.id AND $2::date <= r.valid_to AND (r.valid_from IS NULL OR $2::date >= r.valid_from) ORDER BY r.valid_to LIMIT 1) rev ON true
+       WHERE sh.id = $1`,
+      [shift.id, input.shiftDate],
+      db,
+    );
+    const scheduled = shiftMinutes(asThen.start_time, asThen.end_time);
     if (input.workedMinutes != null && input.workedMinutes > scheduled) {
       throw new HttpError(400, 'TOO_MANY_MINUTES', `Worked time cannot be longer than the shift (${scheduled} min). Record extra time as overtime.`);
     }

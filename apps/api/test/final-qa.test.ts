@@ -316,13 +316,19 @@ describe('remaining QA findings', () => {
     await as(owner).post(`/employees/${b.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(-7) }).expect(200);
   });
 
-  it('R2: leaving ends the roster, so time away is not absence after a return', async () => {
+  it('R2: deactivation changes no roster; a return ends the old roster at the leaving date, audited', async () => {
     const emp = await rostered(-30);
     const future = await one(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3) RETURNING id`, [emp.id, (await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week) VALUES ($1,'Later','00:00','01:00','UTC','{1}') RETURNING id`, [base.workplaceId])).id, day(20)]);
     await as(owner).post(`/employees/${emp.id}/deactivate`, { reason: 'Left the company', lastWorkingDay: day(-10) }).expect(200);
+    // Leaving rewrites nothing: a mistaken or backdated deactivation can be undone without losing roster history.
+    expect((await one('SELECT effective_to FROM employee_shift_assignments WHERE id = $1', [emp.assignmentId])).effective_to).toBeNull();
+    expect(await one('SELECT 1 FROM employee_shift_assignments WHERE id = $1', [future.id])).not.toBeNull();
+    await as(owner).post(`/employees/${emp.id}/reactivate`).expect(200);
     expect((await one('SELECT effective_to::text AS t FROM employee_shift_assignments WHERE id = $1', [emp.assignmentId])).t).toBe(day(-10));
     expect(await one('SELECT 1 FROM employee_shift_assignments WHERE id = $1', [future.id])).toBeNull();
-    await as(owner).post(`/employees/${emp.id}/reactivate`).expect(200);
+    const a = await one(`SELECT before_data FROM audit_logs WHERE action = 'employee.reactivate' AND resource_id = $1`, [emp.id]);
+    expect(a.before_data.leftOn).toBe(day(-10));
+    expect(a.before_data.rosterEnded).toHaveLength(2);
     const row = (await owner.agent.get(`/api/v1/reports/monthly?month=${day(-5).slice(0, 7)}&employeeId=${emp.id}`).expect(200)).body.rows[0];
     // Only days up to the last working day can be absences; the days away are not rostered.
     expect(row?.absent ?? 0).toBeLessThanOrEqual(Math.max(0, DateTime.fromISO(day(-10)).day));
@@ -391,6 +397,29 @@ describe('remaining QA findings', () => {
     }
   });
 
+  it('L5: a supervisor does not see their own pending entries in their approval queue; the owner does', async () => {
+    const emp = await rostered();
+    const rec = (await as(sup).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-1), recordedAt: `${day(-1)}T08:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201)).body;
+    const ids = (body: any) => JSON.stringify(body);
+    expect(ids((await sup.agent.get('/api/v1/approvals').expect(200)).body)).not.toContain(rec.id);
+    expect(ids((await owner.agent.get('/api/v1/approvals').expect(200)).body)).toContain(rec.id);
+  });
+
+  it('L6: worked time is checked against the shift as it was on that date', async () => {
+    const shift = await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1,'Long','08:00','18:00','UTC','{1,2,3,4,5,6,7}',30) RETURNING id`, [base.workplaceId]);
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [emp.id, shift.id, day(-20)]);
+    await owner.agent.patch(`/api/v1/shifts/${shift.id}`).set('X-CSRF-Token', owner.csrf).send({ endTime: '12:00', reason: 'Shorter from now on' }).expect(200);
+    // Ten hours on a past day, when the shift was still ten hours long.
+    await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: shift.id, shiftDate: day(-5), recordedAt: `${day(-5)}T08:00:00Z`, workedMinutes: 600, reason: 'Phone was broken' }).expect(201);
+  });
+
+  it('L8: an owner resets supervisors, not another owner', async () => {
+    const email = `owner2-${crypto.randomUUID()}@qa.test`;
+    const other = (await as(owner).post('/team', { fullName: 'Olive Owner', email, access: 'OWNER' }).expect(201)).body;
+    expect((await as(owner).post(`/team/${other.admin.id}/reset-password`).expect(400)).body.error.code).toBe('OWNER_ACCOUNT');
+  });
+
   it('L7: the dashboard employee filter narrows pending overtime and corrections', async () => {
     const emp = await rostered();
     const d = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-3)}&to=${day(0)}&employeeId=${emp.id}`).expect(200)).body;
@@ -437,6 +466,14 @@ describe('a refresh whose answer was lost (D1)', () => {
     await later(emp.id);
     await refresh(token, rid).expect(401);
     await refresh(newest).expect(401);
+  });
+
+  it('stops answering a lost refresh after a day', async () => {
+    const { emp, token } = await login();
+    const rid = id();
+    await refresh(token, rid).expect(200);
+    await q(`UPDATE refresh_tokens SET revoked_at = now() - interval '25 hours' WHERE user_id = $1 AND revoked_at IS NOT NULL`, [emp.id]);
+    await refresh(token, rid).expect(401);
   });
 
   it('refuses the retry after sign-out or deactivation', async () => {

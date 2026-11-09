@@ -64,6 +64,8 @@ export async function issueRefreshToken(userId: string, client: 'web' | 'mobile'
 
 /** A rotated token presented again this soon is a retry after a lost response, not theft. */
 const REFRESH_GRACE_MS = 60_000;
+/** How long a lost refresh answer can be asked for again: a phone offline overnight still recovers; after that it signs in. */
+const REDELIVERY_MS = 24 * 3600_000;
 
 /**
  * Re-delivery after a lost answer. The phone sends a one-time request id with each refresh and repeats it
@@ -104,7 +106,7 @@ export async function rotateRefreshToken(token: string, requestId?: string) {
     // The same refresh repeated (same old token, same request id) while its new token is still unused:
     // answer again with that same token. No second live token is created. Anything else falls through
     // to the reuse rules below, so a replayed token still revokes the whole family.
-    if (row.revoked_at && row.replaced_by && requestId && row.successor_box && row.rotation_key_hash === sha256(requestId) && row.is_active) {
+    if (row.revoked_at && row.replaced_by && requestId && row.successor_box && row.rotation_key_hash === sha256(requestId) && row.is_active && Date.now() - new Date(row.revoked_at).getTime() < REDELIVERY_MS) {
       const next = await one('SELECT token_hash, revoked_at, expires_at FROM refresh_tokens WHERE id = $1 FOR UPDATE', [row.replaced_by], db);
       const same = next && !next.revoked_at && new Date(next.expires_at) > new Date() ? openSuccessor(row.successor_box, token, requestId) : null;
       if (same && sha256(same) === next.token_hash) return { failed: false as const, row, refreshToken: same };
@@ -134,12 +136,13 @@ export async function rotateRefreshToken(token: string, requestId?: string) {
         [row.id, next!.id, requestId ? sha256(requestId) : null, requestId ? sealSuccessor(fresh, token, requestId) : null],
         db,
       );
-      // This token is now in use, so the answer that delivered it is no longer needed.
-      await q('UPDATE refresh_tokens SET successor_box = NULL WHERE replaced_by = $1', [row.id], db);
     }
-    return { failed: false as const, row, refreshToken: fresh };
+    return { failed: false as const, row, refreshToken: fresh, used: row.id as string };
   });
   if (outcome.failed) throw unauthorized('Session expired. Please sign in again.');
+  // This token is now in use, so the answer that delivered it is no longer needed. Done after the commit, so
+  // no transaction holds this row's lock while waiting for the older one (redelivery locks old, then new).
+  if ('used' in outcome && outcome.used) await q('UPDATE refresh_tokens SET successor_box = NULL WHERE replaced_by = $1 AND successor_box IS NOT NULL', [outcome.used]).catch(() => undefined);
   const { row, refreshToken } = outcome;
   const accessToken = await signAccessToken({ id: row.user_id, role: row.role }, row.device_id);
   return { userId: row.user_id as string, role: row.role as Role, client: row.client as 'web' | 'mobile', accessToken, refreshToken };

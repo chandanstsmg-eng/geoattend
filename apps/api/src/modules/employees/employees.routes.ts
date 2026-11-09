@@ -250,10 +250,6 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       await tx(async (db) => {
         await q('UPDATE users SET is_active = false, updated_at = now() WHERE id = $1', [params.id], db);
         await q('UPDATE employee_profiles SET left_on = GREATEST($2::date, joined_on) WHERE user_id = $1', [params.id, lastDay], db);
-        // Roster entries end on the last working day (entries not started by then are removed, as when ending one by hand),
-        // so a later reactivation does not turn the time away into absences.
-        await q('DELETE FROM employee_shift_assignments WHERE employee_id = $1 AND effective_from > $2::date', [params.id, lastDay], db);
-        await q('UPDATE employee_shift_assignments SET effective_to = $2::date WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2::date)', [params.id, lastDay], db);
       });
       await revokeAllForUser(params.id);
       await audit({ actor: user, action: 'employee.deactivate', resourceType: 'user', resourceId: params.id, reason: body.reason, req });
@@ -270,11 +266,21 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     scope: 'employee',
     handler: async ({ params, user, req }) => {
       await loadEmployee(params.id);
-      await tx(async (db) => {
+      const ended = await tx(async (db) => {
+        // The roster in force when they left ends on their last day. Otherwise clearing the leaving date below
+        // would make every day away an expected shift, and so an absence. Entries that only began after they
+        // left never applied, and are removed. The rows are kept in the audit entry.
+        const left = (await one('SELECT left_on::text AS d FROM employee_profiles WHERE user_id = $1', [params.id], db))?.d as string | null;
+        const before = left ? await q('SELECT * FROM employee_shift_assignments WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2::date)', [params.id, left], db) : [];
+        if (left) {
+          await q('DELETE FROM employee_shift_assignments WHERE employee_id = $1 AND effective_from > $2::date', [params.id, left], db);
+          await q('UPDATE employee_shift_assignments SET effective_to = $2::date WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2::date)', [params.id, left], db);
+        }
         await q('UPDATE users SET is_active = true, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1', [params.id], db);
         await q('UPDATE employee_profiles SET left_on = NULL WHERE user_id = $1', [params.id], db);
+        return { leftOn: left, rosterEnded: before };
       });
-      await audit({ actor: user, action: 'employee.reactivate', resourceType: 'user', resourceId: params.id, req });
+      await audit({ actor: user, action: 'employee.reactivate', resourceType: 'user', resourceId: params.id, before: ended, req });
       return loadEmployee(params.id);
     },
   }),

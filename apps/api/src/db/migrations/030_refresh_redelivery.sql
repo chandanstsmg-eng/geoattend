@@ -4,3 +4,5 @@
 --   successor_box      the new token, AES-256-GCM encrypted with a key derived from THIS (old) raw token and that
 --                      request id. The server stores only hashes of raw tokens, so a copy of the database cannot open it.
 ALTER TABLE refresh_tokens ADD COLUMN rotation_key_hash TEXT, ADD COLUMN successor_box TEXT;
+-- Clearing an answer once its token is used looks the old row up by replaced_by; only rows still holding one are indexed.
+CREATE INDEX refresh_tokens_replaced_by_idx ON refresh_tokens (replaced_by) WHERE successor_box IS NOT NULL;

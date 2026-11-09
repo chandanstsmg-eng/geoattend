@@ -420,7 +420,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
       .slice(0, 15)
       .map((e) => ({ employeeId: e.employee_id, name: e.full_name, days: e.days, totalMinutes: e.total_minutes, overtimeMinutes: e.overtime_minutes, incomplete: e.incomplete })),
     trend,
-    hoursByDay: isoDays(lastDays(from, to), to).map((date) => ({ date, ...(byDay.get(date) ?? { worked: 0, scheduled: 0, overtime: 0 }) })),
+    hoursByDay: isoDays(from, to).map((date) => ({ date, ...(byDay.get(date) ?? { worked: 0, scheduled: 0, overtime: 0 }) })),
     overtimeByWeek: [...byWeek.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([week, minutes]) => ({ week, minutes })),
     overtimeByEmployee: perEmployee
       .filter((e) => e.overtime_minutes > 0)
