@@ -104,6 +104,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
       deviceId: z.string().min(8).max(128).nullable().optional(),
     }),
     handler: async ({ user, params, body }) => {
+      await assertApprovedDevice(user);
       await reportPermissions(params.id, user.id, body);
       return sessionStatus(params.id);
     },
@@ -121,6 +122,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
       device: deviceStatusSchema.optional(),
     }),
     handler: async ({ user, body }) => {
+      await assertApprovedDevice(user);
       const out = await ingestReadings(body.sessionId, user.id, body.readings.map((r) => ({ ...r, source: body.source })), 'EMPLOYEE');
       if (body.device) await saveDeviceStatus(body.sessionId, user.id, body.device);
       return { results: out.results, status: await sessionStatus(body.sessionId) };
@@ -134,6 +136,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     params: idParams,
     body: z.object({ contentType: z.enum(['image/jpeg', 'image/png']), sizeBytes: z.number().int().positive() }),
     handler: async ({ user, params, body, req, res }) => {
+      await assertApprovedDevice(user);
       res.status(201);
       return reserveEndPhoto(user.id, params.id, body, requestOrigin(req));
     },
@@ -146,6 +149,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     params: idParams,
     body: z.object({ photoId: z.uuid().optional(), endedAt: z.iso.datetime({ offset: true }).optional() }).optional(),
     handler: async ({ user, params, body }) => {
+      await assertApprovedDevice(user);
       await endSession(params.id, user, 'EMPLOYEE', undefined, body?.photoId ?? null, body?.endedAt ?? null);
       return sessionStatus(params.id);
     },
@@ -172,6 +176,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     params: idParams,
     body: z.object({ reason: z.string().trim().min(3).max(2000) }),
     handler: async ({ user, params, body }) => {
+      await assertApprovedDevice(user);
       await requestManualReview(user.id, params.id, body.reason);
       return sessionStatus(params.id);
     },
@@ -183,6 +188,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     access: 'employee',
     params: idParams,
     handler: async ({ user, params }) => {
+      await assertApprovedDevice(user);
       await cancelManualReview(user.id, params.id);
       return sessionStatus(params.id);
     },
@@ -195,6 +201,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     params: idParams,
     body: z.object({ contentType: z.enum(['image/jpeg', 'image/png']), sizeBytes: z.number().int().positive() }),
     handler: async ({ user, params, body, req, res }) => {
+      await assertApprovedDevice(user);
       res.status(201);
       return reserveBreakPhoto(user.id, params.id, body, requestOrigin(req));
     },
@@ -212,6 +219,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
       evidence: readingSchema,
     }),
     handler: async ({ user, params, body, res }) => {
+      await assertApprovedDevice(user);
       await startBreak(user.id, params.id, body);
       res.status(201);
       return sessionStatus(params.id);
@@ -224,6 +232,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     access: 'employee',
     params: idParams,
     handler: async ({ user, params }) => {
+      await assertApprovedDevice(user);
       await endBreak(user.id, params.id);
       return sessionStatus(params.id);
     },
@@ -236,6 +245,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     params: idParams,
     body: z.object({ contentType: z.enum(['image/jpeg', 'image/png']), sizeBytes: z.number().int().positive() }),
     handler: async ({ user, params, body, req, res }) => {
+      await assertApprovedDevice(user);
       res.status(201);
       return reserveOvertimePhoto(user.id, params.id, body, requestOrigin(req));
     },
@@ -248,6 +258,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     params: idParams,
     body: z.object({ note: z.string().trim().max(500).optional(), photoId: z.uuid(), evidence: readingSchema }),
     handler: async ({ user, params, body, res }) => {
+      await assertApprovedDevice(user);
       await startOvertime(user.id, params.id, body);
       res.status(201);
       return sessionStatus(params.id);

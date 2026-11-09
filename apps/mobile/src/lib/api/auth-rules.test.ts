@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionIsGone, singleFlight } from './auth-rules.ts';
+import { refreshRequestFor, sessionIsGone, singleFlight } from './auth-rules.ts';
+
+test('a retry of the same refresh repeats its request id; a new token gets a new id', () => {
+  let n = 0;
+  const id = () => `id-${++n}`;
+  const first = refreshRequestFor(null, 'token-A', id);
+  assert.deepEqual(first, { token: 'token-A', id: 'id-1' });
+  // the answer was lost: the phone still holds token-A and must repeat id-1
+  assert.equal(refreshRequestFor(first, 'token-A', id), first);
+  // the refresh succeeded and the phone now holds token-B: a fresh id
+  assert.deepEqual(refreshRequestFor(first, 'token-B', id), { token: 'token-B', id: 'id-2' });
+});
 
 test('only a real refusal ends the sign-in', () => {
   for (const s of [400, 401, 403]) assert.equal(sessionIsGone(s), true, String(s));

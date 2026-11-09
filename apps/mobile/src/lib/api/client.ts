@@ -6,8 +6,9 @@
  * family, so refresh is single-flight: concurrent 401s share one refresh call.
  */
 import { API_URL } from '../config';
-import { sessionIsGone, singleFlight } from './auth-rules';
-import { clearCredentials, getTokens, setTokens } from '../secure';
+import { randomUUID } from 'expo-crypto';
+import { refreshRequestFor, sessionIsGone, singleFlight } from './auth-rules';
+import { clearCredentials, getRefreshRequest, getTokens, setRefreshRequest, setTokens } from '../secure';
 import type { RefreshResponse } from './types';
 
 export class ApiError extends Error {
@@ -91,7 +92,12 @@ export const refreshAccessToken = singleFlight(async (): Promise<string> => {
       await authLost('not signed in');
       throw new ApiError(401, 'UNAUTHENTICATED', 'Please sign in again.');
     }
-    const res = await rawFetch('/api/v1/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: t.refreshToken }) }, 20_000);
+    // Saved before sending: if the answer is lost, the retry repeats this id and the server can answer it again
+    // with the same new token instead of treating the old token as stolen.
+    const saved = await getRefreshRequest();
+    const attempt = refreshRequestFor(saved, t.refreshToken, () => randomUUID().replaceAll('-', ''));
+    if (attempt !== saved) await setRefreshRequest(attempt);
+    const res = await rawFetch('/api/v1/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: t.refreshToken, requestId: attempt.id }) }, 20_000);
     if (!res.ok) {
       const err = await toApiError(res);
       if (sessionIsGone(res.status)) await authLost(err.code);
@@ -99,6 +105,7 @@ export const refreshAccessToken = singleFlight(async (): Promise<string> => {
     }
     const data = (await res.json()) as RefreshResponse;
     await setTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+    await setRefreshRequest(null);
     accessMemo = data.accessToken;
     return data.accessToken;
 });

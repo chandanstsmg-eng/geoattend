@@ -23,7 +23,8 @@ const COUNTS = `
             WHERE ar.face_review = 'PENDING' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}) AS faces,
          -- Records sent late from the phone, by the workplace of the record.
          (SELECT count(*)::int FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
-            WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}) AS verifications,
+            WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+              AND ($2::uuid[] IS NULL OR NOT ('SUPERVISOR_ENTERED' = ANY(ar.risk_flags)))) AS verifications,
          -- Finished overtime waiting for a decision, by the workplace where it was worked.
          (SELECT count(*)::int FROM overtime_entries o JOIN users u ON u.id = o.employee_id
             WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')} AND ${overtimeCounts()}) AS overtime`;
@@ -78,7 +79,8 @@ mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
                   ar.device_meta->>'receivedAt' AS received_at, u.full_name, ep.employee_code, sh.name AS shift_name, w.name AS workplace_name
            FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
            JOIN shifts sh ON sh.id = ar.shift_id JOIN workplaces w ON w.id = ar.workplace_id
-           WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')} ORDER BY ar.recorded_at LIMIT 200`,
+           WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+             AND ($2::uuid[] IS NULL OR NOT ('SUPERVISOR_ENTERED' = ANY(ar.risk_flags))) ORDER BY ar.recorded_at LIMIT 200`,
           org,
         ),
         one(COUNTS, org),

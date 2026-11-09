@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Maximize2, Search, X } from 'lucide-react';
 import { ControlPosition, MapControl, useMap } from '@vis.gl/react-google-maps';
-import { AdvancedMarker, GeofenceCircle, Map, MAP_ID, MapSetupNotice, MapsProvider, mapsConfigured, Pin, PlaceSearch, useMapsRefused } from './maps/google';
+import { AdvancedMarker, GeofenceCircle, Map, MAP_ID, MapsBoundary, MapSetupNotice, MapsProvider, mapsConfigured, Pin, PlaceSearch, useMapsRefused } from './maps/google';
 import { SchematicMap, SiteOverview } from './maps/schematic';
 import { BODY_STYLE, MARKER_STYLE, initialsOf, kindFor } from './maps/markers';
 import { Button, Select, cx } from './ui';
@@ -252,7 +252,22 @@ export function MapLegend({ className }: { className?: string }) {
   );
 }
 
-export function WorkforceMap({ sessions, workplaces, selected, onSelect, className, search = true, pending = false }: { sessions: any[]; workplaces: MapWorkplace[]; selected: string | null; onSelect: (id: string) => void; className?: string; search?: boolean; pending?: boolean }) {
+type WorkforceMapProps = { sessions: any[]; workplaces: MapWorkplace[]; selected: string | null; onSelect: (id: string) => void; className?: string; search?: boolean; pending?: boolean };
+
+/**
+ * When Google refuses the key, the map is swapped for the diagram. In Safari's engine Google's own
+ * marker clean-up then throws; this boundary stays mounted across the swap, so it catches that and
+ * shows the diagram instead of the whole page failing.
+ */
+export function WorkforceMap(props: WorkforceMapProps) {
+  return (
+    <MapsBoundary fallback={<WorkforceMapView {...props} broken />}>
+      <WorkforceMapView {...props} />
+    </MapsBoundary>
+  );
+}
+
+function WorkforceMapView({ sessions, workplaces, selected, onSelect, className, search = true, pending = false, broken = false }: WorkforceMapProps & { broken?: boolean }) {
   const located = useMemo(() => sessions.filter((s) => s.last_latitude != null), [sessions]);
   const first = workplaces[0];
   const center = first ? { lat: first.latitude, lng: first.longitude } : located[0] ? { lat: located[0].last_latitude, lng: located[0].last_longitude } : null;
@@ -268,7 +283,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
   }, [selectedWp]);
   if (!center) return <div className={cx('flex items-center justify-center bg-gray-50 text-sm text-gray-500', className)}>No active workplace to show</div>;
 
-  if (!mapsConfigured || refused) {
+  if (!mapsConfigured || refused || broken) {
     const w = workplaces.find((x) => x.id === schematicWp) ?? (workplaces.length === 1 ? first : undefined);
     const c = w ? { lat: w.latitude, lng: w.longitude } : center;
     const open = sessions.filter((s) => s.is_open !== false);
@@ -309,6 +324,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
   return (
     <div className={cx('relative', className)}>
       <MapsProvider>
+      <MapsBoundary>
       <Map
         className="h-full w-full"
         defaultCenter={center}
@@ -331,6 +347,7 @@ export function WorkforceMap({ sessions, workplaces, selected, onSelect, classNa
         <Markers located={located} selected={selected} onSelect={onSelect} />
         <Controls workplaces={workplaces} located={located} search={search} pending={pending} />
       </Map>
+      </MapsBoundary>
       </MapsProvider>
     </div>
   );

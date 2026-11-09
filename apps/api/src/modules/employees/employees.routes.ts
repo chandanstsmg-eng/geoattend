@@ -78,7 +78,7 @@ async function loadEmployee(id: string) {
   return e;
 }
 
-function tempPassword() {
+export function tempPassword() {
   // 14 chars, guaranteed letters + digits.
   return `${crypto.randomBytes(6).toString('base64url').replace(/[^A-Za-z]/g, 'x')}${crypto.randomInt(10000000, 99999999)}`;
 }
@@ -266,11 +266,21 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     scope: 'employee',
     handler: async ({ params, user, req }) => {
       await loadEmployee(params.id);
-      await tx(async (db) => {
+      const ended = await tx(async (db) => {
+        // The roster in force when they left ends on their last day. Otherwise clearing the leaving date below
+        // would make every day away an expected shift, and so an absence. Entries that only began after they
+        // left never applied, and are removed. The rows are kept in the audit entry.
+        const left = (await one('SELECT left_on::text AS d FROM employee_profiles WHERE user_id = $1', [params.id], db))?.d as string | null;
+        const before = left ? await q('SELECT * FROM employee_shift_assignments WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2::date)', [params.id, left], db) : [];
+        if (left) {
+          await q('DELETE FROM employee_shift_assignments WHERE employee_id = $1 AND effective_from > $2::date', [params.id, left], db);
+          await q('UPDATE employee_shift_assignments SET effective_to = $2::date WHERE employee_id = $1 AND (effective_to IS NULL OR effective_to > $2::date)', [params.id, left], db);
+        }
         await q('UPDATE users SET is_active = true, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1', [params.id], db);
         await q('UPDATE employee_profiles SET left_on = NULL WHERE user_id = $1', [params.id], db);
+        return { leftOn: left, rosterEnded: before };
       });
-      await audit({ actor: user, action: 'employee.reactivate', resourceType: 'user', resourceId: params.id, req });
+      await audit({ actor: user, action: 'employee.reactivate', resourceType: 'user', resourceId: params.id, before: ended, req });
       return loadEmployee(params.id);
     },
   }),
@@ -374,14 +384,11 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
         if (await one('SELECT 1 FROM tracking_sessions WHERE employee_id = $1 AND shift_id = $2 AND ended_at IS NULL', [params.id, a.shift_id], db)) {
           throw conflict('SESSION_OPEN', 'End the open session for this shift first.');
         }
-        // Entries not yet started (or never used) are removed; older ones end yesterday (history and audit log kept).
-        const used = await one(
-          'SELECT 1 FROM tracking_sessions WHERE employee_id = $1 AND shift_id = $2 AND shift_date >= $3 AND ($4::date IS NULL OR shift_date <= $4) LIMIT 1',
-          [params.id, a.shift_id, a.effective_from, a.effective_to],
-          db,
-        );
+        // Entries not yet started are removed. Started ones end yesterday, whether or not anyone tracked a
+        // session: the days already rostered are the record of who was expected (absences, rates, monthly
+        // summaries), and manual attendance counts as use too. History and the audit log are kept.
         const started = a.effective_from < a.today;
-        if (!used || !started) {
+        if (!started) {
           await q('DELETE FROM employee_shift_assignments WHERE id = $1', [a.id], db);
         } else {
           await q('UPDATE employee_shift_assignments SET effective_to = GREATEST(effective_from, $2::date - 1) WHERE id = $1', [a.id, a.today], db);

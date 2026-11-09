@@ -111,6 +111,27 @@ mount(teamRouter, '/api/v1/team', 'team', [
   }),
   route({
     method: 'post',
+    path: '/:id/reset-password',
+    summary: 'Issue another administrator a new temporary password (signs them out; audited)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'admin',
+    handler: async ({ params, user, req }) => {
+      if (params.id === user.id) throw badRequest('SELF', 'Change your own password from your account menu.');
+      // Taking over another owner's account is not a supervisor reset: that needs the server operator (admin:reset-password).
+      if ((await one('SELECT access FROM administrator_profiles WHERE user_id = $1', [params.id]))?.access === 'OWNER') {
+        throw badRequest('OWNER_ACCOUNT', 'Another owner’s password is reset by whoever runs the server, not from the dashboard.');
+      }
+      const pw = tempPassword();
+      await q('UPDATE users SET password_hash = $2, must_change_password = true, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1', [params.id, await hashPassword(pw)]);
+      await revokeAllForUser(params.id);
+      await audit({ actor: user, action: 'team.reset_password', resourceType: 'user', resourceId: params.id, req });
+      return { temporaryPassword: pw };
+    },
+  }),
+  route({
+    method: 'post',
     path: '/:id/status',
     summary: 'Deactivate or reactivate an administrator (signs them out)',
     access: 'admin',

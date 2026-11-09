@@ -96,7 +96,10 @@ mount(payrollRouter, '/api/v1/payroll', 'payroll', [
     ownerOnly: true,
     params: idParams,
     scope: 'employee',
-    handler: async ({ params }) => one(`SELECT pay_type, amount::float AS amount, ot_multiplier::float AS ot_multiplier, hours_per_day::float AS hours_per_day, updated_at FROM employee_pay WHERE employee_id = $1`, [params.id]),
+    handler: async ({ params }) => {
+      assertPayrollEnabled();
+      return one(`SELECT pay_type, amount::float AS amount, ot_multiplier::float AS ot_multiplier, hours_per_day::float AS hours_per_day, updated_at FROM employee_pay WHERE employee_id = $1`, [params.id]);
+    },
   }),
   route({
     method: 'put',

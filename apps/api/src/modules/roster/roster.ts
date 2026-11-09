@@ -113,6 +113,8 @@ export async function addRosterEntry(db: Queryable, employeeId: string, body: z.
   if (!sh.is_active) throw badRequest('SHIFT_DISABLED', 'This shift is disabled.');
   const from = body.effectiveFrom ?? todayIn(sh.timezone);
   const to = body.effectiveTo ?? null;
+  // Rostering a past day turns it into an expected shift, so absences and rates change after the fact: owners only.
+  if (user.access !== 'OWNER' && from < todayIn(sh.timezone)) throw badRequest('PAST_DATE', 'Only the company owner can roster a day that has passed.');
   if (to && to < from) throw badRequest('BAD_RANGE', 'The end date is before the start date.');
   if (body.managerId) await assertManager(db, body.managerId, user.orgId, sh.workplace_id);
   // Serialise roster changes for this employee so two admins cannot create clashing entries at once.

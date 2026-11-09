@@ -86,7 +86,7 @@ export async function notify(db: Queryable, outbox: Outbox, n: NotifyInput) {
         )
       )?.manager_id ?? null
     : null;
-  const recipients = `u.is_active AND u.role = 'ADMIN' AND u.org_id = $2 AND (ap.away_until IS NULL OR ap.away_until < ${localDaySql(orgTimezoneSql('$2'))})
+  const recipients = `u.is_active AND u.role = 'ADMIN' AND u.org_id = $2 AND (${n.type === 'SOS' ? 'true OR ' : ''}ap.away_until IS NULL OR ap.away_until < ${localDaySql(orgTimezoneSql('$2'))})
     AND (ap.access = 'OWNER' OR ($4::boolean IS NOT TRUE AND ($3::uuid = ANY(ap.site_ids) OR u.id = $5::uuid)))`;
   const ownersOnly = n.type === 'APPROVAL_OVERDUE';
   const always = n.type === 'SOS'; // a safety alert is never left to the inbox alone

@@ -171,3 +171,8 @@ Branch `phase-f-jobs-monitoring`, stacked on `phase-e-dates-isolation`; neither 
 ## Phase G: UI/UX and performance
 
 Merged into `production-remediation` for development only, not deployed. Audit, baseline and outcome: [PHASE-G-AUDIT.md](PHASE-G-AUDIT.md). No migration and no new dependency. The phone screens changed in this phase have not run on a phone, and real Google Maps has not been seen: see [PENDING-VERIFICATION.md](PENDING-VERIFICATION.md).
+
+## Phase H: independent final QA
+
+On branch `phase-h-final-qa`, not merged. Findings, fixes and open items: [PHASE-H-QA.md](PHASE-H-QA.md). Nothing ran on a phone, in Safari, or on a production domain.
+

@@ -64,13 +64,38 @@ export async function issueRefreshToken(userId: string, client: 'web' | 'mobile'
 
 /** A rotated token presented again this soon is a retry after a lost response, not theft. */
 const REFRESH_GRACE_MS = 60_000;
+/** How long a lost refresh answer can be asked for again: a phone offline overnight still recovers; after that it signs in. */
+const REDELIVERY_MS = 24 * 3600_000;
+
+/**
+ * Re-delivery after a lost answer. The phone sends a one-time request id with each refresh and repeats it
+ * only when retrying that same refresh. The new token is kept encrypted with a key derived from the OLD raw
+ * token and that id; the database holds only hashes of raw tokens, so a copy of it cannot open the box.
+ */
+const boxKey = (oldToken: string, requestId: string) => crypto.createHash('sha256').update(`geoattend:refresh-redelivery:${oldToken}:${requestId}`).digest();
+function sealSuccessor(fresh: string, oldToken: string, requestId: string) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', boxKey(oldToken, requestId), iv);
+  const body = Buffer.concat([c.update(fresh, 'utf8'), c.final()]);
+  return [iv, c.getAuthTag(), body].map((b) => b.toString('base64url')).join('.');
+}
+function openSuccessor(box: string, oldToken: string, requestId: string): string | null {
+  try {
+    const [iv, tag, body] = box.split('.').map((p) => Buffer.from(p, 'base64url'));
+    const d = crypto.createDecipheriv('aes-256-gcm', boxKey(oldToken, requestId), iv!);
+    d.setAuthTag(tag!);
+    return Buffer.concat([d.update(body!), d.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Rotates a refresh token under a row lock, so two simultaneous uses cannot both succeed unnoticed.
  * Re-use of a rotated token revokes its family, except a retry inside the grace period: a phone on a
  * poor network that never received the answer must not be signed out mid-shift.
  */
-export async function rotateRefreshToken(token: string) {
+export async function rotateRefreshToken(token: string, requestId?: string) {
   const outcome = await tx(async (db) => {
     const row = await one(
       `SELECT rt.*, u.role, u.is_active, u.org_id FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id WHERE rt.token_hash = $1 FOR UPDATE OF rt`,
@@ -78,8 +103,19 @@ export async function rotateRefreshToken(token: string) {
       db,
     );
     if (!row) return { failed: true as const };
+    // The same refresh repeated (same old token, same request id) while its new token is still unused:
+    // answer again with that same token. No second live token is created. Anything else falls through
+    // to the reuse rules below, so a replayed token still revokes the whole family.
+    if (row.revoked_at && row.replaced_by && requestId && row.successor_box && row.rotation_key_hash === sha256(requestId) && row.is_active && Date.now() - new Date(row.revoked_at).getTime() < REDELIVERY_MS) {
+      const next = await one('SELECT token_hash, revoked_at, expires_at FROM refresh_tokens WHERE id = $1 FOR UPDATE', [row.replaced_by], db);
+      const same = next && !next.revoked_at && new Date(next.expires_at) > new Date() ? openSuccessor(row.successor_box, token, requestId) : null;
+      if (same && sha256(same) === next.token_hash) return { failed: false as const, row, refreshToken: same };
+    }
     if (row.revoked_at) {
-      const retry = row.replaced_by && Date.now() - new Date(row.revoked_at).getTime() < REFRESH_GRACE_MS;
+      // A retry inside the grace period is allowed only while the sign-in is still alive: after a sign-out,
+      // a revoked device or a password change the newer token is revoked too, and the old one must not revive it.
+      const alive = row.replaced_by ? await one('SELECT 1 FROM refresh_tokens WHERE id = $1 AND revoked_at IS NULL', [row.replaced_by], db) : null;
+      const retry = alive && Date.now() - new Date(row.revoked_at).getTime() < REFRESH_GRACE_MS;
       if (!retry) {
         // A rotated token was presented again: assume theft, kill the family.
         await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id], db);
@@ -94,18 +130,29 @@ export async function rotateRefreshToken(token: string) {
       [row.user_id, sha256(fresh), row.family_id, row.client, row.device_id, config.refreshTokenTtlDays],
       db,
     );
-    if (!row.revoked_at) await q('UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2 WHERE id = $1', [row.id, next!.id], db);
-    return { failed: false as const, row, refreshToken: fresh };
+    if (!row.revoked_at) {
+      await q(
+        'UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2, rotation_key_hash = $3, successor_box = $4 WHERE id = $1',
+        [row.id, next!.id, requestId ? sha256(requestId) : null, requestId ? sealSuccessor(fresh, token, requestId) : null],
+        db,
+      );
+    }
+    return { failed: false as const, row, refreshToken: fresh, used: row.id as string };
   });
   if (outcome.failed) throw unauthorized('Session expired. Please sign in again.');
+  // This token is now in use, so the answer that delivered it is no longer needed. Done after the commit, so
+  // no transaction holds this row's lock while waiting for the older one (redelivery locks old, then new).
+  if ('used' in outcome && outcome.used) await q('UPDATE refresh_tokens SET successor_box = NULL WHERE replaced_by = $1 AND successor_box IS NOT NULL', [outcome.used]).catch(() => undefined);
   const { row, refreshToken } = outcome;
   const accessToken = await signAccessToken({ id: row.user_id, role: row.role }, row.device_id);
   return { userId: row.user_id as string, role: row.role as Role, client: row.client as 'web' | 'mobile', accessToken, refreshToken };
 }
 
 export async function revokeRefreshToken(token: string) {
-  const row = await one('SELECT family_id, user_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
+  const row = await one('SELECT family_id, user_id, client, device_id FROM refresh_tokens WHERE token_hash = $1', [sha256(token)]);
   if (row) await q('UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL', [row.family_id]);
+  // Signed out on a phone: that phone stops receiving this person's notifications.
+  if (row?.client === 'mobile' && row.device_id) await q('UPDATE device_registrations SET push_token = NULL WHERE user_id = $1 AND device_id = $2', [row.user_id, row.device_id]);
   return (row?.user_id as string | undefined) ?? null;
 }
 

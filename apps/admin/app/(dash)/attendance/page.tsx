@@ -415,7 +415,7 @@ function RecordDetail({ id }: { id: string }) {
                 <Field label="Verification status">
                   <Select value={corr.verificationStatus} onChange={(e) => setCorr({ ...corr, verificationStatus: e.target.value })}>
                     <option value="">Keep ({r.verification_status.toLowerCase()})</option>
-                    {['CORRECTED', 'MANUAL_APPROVED', 'VERIFIED', 'DISPUTED', 'VOIDED'].map((s) => <option key={s} value={s}>{s.replace('_', ' ').toLowerCase()}</option>)}
+                    {['CORRECTED', 'MANUAL_APPROVED', ...(r.verification_status === 'VERIFIED' ? ['VERIFIED'] : []), 'DISPUTED', 'VOIDED'].map((s) => <option key={s} value={s}>{s.replace('_', ' ').toLowerCase()}</option>)}
                   </Select>
                 </Field>
                 <Field label="Late">
@@ -556,18 +556,19 @@ function Reviews() {
 
 function ManualDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
+  const { isOwner } = useMe();
   const emps = useEmployees();
   const [f, setF] = useState({ employeeId: '', shiftId: '', shiftDate: todayISO(), recordedAt: localDateTime(), workedHours: '', reason: '' });
   const emp = emps.data?.find((e: any) => e.id === f.employeeId);
-  const create = useMutation({ meta: { success: 'Attendance added' },
+  const create = useMutation({ meta: { success: isOwner ? 'Attendance added' : 'Sent to the owner for approval' },
     mutationFn: () => {
       const { workedHours, ...rest } = f;
-      return post('/attendance/manual', { ...rest, recordedAt: businessInstant(f.recordedAt), workedMinutes: workedHours ? Math.round(Number(workedHours) * 60) : undefined });
+      return post('/attendance/manual', { ...rest, recordedAt: businessInstant(f.recordedAt), workedMinutes: Math.round(Number(workedHours) * 60) });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['attendance'] }); qc.invalidateQueries({ queryKey: ['overview'] }); onClose(); },
   });
   return (
-    <Modal open onOpenChange={(o) => !o && onClose()} title="Manual attendance" description="For cases without device evidence (e.g. a broken phone). Recorded as MANUAL_APPROVED with your name and reason in the audit log.">
+    <Modal open onOpenChange={(o) => !o && onClose()} title="Manual attendance" description={isOwner ? 'For cases without device evidence (e.g. a broken phone). Recorded as MANUAL_APPROVED with your name and reason in the audit log.' : 'For cases without device evidence (e.g. a broken phone). It waits for the owner’s approval and does not count until then. Your name and reason are kept in the audit log.'}>
       <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <div className="sm:col-span-2">
           <Field label="Employee">
@@ -587,7 +588,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
         </div>
         <Field label="Shift date"><Input type="date" required value={f.shiftDate} onChange={(e) => setF({ ...f, shiftDate: e.target.value })} /></Field>
         <Field label="Attendance time"><Input type="datetime-local" required value={f.recordedAt} onChange={(e) => setF({ ...f, recordedAt: e.target.value })} /></Field>
-        <Field label="Hours worked (optional)" hint="Without this the day counts, but its hours stay unmeasured."><Input type="number" min={0} max={24} step="0.25" value={f.workedHours} onChange={(e) => setF({ ...f, workedHours: e.target.value })} /></Field>
+        <Field label="Hours worked" hint="Up to the shift's length; extra time is recorded as overtime."><Input type="number" required min={0} max={24} step="0.25" value={f.workedHours} onChange={(e) => setF({ ...f, workedHours: e.target.value })} /></Field>
         <div className="sm:col-span-2"><Field label="Reason (required)"><Textarea required minLength={5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
         <div className="sm:col-span-2"><InlineError error={create.error} /></div>
         <div className="sm:col-span-2 flex justify-end gap-2">
