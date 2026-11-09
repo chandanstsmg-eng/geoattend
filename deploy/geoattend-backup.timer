@@ -1,0 +1,12 @@
+# Runs geoattend-backup.service every night at 02:30 server time, and on boot if a run was missed.
+# BACKUP_MAX_AGE_HOURS (26 in production) alerts if a night's backup does not happen.
+[Unit]
+Description=Nightly GeoAttend backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

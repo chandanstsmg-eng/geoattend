@@ -1,0 +1,21 @@
+# Nightly production backup: dump, restore check, off-site copy, retention (docs/BACKUPS.md).
+# Install: copy this file and geoattend-backup.timer to /etc/systemd/system/, then
+#   systemctl daemon-reload && systemctl enable --now geoattend-backup.timer
+# NOT YET RUN ON A LINUX SERVER. Check paths and the user before enabling.
+[Unit]
+Description=GeoAttend production backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=geoattend
+WorkingDirectory=/opt/geoattend
+# Secrets live in a file readable only by this user (chmod 600), never in this unit:
+# DATABASE_URL, BACKUP_VERIFY_DATABASE_URL, BACKUP_S3_*, PG_BIN, BACKUP_DIR.
+EnvironmentFile=/etc/geoattend/backup.env
+ExecStart=/usr/bin/npm run db:backup:production -w @geoattend/api
+# A failed run exits 1 and writes a FAILED manifest; the API's hourly backup check then raises an alert.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h

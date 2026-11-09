@@ -40,6 +40,31 @@ function useMapsFailure() {
 }
 
 /** Keeps a failing Google map from taking the page down: it reports the failure and shows `fallback` (nothing by default). */
+/**
+ * Google does not always say when it fails: some failures show its own "can't load Google Maps correctly" box
+ * without calling gm_authFailure. If no map tiles have arrived after this long, the page falls back to the
+ * diagram as it does for a refused key, rather than leave an unusable grey map.
+ */
+const TILES_DEADLINE_MS = 20_000;
+export function MapsWatchdog() {
+  const map = useMap();
+  useEffect(() => {
+    if (!map) return;
+    let loaded = false;
+    const l = google.maps.event.addListenerOnce(map, 'tilesloaded', () => {
+      loaded = true;
+    });
+    const t = setTimeout(() => {
+      if (!loaded) mapsFailed('error');
+    }, TILES_DEADLINE_MS);
+    return () => {
+      clearTimeout(t);
+      l.remove();
+    };
+  }, [map]);
+  return null;
+}
+
 export class MapsBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() {
@@ -71,7 +96,7 @@ export function MapSetupNotice({ compact, refused: wasRefused }: { compact?: boo
     return (
       <div role="note" className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <MapPinOff className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
-        <p className="min-w-0 font-medium">{kind === 'error' ? 'Google Maps could not be shown in this browser' : 'Google Maps refused this site’s key'}, so positions are shown on a diagram instead.</p>
+        <p className="min-w-0 font-medium">{kind === 'error' ? 'Google Maps could not be loaded' : 'Google Maps refused this site’s key'}, so positions are shown on a diagram instead.</p>
       </div>
     );
   return (
@@ -227,6 +252,7 @@ export function GeofenceEditorMap({ value, radius, onChange, onRadiusChange, onA
         <Pin background="#0b4f72" borderColor="#083e5a" glyphColor="#ffffff" />
       </AdvancedMarker>
       <GeofenceCircle center={value} radius={radius} editable onRadiusChange={onRadiusChange} />
+      <MapsWatchdog />
     </Map>
     </MapsBoundary>
   );
