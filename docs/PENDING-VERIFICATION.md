@@ -4,12 +4,12 @@ Work that is built and passes automated tests, but has **not** been checked the 
 
 ## Open production blockers
 
-Phases E, F and G are merged for development only. None of these is done, and production must wait for all of them.
+Phases E to H are merged for development only; Phase I is on its own branch. None of these is done, and production must wait for all of them.
 
 | Blocker | Status | What it needs |
 |---|---|---|
 | Linux SIGTERM and graceful worker shutdown | BLOCKED | A Linux machine. Only Windows has been tested, and this one has no WSL or Docker. Steps: [RUNBOOK.md](RUNBOOK.md), "Checks only a Linux server can pass" |
-| Off-machine backups | BLOCKED | Storage away from this computer, on a schedule. Every backup is on one disk |
+| Off-machine backups | BLOCKED | The pipeline exists and passed locally: `db:backup:production` dumps, proves the restore, copies off-site, checks the copy and applies retention ([BACKUPS.md](BACKUPS.md)). It needs a real bucket in another account and a Linux server to run the timer |
 | External monitoring and alert delivery | BLOCKED | An outside monitor, a real alert webhook or mailbox, and someone on call. An alert has only reached a local test process |
 | Real SMTP, push and WhatsApp delivery | NOT VERIFIED | Real credentials and a real delivery to a person. No test against a local server or a simulated provider counts |
 | Physical Android devices | NOT VERIFIED | Real phones, following [ANDROID-DEVICE-TEST-PLAN.md](ANDROID-DEVICE-TEST-PLAN.md) |
