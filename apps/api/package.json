@@ -16,6 +16,7 @@
     "admin:reset-password": "tsx scripts/reset-admin-password.ts",
     "db:backup": "tsx scripts/backup.ts",
     "db:backup:online": "tsx scripts/backup-online.ts",
+    "db:backup:production": "tsx scripts/backup-production.ts",
     "db:backup:verify": "tsx scripts/backup-verify.ts",
     "db:backup:prune": "tsx scripts/backup-prune.ts",
     "db:schema-doc": "tsx scripts/schema-doc.ts",

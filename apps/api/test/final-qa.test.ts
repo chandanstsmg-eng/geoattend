@@ -303,6 +303,21 @@ describe('remaining QA findings', () => {
     await as(owner).post(`/attendance/${rec.id}/corrections`, { verificationStatus: 'CORRECTED', reason: 'Checked with the site' }).expect(200);
   });
 
+  it('Phase I: an arrival must be on the shift\'s day, for manual entries and corrections', async () => {
+    const emp = await rostered();
+    const bad = await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-9)}T09:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(400);
+    expect(bad.body.error.code).toBe('ARRIVAL_NOT_ON_SHIFT');
+    const rec = (await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T09:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201)).body;
+    expect((await as(owner).post(`/attendance/${rec.id}/corrections`, { recordedAt: `${day(-30)}T09:00:00Z`, reason: 'Wrong day' }).expect(400)).body.error.code).toBe('ARRIVAL_NOT_ON_SHIFT');
+    expect((await as(sup).post(`/attendance/${rec.id}/corrections`, { recordedAt: `${day(-30)}T09:00:00Z`, reason: 'Wrong day' }).expect(400)).body.error.code).toBe('ARRIVAL_NOT_ON_SHIFT');
+  });
+
+  it('Phase I: a supervisor cannot even ask for GPS-verified', async () => {
+    const emp = await rostered();
+    const rec = (await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T09:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201)).body;
+    expect((await as(sup).post(`/attendance/${rec.id}/corrections`, { verificationStatus: 'VERIFIED', reason: 'Make it verified' }).expect(400)).body.error.code).toBe('NOT_GPS_VERIFIED');
+  });
+
   it('AT4: manual attendance must state the hours worked', async () => {
     const emp = await rostered();
     await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T08:00:00Z`, reason: 'Phone was broken' }).expect(400);

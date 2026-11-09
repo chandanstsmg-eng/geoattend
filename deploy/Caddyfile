@@ -1,0 +1,31 @@
+# Example HTTPS reverse proxy for the Docker Compose stack (Caddy obtains and renews certificates itself).
+# Replace the three host names with yours. NOT YET RUN: test on staging first.
+# Firewall: open 80 and 443 only. 4400, 3400, 3500, 5432 and 9000 stay bound to 127.0.0.1 (docker-compose.yml).
+# With this proxy in front, set TRUST_PROXY=1 so the API sees real client addresses and https.
+
+app.example.com {
+	# Dashboard. It forwards /api/* to the API itself, so browsers talk to this origin only.
+	reverse_proxy 127.0.0.1:3400
+	encode zstd gzip
+}
+
+api.example.com {
+	# The phone app's address (EXPO_PUBLIC_API_URL and PUBLIC_API_URL).
+	reverse_proxy 127.0.0.1:4400 {
+		# Live updates are server-sent events: do not buffer them.
+		flush_interval -1
+	}
+}
+
+photos.example.com {
+	# S3_PUBLIC_ENDPOINT: signed photo links for the private MinIO bucket. Anonymous access stays off in MinIO.
+	reverse_proxy 127.0.0.1:9000
+	request_body {
+		max_size 10MB
+	}
+}
+
+www.example.com, example.com {
+	reverse_proxy 127.0.0.1:3500
+	encode zstd gzip
+}

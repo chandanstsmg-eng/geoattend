@@ -28,6 +28,8 @@ export interface BackupManifest {
   tablesMatching?: number;
   tablesDifferent?: string[];
   files: Array<{ path: string; size: number; sha256: string }>;
+  /** The off-site copy, read back and checked byte for byte (scripts/backup-production.ts). */
+  offsite?: { bucket: string; key: string; sha256: string; verifiedAt: string };
 }
 
 export type BackupStatus = 'OK' | 'NO_MANIFEST' | 'BAD_MANIFEST' | 'FAILED' | 'INCOMPLETE' | 'CORRUPT';

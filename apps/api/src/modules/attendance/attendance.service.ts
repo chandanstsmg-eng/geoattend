@@ -471,6 +471,18 @@ export async function resolveReview(admin: AuthUser, reviewId: string, decision:
   return result;
 }
 
+/**
+ * An arrival entered by hand must belong to the shift it is for: from 6 hours before that day's start to
+ * 24 hours after it (early arrivals and overnight shifts included). Otherwise a record dated one day could
+ * carry an arrival from another month, and lateness would be judged against the wrong day.
+ */
+function assertArrivalOnShift(recordedAt: string, startAt: Date) {
+  const t = new Date(recordedAt).getTime();
+  if (t < startAt.getTime() - 6 * 3600_000 || t >= startAt.getTime() + 24 * 3600_000) {
+    throw badRequest('ARRIVAL_NOT_ON_SHIFT', 'The arrival time is not on this shift\'s day. Check the date and time.');
+  }
+}
+
 export interface CorrectionInput {
   reason: string;
   verificationStatus?: 'VERIFIED' | 'MANUAL_APPROVED' | 'CORRECTED' | 'DISPUTED' | 'VOIDED';
@@ -497,6 +509,7 @@ async function applyCorrection(db: Queryable, outbox: Outbox, approver: AuthUser
   // A new arrival time re-judges lateness by the same rule, unless the administrator set it explicitly.
   let isLate = c.isLate ?? null;
   let lateBy = c.lateByMinutes ?? null;
+  if (c.recordedAt) assertArrivalOnShift(c.recordedAt, (await shiftStartOn(db, before.shift_id, before.shift_date)).at);
   if (c.recordedAt && isLate === null && lateBy === null) {
     const session = before.session_id ? await one('SELECT scheduled_start_at FROM tracking_sessions WHERE id = $1', [before.session_id], db) : null;
     const shift = await shiftStartOn(db, before.shift_id, before.shift_date);
@@ -555,6 +568,10 @@ export async function requestCorrection(supervisor: AuthUser, attendanceId: stri
     if (!before) throw notFound('Attendance record');
     if (before.verification_status === 'VOIDED') throw conflict('ATTENDANCE_VOIDED', 'A voided record cannot be changed. Its history stays in the audit log.');
     await assertPayrollMonthOpen(supervisor.orgId, before.shift_date, db);
+    if (change.verificationStatus === 'VERIFIED' && before.verification_status !== 'VERIFIED') {
+      throw badRequest('NOT_GPS_VERIFIED', 'Only the phone and the server can mark a record GPS-verified. Use Corrected or Approved by manager.');
+    }
+    if (change.recordedAt) assertArrivalOnShift(change.recordedAt, (await shiftStartOn(db, before.shift_id, before.shift_date)).at);
     if (await one(`SELECT 1 FROM review_requests WHERE attendance_id = $1 AND kind = 'ADMIN_CORRECTION' AND status = 'OPEN'`, [attendanceId], db)) {
       throw conflict('CORRECTION_OPEN', 'A correction for this record is already waiting for an owner.');
     }
@@ -696,6 +713,7 @@ export async function createManualAttendance(admin: AuthUser, input: { employeeI
     const wp = await one('SELECT * FROM workplaces WHERE id = $1', [shift.workplace_id], db);
     const emp = await one('SELECT is_demo FROM users WHERE id = $1', [input.employeeId], db);
     const start = await shiftStartOn(db, shift.id, input.shiftDate);
+    assertArrivalOnShift(input.recordedAt, start.at);
     const { isLate, lateBy } = lateness(new Date(input.recordedAt), start.at, start.grace);
     const rec = await one(
       `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags, is_simulated, is_late, late_by_minutes, manual_worked_minutes, approved_by, approved_at)

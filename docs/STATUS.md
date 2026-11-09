@@ -176,3 +176,8 @@ Merged into `production-remediation` for development only, not deployed. Audit, 
 
 On branch `phase-h-final-qa`, not merged. Findings, fixes and open items: [PHASE-H-QA.md](PHASE-H-QA.md). Nothing ran on a phone, in Safari, or on a production domain.
 
+
+## Phase I: staging and production readiness
+
+On branch `phase-i-staging`, not merged, not deployed. Results and blockers: [PHASE-I-READINESS.md](PHASE-I-READINESS.md). Backups: [BACKUPS.md](BACKUPS.md).
+
