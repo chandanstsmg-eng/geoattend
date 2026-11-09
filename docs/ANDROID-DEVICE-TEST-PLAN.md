@@ -24,6 +24,8 @@ One pass per phone. Each line points to the detailed steps below.
 - [ ] **Battery optimisation:** battery saver, overnight, brand steps before and after, 8-hour use (E3, E4, section F)
 - [ ] **Offline attendance:** airplane mode check-in, restart, Wi-Fi without internet, offline shift end, shown as pending to the manager (D1, D3–D7, D9, D11, D15)
 - [ ] **Synchronization:** sends by itself, nothing doubled, expired sign-in, other user, manager approves or rejects (D2, D8, D10, D12–D14, G4, G5)
+- [ ] **Push notifications:** arrives in foreground, background, swiped away, battery saver (P1–P5)
+- [ ] **Sign-in renewal:** long shift, locked phone, lost renewal, revoked device (T1–T6)
 
 Record every result in the sheet at the end. A step that was not run is "not tested", never "pass".
 
@@ -138,6 +140,31 @@ The location interval is set per company (`updateIntervalSec`, default 30 s). If
 | G6 | Storage full on the phone, then capture offline | Clear failure, never a false "saved" |
 | G7 | Server storage outage | Saved for later and retried |
 
+## P. Push notifications
+
+Needs `EXPO_PUSH_ENABLED=true` and `EXPO_ACCESS_TOKEN` on the test server, and a build made with the EAS project. The server records a push as `SENT` when Expo **accepts** it; only the phone proves it arrived.
+
+| # | Do | Pass when |
+|---|---|---|
+| P1 | Sign in, allow notifications. On the server: `npm run integrations:check -w @geoattend/api -- --only expo --expo-token <this phone's token>` | The script says ACCEPTED (receipt ok), **and** the notification appears on the phone |
+| P2 | Repeat with the app in the background, then swiped away, then the screen off for 10 minutes | Appears each time; note any delay |
+| P3 | Battery saver on (brand setting) | Appears, or the delay is noted |
+| P4 | Notifications denied in Android settings | No crash; the app explains how to turn them on |
+| P5 | A manager assigns a task or answers a leave request | The employee's phone shows it |
+
+## T. Sign-in renewal (token refresh)
+
+The phone renews its sign-in every 15 minutes. A renewal whose answer is lost is answered again with the same new sign-in (D1, Phase H).
+
+| # | Do | Pass when |
+|---|---|---|
+| T1 | Stay signed in through a 2-hour shift, using the app every 20 minutes | Never asked to sign in again |
+| T2 | Lock the phone for 1 hour, then open the app | Opens signed in, data loads |
+| T3 | Airplane mode for 30 minutes during a shift, then reconnect | Still signed in; saved items are sent |
+| T4 | Turn on airplane mode while the app is loading a screen, then reconnect within a minute | Still signed in (the lost renewal is answered again) |
+| T5 | Revoke the device in the dashboard | The next action asks for sign-in; nothing saved on the phone is lost |
+| T6 | Leave the phone off for 31 days | Asked to sign in (sign-ins last 30 days) |
+
 ## H. Results sheet
 
 Copy one per phone.
@@ -159,5 +186,7 @@ Copy one per phone.
 | E Background | | | | |
 | F Battery | | | | |
 | G Camera | | | | |
+| P Push | | | | |
+| T Sign-in renewal | | | | |
 
 **Release rule:** the app may not be described as working offline, or as tracking in the background, on a phone brand until sections D and E have passed on that brand.

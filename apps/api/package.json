@@ -9,6 +9,7 @@
     "start": "tsx src/server.ts",
     "worker": "tsx src/worker.ts",
     "db:migrate": "tsx scripts/migrate.ts",
+    "integrations:check": "tsx scripts/integrations-check.ts",
     "db:seed": "tsx scripts/seed.ts",
     "set-logins": "tsx scripts/set-logins.ts",
     "db:stop": "tsx scripts/db-stop.ts",

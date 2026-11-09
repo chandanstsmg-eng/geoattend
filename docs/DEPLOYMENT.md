@@ -71,7 +71,7 @@ npm run db:backup                                   # → data/backups/geoattend
 npm run db:restore -- data/backups/<file>.dump geoattend_restored   # into a NEW database
 ```
 
-Production: use your provider's automated backups plus `npm run db:backup:production` on a schedule, which proves each dump restores and keeps a verified off-site copy. See [BACKUPS.md](BACKUPS.md). By hand:
+Production: use your provider's automated backups plus `npm run db:backup:production` on a schedule, which proves each dump restores and keeps a verified off-site copy. See [BACKUPS.md](BACKUPS.md). For a staging server, follow [STAGING.md](STAGING.md). By hand:
 
 ```
 pg_dump --format=custom --no-owner "$DATABASE_URL" > geoattend-$(date +%F).dump

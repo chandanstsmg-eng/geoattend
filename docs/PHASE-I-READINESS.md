@@ -1,6 +1,6 @@
 # Phase I: staging and production readiness
 
-**Branch.** `phase-i-staging`, from `production-remediation` at `3ef7f8f`. Not merged, not deployed.
+**Branch.** `phase-i-staging`, from `production-remediation` at `3ef7f8f`. Merged on 9 November 2026 (merge `1959a30`, rollback tag `before-phase-i`). Not deployed.
 
 **Machine.** Everything ran on the Windows development machine, against a disposable staging copy: API 4410, dashboard 3410, PostgreSQL 18.4 on 54352, data in `D:\gh`, restored from a verified backup. The live `geoattend` database (migration 020) and your development stack were not touched.
 
@@ -73,6 +73,26 @@ Each fix has a test, and each test fails when its fix is undone. The backup scri
 - **Reversing leave.** Should an owner be able to reverse a decided leave?
 - **Offline arrival time.** Should it be the phone's time (now) or the time it reached the server?
 - **Owner notification.** Should the owner be notified when a supervisor enters attendance?
+
+## Staging execution preparation (after the merge)
+
+Found by reading the Docker setup; **not yet proven, because Docker is not available here:**
+
+| Defect | Fix |
+|---|---|
+| The API image installed Debian's `pg_dump` 15, which refuses to dump the PostgreSQL 17 database, so backups and restores in the container would fail | It installs the PostgreSQL 17 client from the PostgreSQL project's repository |
+| The API's hourly backup check read a folder inside its container, which no backup ever writes to. In production it would have warned every hour | The host's backup folder is mounted into the API read-only (`BACKUP_DIR=/backups`) |
+| The backup timer needed Node and a matching PostgreSQL client installed on the host | The backup runs as the `backup` Compose service in the API image; the host needs Docker only |
+
+New, for the Linux server ([STAGING.md](STAGING.md)):
+- `deploy/staging-bootstrap.sh`: Docker, Caddy and the firewall, plus secrets generated into chmod-600 files.
+- `deploy/staging-verify.sh`: health, loopback-only ports, HTTPS, SIGTERM, kill -9 recovery, persistence, backup.
+- `deploy/staging.env.example` and `deploy/backup.env.example`.
+- `npm run integrations:check`: real sends. Off-site and photo buckets are PASS only after a checksum read-back; e-mail, push, WhatsApp and webhooks are only ACCEPTED until a person confirms receipt.
+
+**Locally verified:** the integration check's PASS, ACCEPTED, FAIL and BLOCKED paths, against a local S3 server, a local webhook and a closed SMTP port. The probe object was removed afterwards. **Not verified:** any real service.
+
+Note: the server marks an employee push `SENT` when Expo accepts it; it does not read Expo's receipts. Treat `SENT` as "accepted", not "delivered".
 
 ## Open, not fixed
 

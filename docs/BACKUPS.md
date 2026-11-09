@@ -4,7 +4,7 @@ Development backups of the built-in database (`db:backup:online`) are described 
 
 ## What runs
 
-`npm run db:backup:production -w @geoattend/api` runs nightly from `deploy/geoattend-backup.timer`. Each run does four things:
+`npm run db:backup:production -w @geoattend/api` runs nightly from `deploy/geoattend-backup.timer`. On the Docker Compose stack, the timer runs it as the `backup` service, `docker compose --profile backup run --rm backup`. That service uses the API image, which carries `pg_dump` 17, and writes to `data/backups`. The API mounts the same folder read-only for its hourly check. Each run does four things:
 
 1. **Dump.** It counts every table's rows and runs `pg_dump` in one database snapshot, so the counts describe exactly what the dump holds.
 2. **Prove.** It restores the dump into a new scratch database on `BACKUP_VERIFY_DATABASE_URL` and compares every table's count. Only an exact match is `RESTORE_PROVEN`. The scratch database is then dropped; it is the only thing the script ever drops.
@@ -15,7 +15,7 @@ Development backups of the built-in database (`db:backup:online`) are described 
 
 ## Settings
 
-Put these in `/etc/geoattend/backup.env`, readable only by the backup user.
+Put these in `/etc/geoattend/backup.env`, chmod 600; the template is `deploy/backup.env.example`. On the Compose stack, `docker-compose.yml` sets `DATABASE_URL`, `PG_BIN` and `BACKUP_DIR` itself. Test the off-site bucket before the first run with `npm run integrations:check -w @geoattend/api -- --only offsite`.
 
 | Setting | What it is |
 |---|---|

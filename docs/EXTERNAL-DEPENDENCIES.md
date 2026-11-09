@@ -55,7 +55,7 @@ Then upload from a real phone and see the photo in the dashboard.
 
 ## Docker deployment
 
-`docker-compose.yml` defines `db` (PostGIS 17), `minio`, `redis`, `api`, `admin` and `web`. It stops with a clear message if a required variable is missing. The Dockerfiles were corrected in Phase C but **no image has ever been built**.
+`docker-compose.yml` defines `db` (PostGIS 17), `minio`, `redis`, `api`, `admin`, `web`, and the nightly `backup` job, which starts only through its profile. It stops with a clear message if a required variable is missing. The Dockerfiles were corrected in Phase C and again in Phase I, when the API image got `pg_dump` 17 for the version 17 server. **No image has ever been built.** The server procedure and its checks are in [STAGING.md](STAGING.md).
 
 Requirements:
 

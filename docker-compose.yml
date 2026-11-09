@@ -80,6 +80,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    # Named, so the backup job below runs the same image.
+    image: geoattend-api:${GEOATTEND_TAG:-local}
     restart: unless-stopped
     logging: *logging
     # SIGTERM: requests in flight get 10 s and the running job finishes its record (apps/api/src/server.ts).
@@ -109,8 +111,32 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS in .env}
       # How many proxies sit in front of the API. Everything else in X-Forwarded-For is ignored.
       TRUST_PROXY: ${TRUST_PROXY:?set TRUST_PROXY in .env}
+      # The hourly backup check reads the manifests the backup job writes. Without this mount it would look
+      # inside the container, find nothing, and warn every hour even when nightly backups are fine.
+      BACKUP_DIR: /backups
+    volumes:
+      - ${BACKUP_HOST_DIR:-./data/backups}:/backups:ro
     ports:
       - '127.0.0.1:4400:4400'
+
+  # Nightly backup (docs/BACKUPS.md): dump, restore check, off-site copy. Never starts with `up`; the
+  # systemd timer in deploy/ runs it with `docker compose --profile backup run --rm backup`.
+  backup:
+    image: geoattend-api:${GEOATTEND_TAG:-local}
+    profiles: ['backup']
+    depends_on:
+      db:
+        condition: service_healthy
+    # Off-site bucket credentials and the restore-check login (deploy/backup.env.example). chmod 600.
+    env_file: ${BACKUP_ENV_FILE:-/etc/geoattend/backup.env}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://geoattend_owner:${PG_OWNER_PASSWORD}@db:5432/geoattend
+      PG_BIN: /usr/lib/postgresql/17/bin
+      BACKUP_DIR: /backups
+    volumes:
+      - ${BACKUP_HOST_DIR:-./data/backups}:/backups
+    command: ['node', '--import', 'tsx', 'apps/api/scripts/backup-production.ts']
 
   admin:
     build:
