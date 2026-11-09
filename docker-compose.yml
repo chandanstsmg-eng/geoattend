@@ -20,6 +20,9 @@ services:
   db:
     image: postgis/postgis:17-3.5
     restart: unless-stopped
+    # The image stops PostgreSQL with SIGINT (fast shutdown: sessions closed, final checkpoint written).
+    # Docker's 10 s default can cut the checkpoint short; a kill is safe (WAL) but forces crash recovery.
+    stop_grace_period: 60s
     logging: *logging
     environment:
       POSTGRES_DB: geoattend
@@ -147,6 +150,8 @@ services:
         PHOTO_ORIGIN: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
         NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}
         NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: ${NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID:-}
+    # Tagged per release by deploy/staging-deploy.sh, so deploy/staging-rollback.sh can return to the last one.
+    image: geoattend-admin:${GEOATTEND_TAG:-local}
     restart: unless-stopped
     logging: *logging
     depends_on: [api]
@@ -165,6 +170,7 @@ services:
         NEXT_PUBLIC_CONTACT_PHONE: ${NEXT_PUBLIC_CONTACT_PHONE:-}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
         NEXT_PUBLIC_CONTACT_WHATSAPP: ${NEXT_PUBLIC_CONTACT_WHATSAPP:-}
+    image: geoattend-web:${GEOATTEND_TAG:-local}
     restart: unless-stopped
     logging: *logging
     environment:

@@ -7,6 +7,8 @@
  * browser request's abort signal: when the tab navigates or closes, the API
  * connection closes too.
  */
+import { streamUpstreamHeaders } from '@/lib/stream-headers';
+
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
@@ -16,7 +18,7 @@ export async function GET(req: Request) {
   let upstream: Response;
   try {
     upstream = await fetch(`${API}/api/v1/notifications/stream`, {
-      headers: { cookie: req.headers.get('cookie') ?? '', accept: 'text/event-stream' },
+      headers: streamUpstreamHeaders(req.headers),
       signal: req.signal,
       cache: 'no-store',
     });

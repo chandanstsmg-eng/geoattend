@@ -94,6 +94,41 @@ New, for the Linux server ([STAGING.md](STAGING.md)):
 
 Note: the server marks an employee push `SENT` when Expo accepts it; it does not read Expo's receipts. Treat `SENT` as "accepted", not "delivered".
 
+## Infrastructure preparation and deployment validation
+
+**PostgreSQL 17, verified here:**
+- **Full API suite on PostgreSQL 17.10:** every migration ran, and 624 tests passed with 9 skipped (the cloud-bucket tests, which need S3 settings). Earlier, every test had run on 18.4 only.
+- **Backup drill on a 17.6 server with the 17.6 tools:**
+  - The logins from `docker/db-init` were created correctly.
+  - `db:backup:production` reached RESTORE_PROVEN, with the off-site copy verified.
+  - The downloaded copy restored into a separate database with identical counts.
+  - Tools older than the server are refused, and that run is recorded `FAILED` ([BACKUPS.md](BACKUPS.md)).
+
+**Found and fixed in this round:**
+
+| Problem | Fix | Test |
+|---|---|---|
+| The dashboard's proxy for live updates dropped `X-Forwarded-For`, so the API saw every user's stream as coming from the dashboard container, under one shared per-address rate limit | The proxy passes the client address on, like the generic `/api` rewrite | `apps/admin/lib/stream-headers.test.ts` (new; the dashboard now has `npm test`, run by CI) |
+| No way to check a server's settings before deploying; the first sign was a refused start | `npm run config:check`: the API's own start-up rules; names only, never values | `apps/api/test/deploy-config.test.ts` (3 tests, including that no secret is printed) |
+| The dashboard and website images had no version tags, so a release could not be undone | Images tagged per commit; `deploy/staging-deploy.sh` and `deploy/staging-rollback.sh` | Script syntax only; needs a server |
+| Docker's 10 s stop limit can cut PostgreSQL's shutdown checkpoint short | `stop_grace_period: 60s` on `db` | Needs Docker |
+| My own earlier `staging-verify.sh` would always fail its placeholder check: the template's comments mention the placeholders and are copied into `.env` | Comment lines are skipped | Needs a server |
+
+**Reviewed, no change needed:**
+
+| Area | Finding |
+|---|---|
+| Restart policies | `unless-stopped` on db, minio, api, admin, web and redis; the one-off jobs have none |
+| Start-up order | After a reboot Docker ignores `depends_on`. An API that starts before the database exits 1 and is restarted until the database answers |
+| API shutdown | SIGTERM closes connections cleanly (exit 0) inside the 30 s grace |
+| PostgreSQL shutdown | The image stops PostgreSQL with SIGINT (fast shutdown) |
+| Health checks | API `/health` runs a database query; dashboard and website check a page; db uses `pg_isready` |
+| Proxy addresses | The generic `/api` rewrite adds no extra `X-Forwarded-For` hop, so `TRUST_PROXY=1` behind Caddy is correct |
+| Data on disk | `pgdata` and `photos` are named volumes; `down` without `-v` keeps them |
+| Secrets in the frontend | Only `NEXT_PUBLIC_GOOGLE_MAPS_*`, which is public by design and must be restricted by referrer |
+
+New: [UBUNTU-SERVER.md](UBUNTU-SERVER.md), the exact guide for a new Ubuntu 24.04 server.
+
 ## Open, not fixed
 
 - **Employee notifications:** employees have no in-app list of their notifications; they rely on push, which is not configured.

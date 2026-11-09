@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks a running GeoAttend STAGING stack on its Linux server. Run from /opt/geoattend after
-# `docker compose up -d --build` and db:seed:   bash deploy/staging-verify.sh [--with-backup]
+# `docker compose up -d --build` and db:seed:   bash deploy/staging-verify.sh [--with-backup | --quick]
+# --quick: sections 1-5 only (no restarts), as run by staging-deploy.sh after each release.
 # Each line prints PASS, FAIL or SKIP with the evidence. It restarts and stops containers of THIS stack
 # only (never `down -v`, so no volume is removed), writes nothing to the database, and must never be run
 # against production. NOT YET RUN: no Linux server was available (docs/STAGING.md).
@@ -18,7 +19,8 @@ count() { docker compose exec -T db psql -U geoattend -d geoattend -tAc "SELECT 
 
 echo "== 1. Configuration"
 docker compose config -q && pass "docker compose config parses with every required variable set" || fail "docker compose config"
-grep -nE 'REPLACE_ME|GENERATE_ME|example\.com' .env >/dev/null && fail ".env still has placeholders: grep -nE 'REPLACE_ME|GENERATE_ME|example\\.com' .env" || pass ".env has no placeholders"
+# Comment lines are ignored: the template's own instructions mention the placeholders.
+grep -vE '^[[:space:]]*#' .env | grep -qE 'REPLACE_ME|GENERATE_ME|example\.com' && fail ".env still has placeholders: grep -vE '^[[:space:]]*#' .env | grep -nE 'REPLACE_ME|GENERATE_ME|example\\.com'" || pass ".env has no placeholders"
 [ "$(stat -c %a .env)" = 600 ] && pass ".env is chmod 600" || fail ".env permissions are $(stat -c %a .env), expected 600"
 grep -qE '^PAYROLL_ENABLED=false' .env && pass "payroll stays off" || fail "PAYROLL_ENABLED is not false"
 
@@ -51,6 +53,12 @@ if [ -n "$OPS_TOKEN" ]; then
   code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:4400/api/v1/ops/health)
   [[ "$code" = 401 || "$code" = 403 || "$code" = 404 ]] && pass "ops health refuses a request without the token ($code)" || fail "ops health without token answered $code"
 else skip "OPS_TOKEN not set"; fi
+
+if [ "${1:-}" = --quick ]; then
+  # Used by staging-deploy.sh right after a release: sections 1-5 only, nothing is stopped or restarted.
+  echo; [ "$fails" = 0 ] && echo "QUICK CHECKS PASSED" || echo "$fails CHECK(S) FAILED"
+  exit $(( fails > 0 ))
+fi
 
 echo "== 6. Graceful shutdown (SIGTERM)"
 start=$(date +%s); docker compose stop api >/dev/null 2>&1; took=$(( $(date +%s) - start ))

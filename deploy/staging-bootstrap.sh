@@ -79,10 +79,11 @@ cat <<EOF
 
 Done. Still to do by hand (docs/STAGING.md):
   1. Edit $APP_DIR/.env: replace every REPLACE_ME and example.com (host names, ADMIN_EMAIL).
-     grep -nE 'REPLACE_ME|example\.com' $APP_DIR/.env   must print nothing.
-  2. Point DNS for the four host names at this server, put them in deploy/Caddyfile, then
-       install -m 0644 $APP_DIR/deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
-  3. cd $APP_DIR && docker compose up -d --build && docker compose exec api npm run db:seed -w @geoattend/api
+     grep -vE '^[[:space:]]*#' $APP_DIR/.env | grep -nE 'REPLACE_ME|example\.com'   must print nothing.
+  2. Point DNS for the four host names at this server, then (edit the copy, not the repository file)
+       install -m 0644 $APP_DIR/deploy/Caddyfile /etc/caddy/Caddyfile, put the names in it, systemctl reload caddy
+  3. cd $APP_DIR && bash deploy/staging-deploy.sh origin/production-remediation --first
+     docker compose exec api npm run db:seed -w @geoattend/api
   4. bash deploy/staging-verify.sh
   5. Fill $ETC_DIR/backup.env (off-site bucket), run the backup once, then:
        systemctl enable --now geoattend-backup.timer

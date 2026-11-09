@@ -6,6 +6,8 @@ Staging is a separate server with its own secrets, its own database and its own 
 
 ## 1. Prepare the server
 
+The full step-by-step for a new Ubuntu 24.04 LTS server, with a check after each step, is [UBUNTU-SERVER.md](UBUNTU-SERVER.md). It covers SSH keys and lockdown, firewall, Docker, DNS, HTTPS and secrets. In short:
+
 Needs: Ubuntu 22.04 or 24.04, 2 vCPU, 4 GB RAM and 40 GB disk at least, SSH access, and four DNS names pointing at it (dashboard, API, photos, website).
 
 ```bash
@@ -24,17 +26,29 @@ sudo bash deploy/staging-bootstrap.sh
 It never overwrites an existing `.env` and never starts the stack.
 
 Then, by hand:
-1. In `.env`, replace every `REPLACE_ME` and `example.com`. `grep -nE 'REPLACE_ME|example\.com' .env` must print nothing; the API refuses to start otherwise.
+1. In `.env`, replace every `REPLACE_ME` and `example.com`. `grep -vE '^[[:space:]]*#' .env | grep -nE 'REPLACE_ME|example\.com'` must print nothing (comment lines are skipped), and `docker compose run --rm --no-deps api npm run config:check -w @geoattend/api` must say OK; the API refuses to start otherwise.
 2. Put the four host names in `deploy/Caddyfile`, copy it to `/etc/caddy/Caddyfile` and run `systemctl reload caddy`. Caddy obtains the HTTPS certificates itself.
 
 ## 2. Start and verify the stack
 
 ```bash
 cd /opt/geoattend
-docker compose up -d --build
+bash deploy/staging-deploy.sh origin/production-remediation --first
 docker compose exec api npm run db:seed -w @geoattend/api   # first administrator from .env
 bash deploy/staging-verify.sh
 ```
+
+`deploy/staging-deploy.sh` switches nothing until the first five steps pass:
+1. Checks out the release, refusing a checkout with local changes.
+2. Builds the images, tagged with the commit.
+3. Checks the environment with the new image's own start-up rules (`config:check`). It prints setting names, never values.
+4. Takes a pre-deployment backup, which must reach `RESTORE_PROVEN`. Skipped on the first install, when there is no database yet.
+5. Runs the database migrations while the old release still serves.
+6. Switches the containers to the new release.
+7. Runs the health and HTTPS checks (`staging-verify.sh --quick`).
+8. Records the release in `data/deploy-history.log`.
+
+**Rollback:** `bash deploy/staging-rollback.sh` returns to the previous release's images (they are kept, tagged by commit) and re-runs the quick checks. It never changes the database. Migrations only add, so an older release normally runs on the newer schema. If it does not, see [BACKUPS.md](BACKUPS.md) and `docs/migrations/`.
 
 `deploy/staging-verify.sh` prints PASS, FAIL or SKIP for each check:
 

@@ -52,6 +52,8 @@ Put these in `/etc/geoattend/backup.env`, chmod 600; the template is `deploy/bac
 | Off-site upload, read-back checksum, retention keeping the newest 2 | **PASS** against a local S3-compatible server (SeaweedFS) |
 | Restore of the downloaded off-site copy into a new database: counts equal to the source | **PASS** |
 | Wrong off-site credentials: run recorded as `FAILED`, exit code 1 | **PASS** |
+| **PostgreSQL 17** (the Docker server's version), with the 17.6 client tools: logins from `docker/db-init`, migrations up to date, `db:backup:production` RESTORE_PROVEN 52/52, off-site copy verified, downloaded copy's SHA-256 equal, restored into a separate database with identical counts (49 users, 2,886 attendance records, migration 030) | **PASS** (disposable 17.6 server, 9 Nov 2026) |
+| Tools older than the server (pg_dump 17.6 against a PostgreSQL 18 server) | **PASS**: refused with "server version mismatch", run recorded `FAILED`, exit 1. So the API image must carry the server's major version: it installs `postgresql-client-17` |
 | A real off-machine bucket | **BLOCKED**: no bucket or credentials provided |
 | The systemd timer on a Linux server | **BLOCKED**: no Linux server |
 | An alert reaching a person | **BLOCKED**: no webhook or SMTP configured |
