@@ -20,6 +20,34 @@ afterAll(async () => {
   for (const name of [...made, live]) await dropDatabase(name);
 });
 
+describe('db:restore script', () => {
+  it('a missing pg_restore stops it before the new database is created, so the retry is not blocked', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { API_ROOT } = await import('../src/config.js');
+    const noTools = fs.mkdtempSync(path.join(os.tmpdir(), 'pgbin-empty-'));
+    const dump = path.join(noTools, 'some.dump');
+    fs.writeFileSync(dump, 'not a real dump');
+    const target = `geoattend_test_notools_${crypto.randomBytes(3).toString('hex')}`;
+    const env = { ...process.env, PG_BIN: noTools, GEOATTEND_ENV_FILE: path.join(noTools, 'no.env'), LOG_LEVEL: 'silent' };
+    const r = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/restore.ts', dump, target], { cwd: API_ROOT, env, windowsHide: true }).then(
+      () => ({ code: 0, err: '' }),
+      (e: any) => ({ code: e.code as number, err: String(e.stderr) }),
+    );
+    fs.rmSync(noTools, { recursive: true, force: true });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/not found in PG_BIN/);
+    const c = new pg.Client({ connectionString: liveUrl });
+    await c.connect();
+    const exists = (await c.query('SELECT 1 FROM pg_database WHERE datname = $1', [target])).rowCount;
+    await c.end();
+    expect(exists).toBe(0);
+  }, 60_000);
+});
+
 describe('restore target', () => {
   it('refuses the live database, by name and when it comes from DATABASE_URL', async () => {
     await expect(prepareRestoreTarget(liveUrl, live)).rejects.toThrow(/over the live database/);
