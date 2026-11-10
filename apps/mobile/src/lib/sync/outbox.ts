@@ -12,7 +12,7 @@ import type { IntentResponse, SessionStatus } from '../api/types';
 import { qk, queryClient } from '../queryClient';
 import { getCachedUser } from '../secure';
 import { publish, withLock } from '../tracking/store';
-import { addEvent, dismissEvent, emptyOutbox, pendingFor, retryEvent, runOutbox, trimSynced, type CheckInPayload, type EventKind, type OutboxEvent, type OutboxResult, type OutboxState } from './engine';
+import { addEvent, dismissEvent, emptyOutbox, eventsOf, pendingFor, retryEvent, runOutbox, trimSynced, type CheckInPayload, type EventKind, type OutboxEvent, type OutboxResult, type OutboxState } from './engine';
 import { putPhoto } from './upload';
 
 const KEY = 'geoattend.outbox.v1';
@@ -30,8 +30,9 @@ async function read(): Promise<OutboxState> {
   }
 }
 
-function show(s: OutboxState) {
-  publish({ events: s.events });
+/** The screen shows the signed-in employee's items only: on a shared phone nobody sees another's check-ins. */
+async function show(s: OutboxState) {
+  publish({ events: eventsOf(s, (await getCachedUser())?.id ?? null) });
 }
 
 function update(fn: (s: OutboxState) => OutboxState): Promise<OutboxState> {
@@ -40,7 +41,7 @@ function update(fn: (s: OutboxState) => OutboxState): Promise<OutboxState> {
     const next = fn(before);
     if (next !== before) {
       await AsyncStorage.setItem(KEY, JSON.stringify(next));
-      show(next);
+      await show(next);
     }
     return next;
   });
@@ -135,16 +136,18 @@ export function syncOutbox(): Promise<OutboxResult> {
 }
 
 export async function retrySaved(id: string) {
-  await update((s) => retryEvent(s, id));
+  const me = (await getCachedUser())?.id ?? null;
+  await update((s) => retryEvent(s, id, me));
   return syncOutbox();
 }
 
-/** Removes a refused or sent event, and its photo, at the employee's request. A pending event cannot be removed. */
+/** Removes a refused or sent event, and its photo, at its own employee's request. A pending event cannot be removed. */
 export async function dismissSaved(id: string) {
+  const me = (await getCachedUser())?.id ?? null;
   let gone: OutboxEvent | undefined;
   await update((s) => {
-    gone = s.events.find((e) => e.id === id && e.status !== 'PENDING');
-    return dismissEvent(s, id);
+    gone = s.events.find((e) => e.id === id && e.status !== 'PENDING' && e.userId === me);
+    return dismissEvent(s, id, me);
   });
   if (gone) removePhoto(gone);
 }

@@ -74,13 +74,19 @@ export function trimSynced(s: OutboxState): { state: OutboxState; removed: Outbo
   return { state: { events: s.events.filter((e) => !gone.has(e.id)) }, removed };
 }
 
-export function retryEvent(s: OutboxState, id: string): OutboxState {
+/** What one employee may see on a shared phone: their own saved items only (none when nobody is signed in). */
+export const eventsOf = (s: OutboxState, userId: string | null): OutboxEvent[] => (userId ? s.events.filter((e) => e.userId === userId) : []);
+
+/** `userId`: the signed-in employee; another employee's item is left untouched. */
+export function retryEvent(s: OutboxState, id: string, userId?: string | null): OutboxState {
+  const e = s.events.find((x) => x.id === id);
+  if (!e || (userId !== undefined && e.userId !== userId)) return s;
   return patch(s, id, { status: 'PENDING', nextAttemptAt: 0, lastError: null, failureCode: null });
 }
 
-/** A failed event the employee chose to dismiss. Only a refused or sent event can go. */
-export function dismissEvent(s: OutboxState, id: string): OutboxState {
-  return { events: s.events.filter((e) => e.id !== id || e.status === 'PENDING') };
+/** A failed event the employee chose to dismiss. Only a refused or sent event can go, and only by its own employee. */
+export function dismissEvent(s: OutboxState, id: string, userId?: string | null): OutboxState {
+  return { events: s.events.filter((e) => e.id !== id || e.status === 'PENDING' || (userId !== undefined && e.userId !== userId)) };
 }
 
 export const pendingFor = (s: OutboxState, sessionId: string, kind: EventKind) => s.events.find((e) => e.sessionId === sessionId && e.kind === kind && e.status === 'PENDING') ?? null;
@@ -138,11 +144,19 @@ export interface OutboxResult {
   message: string | null;
 }
 
+/**
+ * A shared phone: the employee who started a sync may sign out (and another sign in) while it runs. From then
+ * on nothing of theirs is sent, since it would go with someone else's sign-in, and an answer that came back
+ * under someone else's sign-in says nothing about their item.
+ */
+const stillSignedIn = async (d: { userId: () => Promise<string | null> }, userId: string | null) => userId !== null && (await d.userId()) === userId;
+
 export async function runOutbox(d: OutboxDeps): Promise<OutboxResult> {
   const userId = await d.userId();
   let sent = 0;
   const seen = new Set<string>();
   for (;;) {
+    if (userId && !(await stillSignedIn(d, userId))) return { sent, stopped: 'signed-out', message: null };
     const next = dueEvents(await d.update((s) => s), userId, d.now()).find((e) => !seen.has(e.id));
     if (!next) return { sent, stopped: null, message: null };
     seen.add(next.id);
@@ -157,6 +171,8 @@ export async function runOutbox(d: OutboxDeps): Promise<OutboxResult> {
       sent++;
     } catch (err) {
       const f = asFailure(err);
+      // Signed out (or switched) while this was being sent: it stays waiting for its employee, unjudged.
+      if (!(await stillSignedIn(d, userId))) return { sent, stopped: 'signed-out', message: null };
       const v = classify(f);
       const attempts = next.attempts + 1;
       if (v === 'already-done') {
@@ -209,6 +225,7 @@ export async function flushReadings<S>(d: FlushDeps<S>): Promise<FlushResult> {
   if (!userId) return { sent, remaining: (await d.update((q) => q)).items.length, error: null, stopped: 'signed-out' };
 
   for (let round = 0; round < 40; round++) {
+    if (!(await stillSignedIn(d, userId))) return { sent, remaining: await remaining(), error: null, stopped: 'signed-out' };
     const batch = nextBatch(await d.update((q) => q), userId, limit);
     if (!batch) return { sent, remaining: 0, error: null, stopped: null };
     const ids = batch.readings.map((r) => r.clientEventId);
@@ -217,6 +234,8 @@ export async function flushReadings<S>(d: FlushDeps<S>): Promise<FlushResult> {
       res = await d.post(batch);
     } catch (err) {
       const f = asFailure(err);
+      // Signed out or switched mid-send: these readings were not judged, so nothing is set aside.
+      if (!(await stillSignedIn(d, userId))) return { sent, remaining: await remaining(), error: null, stopped: 'signed-out' };
       if (f.status === 400) {
         // One bad reading must not cost the good ones: halve until it is alone, then set it aside.
         if (ids.length > 1) {

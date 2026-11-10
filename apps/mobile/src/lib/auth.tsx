@@ -4,7 +4,7 @@ import type { ApiUser, LoginResponse } from './api/types';
 import { deviceInfo, registerDevice } from './device';
 import { queryClient } from './queryClient';
 import { clearCredentials, getCachedUser, getTokens, setCachedUser, setTokens } from './secure';
-import { syncOutbox } from './sync/outbox';
+import { reloadOutbox, syncOutbox } from './sync/outbox';
 import { flush, stopTracking, withTimeout } from './tracking/runtime';
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
@@ -59,6 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () =>
       onAuthLost(() => {
         queryClient.clear();
+        void reloadOutbox().catch(() => undefined);
         setUser(null);
         setNotice('Your session has expired. Please sign in again.');
         setStatus('signedOut');
@@ -93,6 +94,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearCredentials();
     setAccessTokenMemo(null);
     queryClient.clear();
+    // The saved items on screen were this employee's: hide them before the next person picks up the phone.
+    void reloadOutbox().catch(() => undefined);
     setUser(null);
     setNotice(null);
     setStatus('signedOut');
