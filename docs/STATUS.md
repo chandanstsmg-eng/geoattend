@@ -183,3 +183,4 @@ Merged into `production-remediation` on 9 November 2026 (rollback tag `before-ph
 
 **Staging execution.** The Linux server procedure, the integration checks, the device tests and the staging regression are in [STAGING.md](STAGING.md), with its results log. None of it has run yet: no server, credentials or devices.
 
+**Windows continuation, 10 November 2026.** Reliability drills, a 1,032-employee performance test, independent workflow and UI/UX reviews, and their fixes are in [PHASE-I-READINESS.md](PHASE-I-READINESS.md), section "Windows continuation". On branch `phase-i-staging-exec`, not merged.

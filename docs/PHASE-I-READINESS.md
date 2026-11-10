@@ -129,6 +129,117 @@ Note: the server marks an employee push `SENT` when Expo accepts it; it does not
 
 New: [UBUNTU-SERVER.md](UBUNTU-SERVER.md), the exact guide for a new Ubuntu 24.04 server.
 
+## Windows continuation (10 November 2026)
+
+Ubuntu and Docker were set aside; everything below ran on the Windows development machine, on disposable copies. The live `geoattend` database and the developer's stack were not used for any test.
+
+### Windows reliability
+
+Disposable stack: API 4410, database 54352, data `D:\gh`.
+
+| Check | Result |
+|---|---|
+| Second API on a port already in use | **PASS**: exit 1 with "Port … is already in use"; the running API stays healthy |
+| Clean shutdown through the Windows IPC message, with a year-long dashboard request in flight | **PASS**: the request finished (200); exit 0 within 4.4 s; no job left marked running |
+| Database killed under the running API (`pg_ctl stop -m immediate`) | **PASS**: 503 while down; the watchdog restarted the database; healthy after 7 s; data intact |
+| API killed with no shutdown while jobs run | **PASS**: no job stuck; jobs ran again after the restart; counts unchanged (the 18 fewer location points were the retention job, which ran in that window) |
+| Restart time, 1,032-employee copy | **PASS**: healthy 5.6 s after a kill |
+| Monitoring right after a restart | Reports the worker as `fail` until its first tick (about 1 minute), then `ok`. Expected; noted here so it is not mistaken for a fault |
+| Online-backup restore by the RUNBOOK steps, into a new folder | **PASS**: served in 17 s; every count equal to the source databases; owner sign-in worked |
+| `db:restore` of a dump into a new database (with `PG_BIN`) | **PASS** after the fix below: identical counts; existing names and the live database refused |
+
+**Found and fixed:**
+
+| Problem | Fix | Test |
+|---|---|---|
+| `npm test` could not start while the dev stack ran: every built-in database logged to `data/logs/postgres.log`, which Windows locks for the running dev server | One log file per data folder; the dev server keeps `postgres.log` | `client-tools.test.ts`; the suite now runs beside the dev stack |
+| `db:backup` and `db:restore` failed with a bare npm error on Windows (no `pg_dump` in the embedded package) | `PG_BIN` honoured, and a clear message pointing to `db:backup:online` | `client-tools.test.ts` |
+| `db:restore` created the new, empty database before finding out `pg_restore` was missing; the retry was then refused | The tool is found first | `restore-target.test.ts` runs the script with an empty `PG_BIN` |
+
+### Performance with a large company
+
+A separate restored copy (`D:\gr`) was grown to **1,032 employees** with 90 days of history: 69,264 attendance records and sessions, and 322,896 location points.
+
+| Measure (1,032 employees) | Before | After the fixes |
+|---|---|---|
+| Dashboard, 30 days | 6.4 s | 2.7 s |
+| Dashboard, 90 days | 20 s | 7.9 s |
+| `monthly.csv` | 7 s | 2.4 s |
+| 40 users for 60 s, dashboard p50 / p95 | 9.0 s / 11.9 s | 3.3 s / 4.7 s |
+| 40 users for 60 s, throughput | 20 requests/s | 37–40 requests/s, 0 errors |
+| `overdue-approvals` job, every minute | average 5–6 s, worst 37 s | average 224 ms, worst 655 ms |
+
+Other figures, after the fixes:
+- Employees page: 13 ms. Live map: 42 ms. Reports overview: 52 ms (single requests).
+- Attendance list: about 0.5 s. `attendance.csv` for 30 days (3.6 MB): about 2 s.
+- 30 identical attendance submissions at once: 1 created, 29 refused.
+- API memory: 141 MB idle.
+
+**Causes:**
+- **No-show calculation:** each day's no-show check parsed a time-zone-aware time for every row, about 150 ms per day. It now does this once per shift time.
+- **Day-by-day lookups:** run 4 at a time instead of one after another.
+- **The approvals job:** re-sent its whole backlog every minute. It now skips items already raised.
+
+Tests prove the figures are unchanged (`report-speed.test.ts`), and each test fails when its fix is undone.
+
+**Still slow, not changed:** a 90-day dashboard for 1,000 employees takes about 8 s. Most of that is the per-record worked-time calculation. Making it faster means precomputing daily totals, which changes how hours are computed, so it needs approval first.
+
+**Not measured:** API CPU under load. The sampler lost the process, so no figure is given.
+
+### Independent reviews
+
+**Workflow review** (16 areas, a second company created through sign-up):
+- 11 areas PASS. Company isolation: 112 cross-company calls on id routes, with no leak. Supervisor scope: PASS.
+- Defects found: 2 High, 5 Medium and 6 Low.
+
+**UI/UX review** (22 screens, 3 widths, owner and supervisor):
+- No sideways scrolling anywhere. axe found no serious issues apart from the known Maps ones.
+- Issues found: 2 High, 6 Medium and 7 Low.
+
+**Fixed, each with a test:**
+
+| Finding | Fix |
+|---|---|
+| Time zone `IST` accepted. The API read it as India time and PostgreSQL as Israel time, so SQL dates and lateness were 3.5 h off | Only IANA names or UTC; the message suggests `Asia/Kolkata` |
+| A correction could store "not late" with 90 minutes late | The flag and the minutes always agree; "late" with 0 minutes is refused |
+| Phone app: a rooted-phone or emulator refusal was resent for ever, held back the check-out, and alerted the manager every 10 minutes | Treated as a final refusal and shown with its reason |
+| Phone app: a missing photo was re-uploaded every 15 s for ever | Waits longer after each attempt |
+| Approvals: a failed decision was shown only at the top of the page | Also shown as a toast |
+| Approvals: "Reject" on a new phone revoked it on one tap | Asks for a reason first |
+| Raw browser errors ("Failed to fetch", "Request failed (502)") and requests that never ended | Plain messages for no connection, proxy errors and the general rate limit; a 45 s limit |
+| Phone menu: focus left the menu, and the page behind stayed reachable | Behaves as a dialog: focus moves in, Tab stays inside, focus returns on close |
+| Touch targets smaller than 44 px on phones | Buttons, header icons and fields are 44 px on touch screens |
+
+A browser check confirmed all of these on the rebuilt dashboard (12/12). The existing browser suite: 46 of 47. The one left over needs a running shift, and none of the sample shifts runs after 16:00.
+
+**Not fixed (low impact, or a design question):**
+- **Phone app, shared phones (M4):** saved items are mixed between employees who share a phone. Changing that needs a decision on how shared phones should work.
+- **Phone app, fast phone clock (M1):** readings from a phone whose clock runs fast are refused and quietly dropped. The fix is to correct the phone's clock from the server time, which needs device testing.
+- **Keyboard:** focus is lost after Approve.
+- **Small text links:** "Open on map" and "before / after" are 16 px tall.
+- **Number and date formats:** Indian formatting is not used everywhere.
+- **Signed-out users:** no "session ended" notice.
+- **Demo mode:** a supervisor can open the demo page.
+- **Info icons:** their explanations appear only on hover.
+- **Empty company:** "Confirm day" shows with 0 of 0 present.
+- **Website:** the phone menu stays open after a tap.
+- **API only:** `/reports/overview` reports "present" only for today.
+- **Data checks:** employee codes are case-sensitive, and a 2099 joining date is accepted.
+
+**Still open from earlier:** while payroll is off, `/payroll/payslips/:id` and the payslip page still show a full salary slip, and `/payroll/:month/history` still answers.
+
+### More decisions waiting for the company
+
+- **Manual attendance on a day off:** refuse it, or record it as overtime without lateness? Today it is recorded as late (M3).
+- **One stray reading:** should a single reading far away re-lock a ready check-in, or should leaving need the same confirmation as during a shift (M2)?
+- **Leave on a day already attended:** refuse it, or let it replace the attendance (L1)?
+- **Leave for a deactivated employee:** allow it or not (L5)?
+- **Supervisor visibility:** should supervisors see only their own reports, or everyone at their workplaces (today)?
+- **Mock-location readings:** should they still trigger arrival alerts?
+- **Rooted phones:** is server-side attestation (Play Integrity) required? Today the phone reports these flags itself.
+- **Mistaken deactivation:** an employee deactivated by mistake and reactivated the same day loses that day's roster. Is that intended?
+- **Workplace names:** should two workplaces be allowed the same name?
+
 ## Open, not fixed
 
 - **Employee notifications:** employees have no in-app list of their notifications; they rely on push, which is not configured.
