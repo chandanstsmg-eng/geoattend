@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
 import { one, q, qPrepared } from '../../db/pool.js';
+import { DAY_LOOKUPS_AT_ONCE, mapLimit } from '../../lib/concurrency.js';
 import { dayEndSql, dayStartSql, orgTimezoneSql, orgToday } from '../../lib/dates.js';
 import { isoDate, mount, route } from '../../lib/http.js';
 import { dateChunks, streamCsv, toCsv } from '../../lib/csv.js';
@@ -74,11 +75,22 @@ export async function withLeaveAndNoShow(orgId: string, date: string, rows: any[
   const { alerts, workforce } = await getSettings(orgId);
   const leave = await approvedLeaveOn(date, [...new Set(rows.map((r) => r.employee_id as string))]);
   const holidays = await holidaysOn(date, [...new Set(rows.map((r) => r.workplace_id as string))]);
+  // When each shift's no-show threshold passes, worked out once per (start time, zone): rows share a few
+  // shifts, and parsing a zoned time for every row took ~150 ms per day for a 1,000-person company.
+  const noShowAt = new Map<string, number>();
+  const thresholdFor = (start: string, zone: string) => {
+    const key = `${start}|${zone}`;
+    let at = noShowAt.get(key);
+    if (at === undefined) {
+      at = DateTime.fromISO(`${date}T${start}`, { zone }).plus({ minutes: alerts.noShowAfterMinutes }).toMillis();
+      noShowAt.set(key, at);
+    }
+    return at;
+  };
   return rows.map((r) => {
     const onLeave = leave.get(r.employee_id) ?? null;
     const holiday = holidays.get(r.workplace_id) ?? null;
-    const startsAt = DateTime.fromISO(`${date}T${r.start_time}`, { zone: r.timezone });
-    const noShow = !onLeave && !holiday && !r.attendance_id && !r.session_id && alerts.noShowAfterMinutes > 0 && now.getTime() >= startsAt.plus({ minutes: alerts.noShowAfterMinutes }).toMillis();
+    const noShow = !onLeave && !holiday && !r.attendance_id && !r.session_id && alerts.noShowAfterMinutes > 0 && now.getTime() >= thresholdFor(r.start_time, r.timezone);
     return { ...r, holiday, on_leave: onLeave, no_show: noShow, ...workFlags(r, workforce) };
   });
 }
@@ -119,11 +131,14 @@ export async function periodSummary(orgId: string, from: string, until: string, 
   const today = DateTime.fromISO(await defaultDate(orgId, workplaceId));
   const last = DateTime.min(DateTime.fromISO(until), today);
   const totals = new Map<string, any>();
-  for (let d = first; d <= last; d = d.plus({ days: 1 })) {
-    const date = d.toISODate()!;
+  const dates: string[] = [];
+  for (let d = first; d <= last; d = d.plus({ days: 1 })) dates.push(d.toISODate()!);
+  // Looked up a few days at a time, then counted in date order exactly as before.
+  const rowsByDay = await mapLimit(dates, DAY_LOOKUPS_AT_ONCE, async (date) => withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated, sites)));
+  for (const [i, date] of dates.entries()) {
     const isToday = date === today.toISODate();
     const byEmployee = new Map<string, any[]>();
-    for (const r of await withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated, sites))) {
+    for (const r of rowsByDay[i]!) {
       if (scope.employeeId && r.employee_id !== scope.employeeId) continue;
       byEmployee.set(r.employee_id, [...(byEmployee.get(r.employee_id) ?? []), r]);
     }

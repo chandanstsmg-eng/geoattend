@@ -40,6 +40,7 @@ import { getSettings } from '../settings/settings.service.js';
 import { attended, defaultDate, isPending, roster, withLeaveAndNoShow } from './reports.routes.js';
 import { computeHours, loadPendingHours, loadWorkRecords, splitRecords } from './hours.js';
 import { dayEndSql } from '../../lib/dates.js';
+import { DAY_LOOKUPS_AT_ONCE, mapLimit } from '../../lib/concurrency.js';
 
 /** Longest range the dashboard answers. Attendance and hours always cover the same days; longer asks are refused. */
 export const MAX_RANGE_DAYS = 366;
@@ -182,8 +183,10 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const lateByWp = new Map<string, number>();
   const trend: DayOutcome[] = [];
   let todayRows: any[] = [];
-  for (const date of days) {
-    const rows = await dayRows(date);
+  // Looked up a few days at a time, then processed in date order exactly as before.
+  const rowsByDay = await mapLimit(days, DAY_LOOKUPS_AT_ONCE, (date) => dayRows(date));
+  for (const [i, date] of days.entries()) {
+    const rows = rowsByDay[i]!;
     if (date === today) todayRows = rows;
     for (const r of rows) {
       if (r.on_leave || r.holiday || isPending(r)) continue;
@@ -252,8 +255,8 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     const len = days.length;
     const pTo = DateTime.fromISO(days[0]!).minus({ days: 1 }).toISODate()!;
     const pFrom = DateTime.fromISO(pTo).minus({ days: len - 1 }).toISODate()!;
-    const pDays: DayOutcome[] = [];
-    for (const date of isoDays(pFrom, pTo)) pDays.push(dayOutcome(await dayRows(date), date, today));
+    const pDates = isoDays(pFrom, pTo);
+    const pDays: DayOutcome[] = (await mapLimit(pDates, DAY_LOOKUPS_AT_ONCE, (date) => dayRows(date))).map((rows, i) => dayOutcome(rows, pDates[i]!, today));
     const pPending = (await loadPendingHours(user, { from: pFrom, to: pTo, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
     previous = { from: pFrom, to: pTo, ...summarize(pDays, splitRecords(await workFor(pFrom, pTo), settings.workforce, pFrom, pTo)), pendingMinutes: pPending };
   }
