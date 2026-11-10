@@ -73,6 +73,16 @@ export const attendanceCounts = (ar = 'ar') => `${ar}.verification_status NOT IN
  */
 export const workJoin = (ar = 'ar', alias = 'aw', view = 'attendance_work') => `LATERAL (SELECT * FROM ${view} wj WHERE wj.attendance_id = ${ar}.id OFFSET 0) ${alias} ON true`;
 
+/**
+ * The same worked time for queries over a run of days (hours, the dashboard, the roster). One record at a
+ * time cost about 0.05 ms each, 3 s for 90 days of a 1,000-person company; joined as a set, with the view
+ * bounded to the same days so it is never computed for the rest of the company's history, it takes a
+ * fraction. The extra date condition repeats the record's own date, so exactly the same rows join.
+ * `from` / `to`: SQL expressions for the first and last day (one day: pass the same for both).
+ */
+export const workJoinForDays = (from: string, to: string, ar = 'ar', alias = 'aw', view = 'attendance_work') =>
+  `${view} ${alias} ON ${alias}.attendance_id = ${ar}.id AND ${alias}.shift_date BETWEEN ${from} AND ${to}`;
+
 /** SQL: minutes of a record waiting for verification, shown apart from official time; NULL for any other record. */
 export const pendingMinutes = (ar = 'ar') => `CASE WHEN ${ar}.verification_status = 'PENDING_VERIFICATION' THEN (SELECT pw.worked_minutes FROM attendance_work_all pw WHERE pw.attendance_id = ${ar}.id) END`;
 

@@ -10,7 +10,7 @@ import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
-import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, workJoin } from '../../lib/tenancy.js';
+import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, workJoinForDays } from '../../lib/tenancy.js';
 import { badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { computeHours, hoursText, loadPendingHours, loadWorkRecords, withPendingHours } from './hours.js';
@@ -54,7 +54,7 @@ export async function roster(orgId: string, date: string, workplaceId: string | 
      JOIN workplaces w ON w.id = sh.workplace_id AND (w.is_active OR $1::date < w.deactivated_on)
      LEFT JOIN attendance_records ar ON ar.employee_id = u.id AND ar.shift_id = sh.id AND ar.shift_date = $1 AND ar.verification_status <> 'VOIDED'
      LEFT JOIN tracking_sessions s ON s.employee_id = u.id AND s.shift_id = sh.id AND s.shift_date = $1
-     LEFT JOIN ${workJoin()}
+     LEFT JOIN ${workJoinForDays('$1::date', '$1::date')}
      WHERE esa.effective_from <= $1 AND (esa.effective_to IS NULL OR esa.effective_to >= $1)
        AND COALESCE(rev.is_active, sh.is_active)
        AND (ep.joined_on IS NULL OR $1::date >= ep.joined_on)
@@ -434,7 +434,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 COALESCE((SELECT r.timezone FROM shift_revisions r WHERE r.shift_id = sh.id AND ar.shift_date <= r.valid_to AND (r.valid_from IS NULL OR ar.shift_date >= r.valid_from) ORDER BY r.valid_to LIMIT 1), sh.timezone) AS timezone
          FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN tracking_sessions s ON s.id = ar.session_id
-         LEFT JOIN ${workJoin()}
+         LEFT JOIN ${workJoinForDays('$1::date', '$2::date')}
          WHERE u.org_id = $6 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4::uuid IS NULL OR ar.employee_id = $4) AND ($5 OR NOT ar.is_simulated)
            AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
          ORDER BY ar.shift_date, w.name, sh.name, u.full_name, ar.id`,

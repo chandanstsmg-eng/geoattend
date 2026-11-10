@@ -38,7 +38,7 @@ import { employeeSite, overtimeCounts, siteFilter, SUPERVISOR_SITES } from '../.
 import type { AuthUser } from '../../lib/auth.js';
 import { getSettings } from '../settings/settings.service.js';
 import { attended, defaultDate, isPending, roster, withLeaveAndNoShow } from './reports.routes.js';
-import { computeHours, loadPendingHours, loadWorkRecords, splitRecords } from './hours.js';
+import { hoursFromSplit, loadPendingHours, loadWorkRecords, splitRecords, weekOf } from './hours.js';
 import { dayEndSql } from '../../lib/dates.js';
 import { DAY_LOOKUPS_AT_ONCE, mapLimit } from '../../lib/concurrency.js';
 
@@ -205,7 +205,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   // ── hours, overtime and worksite time over the period ──
   const records = await workFor(from, to);
   const split = splitRecords(records, settings.workforce, from, to);
-  const perEmployee = computeHours(records, settings.workforce, from, to);
+  const perEmployee = hoursFromSplit(split); // = computeHours(records, …, from, to), without splitting twice
   const byDay = new Map<string, { worked: number; scheduled: number; overtime: number }>();
   const byWpHours = new Map<string, { total: number; overtime: number; employees: Map<string, { name: string; minutes: number }> }>();
   const byWeek = new Map<string, number>();
@@ -222,7 +222,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     e.minutes += r.total;
     w.employees.set(r.employee_id, e);
     byWpHours.set(r.workplace_id, w);
-    inc(byWeek, DateTime.fromISO(r.shift_date).startOf('week').toISODate()!, r.overtime);
+    inc(byWeek, weekOf(r.shift_date), r.overtime);
     if (r.incomplete) {
       const t = trend.find((x) => x.date === r.shift_date);
       if (t) t.incomplete++;

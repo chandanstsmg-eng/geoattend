@@ -35,6 +35,34 @@ describe('mapLimit', () => {
   });
 });
 
+describe('hours: faster code, same figures', () => {
+  const ids = Array.from({ length: 60 }, () => crypto.randomUUID());
+  const dates = Array.from({ length: 120 }, (_, i) => DateTime.fromISO('2025-12-20').plus({ days: i }).toISODate()!);
+  const records = Array.from({ length: 3000 }, (_, i) => ({
+    employee_id: ids[i % ids.length]!, full_name: `Name ${i % ids.length}`, shift_date: dates[(i * 7) % dates.length]!, workplace_id: 'w',
+    worked_minutes: (i * 37) % 600, overtime_minutes: i % 5 === 0 ? 30 : 0, scheduled_minutes: 480, in_progress: false, incomplete: i % 11 === 0,
+  }));
+
+  it('orders dates and employee ids exactly as localeCompare did', async () => {
+    const { byDateThenEmployee } = await import('../src/modules/reports/hours.js');
+    const old = [...records].sort((a, b) => a.shift_date.localeCompare(b.shift_date) || a.employee_id.localeCompare(b.employee_id));
+    expect([...records].sort(byDateThenEmployee)).toEqual(old);
+  });
+
+  it('the remembered week is the ISO week Luxon gives, across a year end', async () => {
+    const { weekOf } = await import('../src/modules/reports/hours.js');
+    for (const d of dates) expect(weekOf(d)).toBe(DateTime.fromISO(d).startOf('week').toISODate());
+    expect(weekOf('2026-01-01')).toBe('2025-12-29');
+  });
+
+  it('totals from an existing split equal computeHours', async () => {
+    const { computeHours, hoursFromSplit, splitRecords } = await import('../src/modules/reports/hours.js');
+    for (const policy of [{ roundingMinutes: 0, weeklyRegularHours: 0 }, { roundingMinutes: 15, weeklyRegularHours: 48 }]) {
+      expect(hoursFromSplit(splitRecords(records, policy, dates[7]!, dates[100]!))).toEqual(computeHours(records, policy, dates[7]!, dates[100]!));
+    }
+  });
+});
+
 describe('no-show threshold', () => {
   let db: Awaited<ReturnType<typeof createTestDatabase>>;
   beforeAll(async () => { db = await createTestDatabase(); });
