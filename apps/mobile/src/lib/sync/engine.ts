@@ -104,6 +104,10 @@ export type Verdict = 'retry' | 'signed-out' | 'blocked' | 'already-done' | 'pho
 export function classify(e: SyncFailure): Verdict {
   if (e.status === 0 || e.status === 408 || e.status === 429 || e.status >= 500) return 'retry';
   if (e.status === 401) return 'signed-out';
+  // A rooted phone or an emulator is refused by the server and no one can approve that away: the event is
+  // refused (shown with the reason), not held forever, so it no longer blocks the shift's check-out or
+  // makes the server alert the manager every few minutes (Phase I review).
+  if (e.code === 'DEVICE_NOT_TRUSTED') return 'refused';
   // The employee or an administrator can clear these; nothing about the event itself is wrong.
   if (e.code === 'PASSWORD_CHANGE_REQUIRED' || e.code.startsWith('DEVICE_')) return 'blocked';
   if (e.code === 'DUPLICATE_SUBMISSION' || e.code === 'ALREADY_RECORDED') return 'already-done';
@@ -160,8 +164,9 @@ export async function runOutbox(d: OutboxDeps): Promise<OutboxResult> {
         await d.cleanup?.(next).catch(() => undefined);
         sent++;
       } else if (v === 'photo-again') {
-        // The upload slot is gone: the same photo goes up again on the next try.
-        await d.update((s) => patch(s, next.id, { photoId: null, uploaded: false, nextAttemptAt: d.now() + backoff(1), lastError: f.message }));
+        // The upload slot is gone: the same photo goes up again on the next try, waiting longer each time
+        // (a fixed 15 s re-uploaded the photo four times a minute for as long as the server kept refusing).
+        await d.update((s) => patch(s, next.id, { photoId: null, uploaded: false, nextAttemptAt: d.now() + backoff(attempts), lastError: f.message }));
       } else if (v === 'refused') {
         await d.update((s) => patch(s, next.id, { status: 'FAILED', lastError: f.message, failureCode: f.code }));
       } else {

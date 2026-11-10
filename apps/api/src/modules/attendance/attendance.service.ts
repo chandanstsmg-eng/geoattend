@@ -517,6 +517,11 @@ async function applyCorrection(db: Queryable, outbox: Outbox, approver: AuthUser
     isLate = l.isLate;
     lateBy = l.lateBy;
   }
+  // The flag and the minutes always agree (a correction could store "not late" with 90 minutes late, and
+  // reports read one or the other): "not late" clears the minutes, minutes alone set the flag.
+  if (isLate === false) lateBy = 0;
+  else if (isLate === null && lateBy !== null) isLate = lateBy > 0;
+  else if (isLate === true && lateBy === 0) throw badRequest('LATENESS_INCONSISTENT', 'A late arrival needs the minutes it was late by.');
   const after = await one(
     `UPDATE attendance_records SET
        verification_status = COALESCE($2, CASE WHEN verification_status = 'VERIFIED' THEN 'CORRECTED' ELSE verification_status END),

@@ -40,6 +40,39 @@ afterAll(async () => {
   await db.drop();
 });
 
+describe('Phase I review: time zones are names both the API and PostgreSQL read the same way', () => {
+  it('refuses abbreviations and offsets, accepts IANA names, UTC and the old Asia/Calcutta', async () => {
+    const { isValidTimezone } = await import('../src/lib/shift-window.js');
+    for (const tz of ['IST', 'EST', 'GMT', 'PST8PDT', '+05:30', 'UTC+5', 'asia/kolkata', '']) expect(isValidTimezone(tz), tz).toBe(false);
+    for (const tz of ['Asia/Kolkata', 'Asia/Calcutta', 'UTC', 'America/Argentina/Buenos_Aires', 'Etc/GMT-5', 'Asia/Dubai']) expect(isValidTimezone(tz), tz).toBe(true);
+  });
+
+  it('a shift or workplace in "IST" is refused (it was India to the API and Israel to SQL)', async () => {
+    const shift = { workplaceId: base.workplaceId, name: 'IST test', startTime: '09:00', endTime: '17:00', daysOfWeek: [1, 2, 3, 4, 5] };
+    const bad = await as(owner).post('/shifts', { ...shift, timezone: 'IST' }).expect(400);
+    expect(bad.body.error.code).toBe('BAD_TIMEZONE');
+    expect(bad.body.error.message).toMatch(/Asia\/Kolkata/);
+    await as(owner).post('/shifts', { ...shift, timezone: 'Asia/Kolkata' }).expect(201);
+    const wp = await owner.agent.patch(`/api/v1/workplaces/${base.workplaceId}`).set('X-CSRF-Token', owner.csrf).send({ timezone: 'IST' }).expect(400);
+    expect(wp.body.error.code).toBe('BAD_TIMEZONE');
+  });
+});
+
+describe('Phase I review: lateness flag and minutes stay consistent after a correction', () => {
+  it('"not late" clears the minutes; minutes alone set the flag; "late" with 0 minutes is refused', async () => {
+    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [emp.id, base.shiftId, day(-10)]);
+    const rec = (await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T09:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201)).body;
+    const state = async () => one(`SELECT is_late, late_by_minutes FROM attendance_records WHERE id = $1`, [rec.id]);
+    await as(owner).post(`/attendance/${rec.id}/corrections`, { lateByMinutes: 90, reason: 'Came in at half past ten' }).expect(200);
+    expect(await state()).toEqual({ is_late: true, late_by_minutes: 90 });
+    await as(owner).post(`/attendance/${rec.id}/corrections`, { isLate: false, reason: 'Was on an approved errand' }).expect(200);
+    expect(await state()).toEqual({ is_late: false, late_by_minutes: 0 });
+    const bad = await as(owner).post(`/attendance/${rec.id}/corrections`, { isLate: true, lateByMinutes: 0, reason: 'Late after all' }).expect(400);
+    expect(bad.body.error.code).toBe('LATENESS_INCONSISTENT');
+  });
+});
+
 describe('ending a roster entry keeps the days already rostered', () => {
   it('ends a started entry yesterday even when the employee only has manual attendance', async () => {
     const emp = await createEmployee({ workplaceId: base.workplaceId });
