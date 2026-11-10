@@ -48,8 +48,9 @@ export async function setup() {
 
 export async function teardown() {
   const { DATA_DIR } = await import('../src/config.js');
-  const { stopEmbeddedDatabase } = await import('../src/db/postgres.js');
+  const { stopEmbeddedDatabase, postgresLogFile } = await import('../src/db/postgres.js');
   await stopEmbeddedDatabase().catch(() => undefined);
   fs.rmSync(path.join(DATA_DIR, process.env.PG_DATA_SUBDIR!), { recursive: true, force: true });
+  fs.rmSync(postgresLogFile(process.env.PG_DATA_SUBDIR!), { force: true });
   fs.rmSync(path.join(DATA_DIR, 'test-photos'), { recursive: true, force: true });
 }

@@ -20,7 +20,13 @@ import { logger } from '../lib/logger.js';
 
 const run = promisify(execFile);
 const PG_DIR = path.join(DATA_DIR, config.pgDataSubdir);
-const LOG_FILE = path.join(DATA_DIR, 'logs', 'postgres.log');
+/**
+ * One log file per data folder. On Windows a running server keeps its log open and no other server may open
+ * it, so a test run (data/pg-test-<pid>) sharing the dev server's log could not start while dev was running.
+ * The dev server (data/pg) keeps the documented name, data/logs/postgres.log.
+ */
+export const postgresLogFile = (subdir: string) => path.join(DATA_DIR, 'logs', subdir === 'pg' ? 'postgres.log' : `postgres-${subdir}.log`);
+export const LOG_FILE = postgresLogFile(config.pgDataSubdir);
 const SUPERUSER = 'geoattend';
 
 async function binaries(): Promise<{ pg_ctl: string; initdb: string }> {
@@ -54,7 +60,7 @@ function startServer(pgCtl: string): Promise<void> {
     child.on('exit', (code) => {
       if (code === 0) return resolve();
       const tail = fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, 'utf8').trim().split('\n').slice(-6).join('\n') : '';
-      reject(new Error(`Database did not start (pg_ctl exit ${code}).\n${tail}`));
+      reject(new Error(`Database did not start (pg_ctl exit ${code}). Log: ${LOG_FILE}\n${tail}`));
     });
   });
 }
@@ -119,7 +125,21 @@ export async function stopEmbeddedDatabase() {
   await run(pg_ctl, ['stop', '-D', PG_DIR, '-m', 'fast', '-w', '-t', '30'], { windowsHide: true });
 }
 
-export async function embeddedBinary(name: 'pg_dump' | 'pg_restore' | 'psql'): Promise<string> {
-  const { pg_ctl } = await binaries();
-  return path.join(path.dirname(pg_ctl), os.platform() === 'win32' ? `${name}.exe` : name);
+/**
+ * pg_dump / pg_restore / psql for the built-in database: from PG_BIN when set (a folder of PostgreSQL client
+ * tools of the server's major version or newer), else from the embedded package. The Windows package ships
+ * only the server, so there a missing tool is reported with what to do instead of a bare "ENOENT".
+ */
+export async function embeddedBinary(name: 'pg_dump' | 'pg_restore' | 'psql', pgBin = process.env.PG_BIN?.trim()): Promise<string> {
+  const exe = os.platform() === 'win32' ? `${name}.exe` : name;
+  const file = pgBin ? path.join(pgBin, exe) : path.join(path.dirname((await binaries()).pg_ctl), exe);
+  if (!fs.existsSync(file)) {
+    throw new Error(
+      pgBin
+        ? `${exe} was not found in PG_BIN (${pgBin}). PG_BIN must be the bin folder of PostgreSQL client tools of version 18 or newer.`
+        : `${exe} is not included in the built-in PostgreSQL on this platform. For a development backup use "npm run db:backup:online" ` +
+            `(restore it as docs/RUNBOOK.md describes), or set PG_BIN to the bin folder of PostgreSQL 18 client tools.`,
+    );
+  }
+  return file;
 }

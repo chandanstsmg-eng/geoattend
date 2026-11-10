@@ -18,7 +18,8 @@ try {
   const liveUrl = await ensureDatabase();
   const url = await prepareRestoreTarget(liveUrl, target, { production: config.isProduction, confirm: process.env.RESTORE_CONFIRM });
   await ensureTenantRole(url);
-  const pgRestore = config.externalDatabaseUrl ? 'pg_restore' : await embeddedBinary('pg_restore');
+  // PG_BIN, when set, wins; else PATH for an external server, else the embedded package (none on Windows).
+  const pgRestore = config.externalDatabaseUrl && !process.env.PG_BIN ? 'pg_restore' : await embeddedBinary('pg_restore');
   const client = clientEnvironment(url);
   execFileSync(pgRestore, ['--no-owner', '--exit-on-error', `--dbname=${client.url}`, file], { stdio: 'inherit', windowsHide: true, env: { ...process.env, PGPASSWORD: client.password } });
   console.log(`  Restored into new database "${target}". The live database was not touched.`);

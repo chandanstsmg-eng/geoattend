@@ -2,7 +2,7 @@ import net from 'node:net';
 import { assertRuntimeConfig, config, sampleData } from './config.js';
 import { startSampleHeartbeat } from './modules/jobs/sample-heartbeat.js';
 import { logger } from './lib/logger.js';
-import { ensureDatabase } from './db/postgres.js';
+import { ensureDatabase, LOG_FILE } from './db/postgres.js';
 import { closePool, databaseRoleProblems, getPool, initPool, prepareTenantLogin } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { createApp } from './app.js';
@@ -56,7 +56,7 @@ async function main() {
             void old.end().catch(() => undefined);
             logger.info('Built-in database is running again');
           } catch (err) {
-            logger.error({ err }, 'Could not restart the built-in database; see data/logs/postgres.log');
+            logger.error({ err }, `Could not restart the built-in database; see ${LOG_FILE}`);
           } finally {
             healing = false;
           }
