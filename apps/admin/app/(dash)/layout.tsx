@@ -237,15 +237,37 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
   // and closing it yourself (Escape, the X, the backdrop) returns focus to the menu button.
   const menuButton = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const drawer = useRef<HTMLElement>(null);
+  const returnFocus = useRef(false);
   const closeMenu = () => {
+    returnFocus.current = true; // focused after the re-render: the menu button is inert until then
     setOpen(false);
-    menuButton.current?.focus();
   };
   useEffect(() => setOpen(false), [path]);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      if (returnFocus.current) menuButton.current?.focus();
+      returnFocus.current = false;
+      return;
+    }
     closeButton.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeMenu();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return closeMenu();
+      if (e.key !== 'Tab' || !drawer.current) return;
+      // Keep Tab inside the open menu: from the last item back to the first, and the other way round.
+      const items = [...drawer.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const inside = drawer.current.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
@@ -326,6 +348,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
           prefs.rail ? 'lg:w-16' : 'lg:w-60',
           open ? 'translate-x-0 shadow-2xl' : '-translate-x-full max-lg:invisible', // closed on phones: out of the tab order too
         )}
+        ref={drawer}
         aria-label="Main navigation"
         {...(open ? { role: 'dialog', 'aria-modal': true } : {})}
       >
