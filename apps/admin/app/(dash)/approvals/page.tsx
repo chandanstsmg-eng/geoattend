@@ -9,7 +9,7 @@ import { ago, fmtDate, fmtTime, metres, fmtDateTime } from '@/lib/format';
 import { LinkButton, Badge, Button, Card, EmptyState, Field, InlineError, Modal, PageHeader, QueryState, Textarea } from '@/components/ui';
 import { EmployeeDrawer } from '@/components/employee-drawer';
 
-type Reject = { title: string; description: string; run: (note: string) => Promise<unknown> };
+type Reject = { title: string; description: string; label?: string; run: (note: string) => Promise<unknown> };
 
 const KIND_LABEL: Record<string, string> = { ADMIN_CORRECTION: 'Supervisor correction', MANUAL_REVIEW: 'GPS problem — asks to be marked present', DISPUTE: 'Disputes an attendance record', TECHNICAL_ISSUE: 'Reported a technical issue' };
 
@@ -40,7 +40,8 @@ export default function ApprovalsPage() {
     qc.invalidateQueries({ queryKey: ['overview'] });
     qc.invalidateQueries({ queryKey: ['devices'] });
   };
-  const act = useMutation({ meta: { success: 'Decision saved' }, mutationFn: ({ path, body }: { key: string; path: string; body: unknown }) => post(path, body), onSuccess: done });
+  // toastError: a failure is also shown as a toast, where the person is looking, not only at the top of the page.
+  const act = useMutation({ meta: { success: 'Decision saved', toastError: true }, mutationFn: ({ path, body }: { key: string; path: string; body: unknown }) => post(path, body), onSuccess: done });
   const busy = (key: string) => act.isPending && act.variables?.key === key;
   const go = (key: string, path: string, body: unknown = {}) => act.mutate({ key, path, body });
 
@@ -64,7 +65,8 @@ export default function ApprovalsPage() {
                       actions={
                         <>
                           <Button size="sm" variant="primary" loading={busy(`dev-ok-${p.id}`)} onClick={() => go(`dev-ok-${p.id}`, `/devices/${p.id}/approve`)}><Check className="h-4 w-4" aria-hidden /> Approve phone</Button>
-                          <Button size="sm" loading={busy(`dev-no-${p.id}`)} onClick={() => go(`dev-no-${p.id}`, `/devices/${p.id}/revoke`, { note: 'Rejected from approvals' })}><X className="h-4 w-4" aria-hidden /> Reject</Button>
+                          {/* Rejecting signs the phone out: confirmed with a reason, like every other rejection here. */}
+                          <Button size="sm" onClick={() => setRejecting({ title: 'Reject this phone', description: `${p.full_name} will not be able to sign in on ${p.model ?? 'this phone'}.`, label: 'Reason (kept in the audit log)', run: (note) => post(`/devices/${p.id}/revoke`, { note }) })}><X className="h-4 w-4" aria-hidden /> Reject</Button>
                         </>
                       }
                     >
@@ -288,7 +290,7 @@ function RejectModal({ value, onClose, onDone }: { value: Reject | null; onClose
   return (
     <Modal open={!!value} onOpenChange={(o) => !o && (run.reset(), onClose())} title={value?.title ?? ''} description={value?.description}>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); run.mutate(); }}>
-        <Field label="Reason (the employee sees this)"><Textarea required minLength={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        <Field label={value?.label ?? 'Reason (the employee sees this)'}><Textarea required minLength={3} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         <InlineError error={run.error} />
         <div className="flex justify-end gap-2">
           <Button type="button" onClick={onClose}>Cancel</Button>

@@ -164,12 +164,20 @@ input[type='radio'] {
   }
 }
 
-/* Touch screens: a row of small links stays easy to hit. Links inside a sentence are left alone. */
+/* Touch screens: buttons, button-like links and form fields are at least 44 px tall (WCAG 2.5.5 / platform
+   guidance), so supervisors on phones do not mis-tap Approve and Reject. Links inside a sentence are left alone.
+   Desktop (fine pointer) is unchanged. */
 @media (pointer: coarse) {
   main button,
+  header button,
   main a[class*='inline-flex'],
-  main a[class*='flex'] {
-    min-height: 2rem;
+  main a[class*='flex'],
+  main select,
+  main input:not([type='checkbox']):not([type='radio']) {
+    min-height: 2.75rem;
+  }
+  header button {
+    min-width: 2.75rem;
   }
   input[type='checkbox'],
   input[type='radio'] {
