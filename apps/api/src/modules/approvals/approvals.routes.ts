@@ -10,7 +10,7 @@ import { mount, route } from '../../lib/http.js';
 import { employeeSite, overtimeCounts, siteFilter } from '../../lib/tenancy.js';
 
 // $1 = the administrator's company, $2 = a supervisor's sites (null for owners).
-const SITE = siteFilter(employeeSite('u.id'), '$2');
+const SITE = siteFilter(employeeSite('u.id'), '$2', 'u.id');
 // A supervisor's correction waits for an owner, so it is in owners' lists only.
 const REVIEW_KINDS = `(r.kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') OR (r.kind = 'ADMIN_CORRECTION' AND $2::uuid[] IS NULL))`;
 const COUNTS = `
@@ -20,14 +20,14 @@ const COUNTS = `
          (SELECT count(*)::int FROM device_registrations d JOIN users u ON u.id = d.user_id WHERE d.status = 'PENDING' AND u.is_active AND u.org_id = $1 AND ${SITE}) AS devices,
          -- Face checks follow the rostered workplace of the record, like attendance itself.
          (SELECT count(*)::int FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
-            WHERE ar.face_review = 'PENDING' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}) AS faces,
+            WHERE ar.face_review = 'PENDING' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2', 'ar.employee_id')}) AS faces,
          -- Records sent late from the phone, by the workplace of the record.
          (SELECT count(*)::int FROM attendance_records ar JOIN users u ON u.id = ar.employee_id
-            WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+            WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2', 'ar.employee_id')}
               AND ($2::uuid[] IS NULL OR NOT ('SUPERVISOR_ENTERED' = ANY(ar.risk_flags)))) AS verifications,
          -- Finished overtime waiting for a decision, by the workplace where it was worked.
          (SELECT count(*)::int FROM overtime_entries o JOIN users u ON u.id = o.employee_id
-            WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')} AND ${overtimeCounts()}) AS overtime`;
+            WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2', 'o.employee_id')} AND ${overtimeCounts()}) AS overtime`;
 
 export const approvalsRouter = Router();
 mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
@@ -79,7 +79,7 @@ mount(approvalsRouter, '/api/v1/approvals', 'approvals', [
                   ar.device_meta->>'receivedAt' AS received_at, u.full_name, ep.employee_code, sh.name AS shift_name, w.name AS workplace_name
            FROM attendance_records ar JOIN users u ON u.id = ar.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id
            JOIN shifts sh ON sh.id = ar.shift_id JOIN workplaces w ON w.id = ar.workplace_id
-           WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+           WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2', 'ar.employee_id')}
              AND ($2::uuid[] IS NULL OR NOT ('SUPERVISOR_ENTERED' = ANY(ar.risk_flags))) ORDER BY ar.recorded_at LIMIT 200`,
           org,
         ),

@@ -89,7 +89,7 @@ mount(sosRouter, '/api/v1/sos', 'sos', [
     query: z.object({ open: z.enum(['true', 'false']).default('false') }),
     handler: async ({ query, user }) =>
       q(
-        `${SOS_SELECT} WHERE s.org_id = $1 AND ${siteFilter(`COALESCE(s.workplace_id, ${employeeSite('s.employee_id')})`, '$2')}
+        `${SOS_SELECT} WHERE s.org_id = $1 AND ${siteFilter(`COALESCE(s.workplace_id, ${employeeSite('s.employee_id')})`, '$2', 's.employee_id')}
            AND ($3::boolean IS NOT TRUE OR s.status <> 'RESOLVED') AND s.created_at > now() - interval '30 days'
          ORDER BY (s.status = 'OPEN') DESC, s.created_at DESC LIMIT 100`,
         [user.orgId, user.sites, query.open === 'true'],

@@ -60,7 +60,7 @@ describe('Phase I review: time zones are names both the API and PostgreSQL read 
 
 describe('Phase I review: lateness flag and minutes stay consistent after a correction', () => {
   it('"not late" clears the minutes; minutes alone set the flag; "late" with 0 minutes is refused', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [emp.id, base.shiftId, day(-10)]);
     const rec = (await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-2), recordedAt: `${day(-2)}T09:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201)).body;
     const state = async () => one(`SELECT is_late, late_by_minutes FROM attendance_records WHERE id = $1`, [rec.id]);
@@ -75,7 +75,7 @@ describe('Phase I review: lateness flag and minutes stay consistent after a corr
 
 describe('ending a roster entry keeps the days already rostered', () => {
   it('ends a started entry yesterday even when the employee only has manual attendance', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const a = await one(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3) RETURNING id`, [emp.id, base.shiftId, day(-30)]);
     await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-10), recordedAt: `${day(-10)}T09:00:00Z`, workedMinutes: 480, reason: 'Phone was broken' }).expect(201);
     expect(await one('SELECT 1 FROM tracking_sessions WHERE employee_id = $1', [emp.id])).toBeNull();
@@ -85,7 +85,7 @@ describe('ending a roster entry keeps the days already rostered', () => {
   });
 
   it('still removes an entry that has not started', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const a = await one(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3) RETURNING id`, [emp.id, base.shiftId, day(3)]);
     await as(owner).del(`/employees/${emp.id}/shifts/${a.id}`).expect(200);
     expect(await one('SELECT 1 FROM employee_shift_assignments WHERE id = $1', [a.id])).toBeNull();
@@ -96,21 +96,21 @@ describe('manual attendance', () => {
   const entry = (empId: string, over: object = {}) => ({ employeeId: empId, shiftId: base.shiftId, shiftDate: day(0), recordedAt: new Date(Date.now() - 3600_000).toISOString(), workedMinutes: 60, reason: 'Phone was broken', ...over });
 
   it('refuses a day that has not happened yet', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId, shiftId: base.shiftId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId, shiftId: base.shiftId });
     const r = await as(owner).post('/attendance/manual', entry(emp.id, { shiftDate: day(2), recordedAt: `${day(2)}T09:00:00Z` })).expect(400);
     expect(r.body.error.code).toBe('FUTURE_DATE');
     expect((await as(owner).post('/attendance/manual', entry(emp.id, { recordedAt: new Date(Date.now() + 3 * 3600_000).toISOString() })).expect(400)).body.error.code).toBe('FUTURE_TIME');
   });
 
   it('refuses more worked time than the shift is long', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId, shiftId: base.shiftId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId, shiftId: base.shiftId });
     // The base shift runs 00:00–23:59, so 1440 minutes is one minute too many.
     expect((await as(owner).post('/attendance/manual', entry(emp.id, { workedMinutes: 1440 })).expect(400)).body.error.code).toBe('TOO_MANY_MINUTES');
     await as(owner).post('/attendance/manual', entry(emp.id, { workedMinutes: 1439 })).expect(201);
   });
 
   it('keeps a supervisor’s entry pending and uncounted until the owner decides', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId, shiftId: base.shiftId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId, shiftId: base.shiftId });
     const rec = (await as(sup).post('/attendance/manual', entry(emp.id, { workedMinutes: 600 })).expect(201)).body;
     expect(rec.verification_status).toBe('PENDING_VERIFICATION');
     expect(rec.approved_by).toBeNull();
@@ -124,7 +124,7 @@ describe('manual attendance', () => {
   });
 
   it('still lets a supervisor decide records sent late from a phone', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId, shiftId: base.shiftId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId, shiftId: base.shiftId });
     const r = await one(
       `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags)
        VALUES ($1,$2,$3,$4,now(),$5,30,'PENDING_VERIFICATION','{OFFLINE_CAPTURE}') RETURNING id`,
@@ -163,7 +163,7 @@ describe('SOS while working away from home', () => {
     await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'OFF' }, null);
     const siteB = await one(`INSERT INTO workplaces (name, latitude, longitude, radius_m, timezone, org_id) VALUES ('Site B', 12.99, 77.6, 50, 'UTC', $1) RETURNING id`, [DEFAULT_ORG_ID]);
     const shiftB = await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1, 'B all day', '00:00', '23:59', 'UTC', '{1,2,3,4,5,6,7}', 240) RETURNING id`, [siteB.id]);
-    const emp = await createEmployee({ workplaceId: base.workplaceId, shiftId: shiftB.id });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId, shiftId: shiftB.id });
     const token = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body.accessToken;
     const bearer = { Authorization: `Bearer ${token}` };
     await request(app).post('/api/v1/tracking/sessions').set(bearer).send({ shiftId: shiftB.id }).expect(201);
@@ -175,7 +175,7 @@ describe('SOS while working away from home', () => {
   });
 
   it('goes to the home workplace when not on shift', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const token = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body.accessToken;
     const sos = (await request(app).post('/api/v1/sos/mine').set({ Authorization: `Bearer ${token}` }).send({}).expect(200)).body;
     expect((await one('SELECT workplace_id FROM sos_alerts WHERE id = $1', [sos.id])).workplace_id).toBe(base.workplaceId);
@@ -193,7 +193,7 @@ describe('reports keep their history and their definitions', () => {
 
   it('a shift moved to another time zone does not rewrite past local times in the attendance CSV', async () => {
     const shift = await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1, 'TZ shift', '00:00', '23:59', 'Asia/Kolkata', '{1,2,3,4,5,6,7}', 240) RETURNING id`, [base.workplaceId]);
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [emp.id, shift.id, day(-5)]);
     await q(`UPDATE users SET full_name = 'Tara Zone' WHERE id = $1`, [emp.id]);
     await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: shift.id, shiftDate: day(-3), recordedAt: `${day(-3)}T04:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201);
@@ -216,7 +216,7 @@ describe('reports keep their history and their definitions', () => {
   });
 
   it('the dashboard counts a supervisor’s correction waiting for the owner', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [emp.id, base.shiftId, day(-5)]);
     const rec = (await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: base.shiftId, shiftDate: day(-1), recordedAt: `${day(-1)}T08:00:00Z`, workedMinutes: 480, reason: 'Phone was broken' }).expect(201)).body;
     const count = async () => (await owner.agent.get(`/api/v1/analytics/dashboard?from=${day(-1)}&to=${day(0)}`).expect(200)).body.attention.pendingCorrections;
@@ -226,9 +226,11 @@ describe('reports keep their history and their definitions', () => {
   });
 });
 
+// Since the Phase I visibility policy a supervisor sees only their own team: workers at the supervisor's site are
+// created in that team (supervisorId) so the supervisor tests below are about what they say.
 describe('half-day leave (existing rules, pinned)', () => {
   const setup = async (leaveType: string, worked: boolean) => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     // rostered for that one day only, so the month's figures are about it alone
     await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from, effective_to) VALUES ($1,$2,$3,$3)`, [emp.id, base.shiftId, day(-2)]);
     await as(owner).post('/leave', { employeeId: emp.id, leaveType, startDate: day(-2), endDate: day(-2), halfDay: true, reason: 'Half day for a family matter' }).expect(201);
@@ -241,8 +243,14 @@ describe('half-day leave (existing rules, pinned)', () => {
   it('worked on a paid half day: half present, half paid leave, not absent', async () => {
     const { monthly, dash } = await setup('CASUAL', true);
     expect(monthly).toMatchObject({ present: 0.5, leave: 0.5, paid_leave: 0.5, unpaid_leave: 0, absent: 0 });
-    // The dashboard rate leaves leave days out, half or full, on both sides.
-    expect([dash.expected, dash.present]).toEqual([0, 0]);
+    // Approved policy (Phase I): a half-day leave on a day worked counts as present, so it is in the dashboard
+    // rate on both sides (until then it was left out of both). Lateness stays measured from the shift start.
+    expect([dash.expected, dash.present]).toEqual([1, 1]);
+  });
+
+  it('a half-day leave without attendance stays out of the dashboard rate', async () => {
+    const { dash } = await setup('CASUAL', false);
+    expect([dash.expected, dash.present, dash.absent]).toEqual([0, 0, 0]);
   });
 
   it('did not work on an unpaid half day: half unpaid leave, half absent', async () => {
@@ -251,7 +259,7 @@ describe('half-day leave (existing rules, pinned)', () => {
   });
 
   it('a half day must be a single date', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const r = await as(owner).post('/leave', { employeeId: emp.id, leaveType: 'CASUAL', startDate: day(-3), endDate: day(-2), halfDay: true, reason: 'Two half days at once' }).expect(400);
     expect(r.body.error.code).toBe('BAD_RANGE');
   });
@@ -267,7 +275,7 @@ describe('analytics ranges and export filters', () => {
     shiftX = (await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1, 'X shift', '00:00', '23:59', 'UTC', '{1,2,3,4,5,6,7}', 240) RETURNING id`, [siteX])).id;
     // One worker at the supervisor's site and one at site X, each with one old and one recent record.
     for (const [site, shift] of [[base.workplaceId, base.shiftId], [siteX, shiftX]] as const) {
-      const emp = await createEmployee({ workplaceId: site });
+      const emp = await createEmployee({ workplaceId: site, supervisorId: site === base.workplaceId ? sup.id : undefined }); // the base site's worker is in the supervisor's team
       await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from, effective_to) VALUES ($1,$2,$3,$4)`, [emp.id, shift, day(-100), day(-1)]);
       for (const d of [-80, -5]) await as(owner).post('/attendance/manual', { employeeId: emp.id, shiftId: shift, shiftDate: day(d), recordedAt: `${day(d)}T08:00:00Z`, workedMinutes: 300, reason: 'Phone was broken' }).expect(201);
       if (site === siteX) outScope = emp.id;
@@ -323,7 +331,7 @@ describe('analytics ranges and export filters', () => {
 
 describe('remaining QA findings', () => {
   const rostered = async (from = -10) => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const a = await one(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3) RETURNING id`, [emp.id, base.shiftId, day(from)]);
     return { ...emp, assignmentId: a.id as string };
   };
@@ -357,10 +365,10 @@ describe('remaining QA findings', () => {
   });
 
   it('R3: a supervisor cannot roster a day that has passed; the owner can', async () => {
-    const a = await createEmployee({ workplaceId: base.workplaceId });
+    const a = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     expect((await as(sup).post(`/employees/${a.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(-7) }).expect(400)).body.error.code).toBe('PAST_DATE');
     await as(sup).post(`/employees/${a.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(1) }).expect(200);
-    const b = await createEmployee({ workplaceId: base.workplaceId });
+    const b = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     await as(owner).post(`/employees/${b.id}/shifts`, { shiftId: base.shiftId, effectiveFrom: day(-7) }).expect(200);
   });
 
@@ -398,7 +406,7 @@ describe('remaining QA findings', () => {
 
   it('D2: a signed-out or revoked phone stops getting pushes', async () => {
     await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'OFF' }, null);
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const phone = `push-${crypto.randomUUID()}`;
     const body = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile', deviceId: phone, platform: 'android' }).expect(200)).body;
     await q(`INSERT INTO device_registrations (user_id, device_id, platform, status, push_token) VALUES ($1,$2,'android','APPROVED','ExponentPushToken[a]') ON CONFLICT (user_id, device_id) DO UPDATE SET push_token = 'ExponentPushToken[a]', status = 'APPROVED'`, [emp.id, phone]);
@@ -416,7 +424,7 @@ describe('remaining QA findings', () => {
     (config.email as any).smtpUrl = 'smtp://test.invalid';
     try {
       await owner.agent.put('/api/v1/team/me/away').set('X-CSRF-Token', owner.csrf).send({ awayUntil: day(5) }).expect(200);
-      const emp = await createEmployee({ workplaceId: base.workplaceId });
+      const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
       const token = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body.accessToken;
       const sos = (await request(app).post('/api/v1/sos/mine').set({ Authorization: `Bearer ${token}` }).send({ message: 'Help' }).expect(200)).body;
       const sent = await q(`SELECT d.target FROM notification_deliveries d JOIN notifications n ON n.id = d.notification_id WHERE n.data->>'sosId' = $1 AND d.channel = 'EMAIL'`, [sos.id]);
@@ -428,7 +436,7 @@ describe('remaining QA findings', () => {
   });
 
   it('LOW: an SOS is closed once; tasks go to active employees; payroll pay setup is off with payroll', async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const token = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body.accessToken;
     const sos = (await request(app).post('/api/v1/sos/mine').set({ Authorization: `Bearer ${token}` }).send({}).expect(200)).body;
     await as(owner).post(`/sos/${sos.id}/resolve`, { note: 'Called, all fine' }).expect(200);
@@ -455,7 +463,7 @@ describe('remaining QA findings', () => {
 
   it('L6: worked time is checked against the shift as it was on that date', async () => {
     const shift = await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1,'Long','08:00','18:00','UTC','{1,2,3,4,5,6,7}',30) RETURNING id`, [base.workplaceId]);
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,$3)`, [emp.id, shift.id, day(-20)]);
     await owner.agent.patch(`/api/v1/shifts/${shift.id}`).set('X-CSRF-Token', owner.csrf).send({ endTime: '12:00', reason: 'Shorter from now on' }).expect(200);
     // Ten hours on a past day, when the shift was still ten hours long.
@@ -478,7 +486,7 @@ describe('remaining QA findings', () => {
 
 describe('a refresh whose answer was lost (D1)', () => {
   const login = async () => {
-    const emp = await createEmployee({ workplaceId: base.workplaceId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId });
     const body = (await request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile' }).expect(200)).body;
     return { emp, token: body.refreshToken as string };
   };
@@ -549,7 +557,7 @@ describe('a refresh whose answer was lost (D1)', () => {
 describe('a phone that is no longer approved', () => {
   it('cannot keep a shift alive: locations, permission reports and ending are refused', async () => {
     await saveSettingsSection(DEFAULT_ORG_ID, 'workforce', { ...DEFAULT_SETTINGS.workforce, faceEnrollment: 'OFF', deviceBinding: 'ENFORCE' }, null);
-    const emp = await createEmployee({ workplaceId: base.workplaceId, shiftId: base.shiftId });
+    const emp = await createEmployee({ supervisorId: sup.id, workplaceId: base.workplaceId, shiftId: base.shiftId });
     const phone = `qa-${crypto.randomUUID()}`;
     const login = () => request(app).post('/api/v1/auth/login').send({ email: emp.email, password: PASSWORD, client: 'mobile', deviceId: phone, platform: 'android', model: 'QA phone' });
     await login().expect(403);

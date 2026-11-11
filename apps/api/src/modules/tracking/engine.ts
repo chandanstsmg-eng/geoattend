@@ -164,15 +164,29 @@ export function evaluate(session: EngineSession, reading: EngineReading, rules: 
     }
     case 'ATTENDANCE_READY':
     case 'ATTENDANCE_SUBMISSION_PENDING': {
-      if (cls === 'OUTSIDE') {
+      // Approved policy (Phase I): leaving before attendance is confirmed like leaving after it (several outside
+      // readings over exitStabilizationSec), so one stray reading no longer re-locks an employee at the gate.
+      // Attendance itself still needs an inside evidence fix at submission, so this never lets anyone check in from outside.
+      if (cls === 'INSIDE') {
+        if (since) reasons.push('departure candidate cancelled — back inside');
+        since = null;
+        count = 0;
+        return done();
+      }
+      if (cls !== 'OUTSIDE') return done(); // never infer departure from an uncertain reading
+      if (!since) {
+        since = t;
+        count = 1;
+      } else count += 1;
+      if (secondsBetween(since, t) >= rules.exitStabilizationSec && count >= rules.exitMinReadings) {
         if (state === 'ATTENDANCE_SUBMISSION_PENDING') effects.push({ kind: 'CANCEL_SUBMISSION' });
-        effects.push({ kind: 'GEOFENCE_EVENT', eventType: 'LEFT_BEFORE_ATTENDANCE', time: t });
+        effects.push({ kind: 'GEOFENCE_EVENT', eventType: 'LEFT_BEFORE_ATTENDANCE', time: t, details: { departedAt: since.toISOString(), readings: count } });
         state = 'OUTSIDE_GEOFENCE';
         since = null;
         count = 0;
         return done('left the geofence before attendance was recorded — attendance locked again');
       }
-      return done();
+      return done('outside, departure before attendance not yet confirmed');
     }
     case 'PRESENT': {
       if (cls === 'INSIDE') {

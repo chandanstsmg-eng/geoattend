@@ -87,7 +87,9 @@ export async function notify(db: Queryable, outbox: Outbox, n: NotifyInput) {
       )?.manager_id ?? null
     : null;
   const recipients = `u.is_active AND u.role = 'ADMIN' AND u.org_id = $2 AND (${n.type === 'SOS' ? 'true OR ' : ''}ap.away_until IS NULL OR ap.away_until < ${localDaySql(orgTimezoneSql('$2'))})
-    AND (ap.access = 'OWNER' OR ($4::boolean IS NOT TRUE AND ($3::uuid = ANY(ap.site_ids) OR u.id = $5::uuid)))`;
+    AND (ap.access = 'OWNER' OR ($4::boolean IS NOT TRUE AND (u.id = $5::uuid OR ($3::uuid = ANY(ap.site_ids)
+         -- approved policy (Phase I): about an employee, only that employee's own supervisor at the site is told
+         AND ($6::uuid IS NULL OR EXISTS (SELECT 1 FROM employee_profiles tp WHERE tp.user_id = $6::uuid AND tp.supervisor_id = u.id))))))`;
   const ownersOnly = n.type === 'APPROVAL_OVERDUE';
   const always = n.type === 'SOS'; // a safety alert is never left to the inbox alone
   if ((always || settings.alerts.webPushTypes.includes(n.type)) && config.push.vapidPrivateKey) {
@@ -97,7 +99,7 @@ export async function notify(db: Queryable, outbox: Outbox, n: NotifyInput) {
        JOIN users u ON u.id = s.user_id
        JOIN administrator_profiles ap ON ap.user_id = u.id
        WHERE ap.notify_push AND ${recipients}`,
-      [row.id, row.org_id, site, ownersOnly, manager],
+      [row.id, row.org_id, site, ownersOnly, manager, n.employeeId ?? null],
       db,
     );
   }
@@ -105,7 +107,7 @@ export async function notify(db: Queryable, outbox: Outbox, n: NotifyInput) {
     const admins = await q<{ email: string }>(
       `SELECT u.email FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id
        WHERE ap.notify_email AND NOT u.is_demo AND $1::uuid IS NOT NULL AND ${recipients}`,
-      [row.id, row.org_id, site, ownersOnly, manager],
+      [row.id, row.org_id, site, ownersOnly, manager, n.employeeId ?? null],
       db,
     );
     // ALERT_EMAIL_RECIPIENTS in .env belong to the original installation, not to companies that signed up later.

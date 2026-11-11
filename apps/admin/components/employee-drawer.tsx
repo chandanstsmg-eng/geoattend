@@ -365,7 +365,7 @@ function LocationsTab({ id }: { id: string }) {
                     <Td className="tabular">{metres(l.distance_m)}</Td>
                     <Td className="tabular">±{Math.round(l.accuracy_m)} m</Td>
                     <Td><Badge tone={l.classification === 'INSIDE' ? 'green' : l.classification === 'OUTSIDE' ? 'gray' : 'amber'}>{l.classification.toLowerCase().replace('_', ' ')}</Badge></Td>
-                    <Td className="text-xs">{l.source.toLowerCase()} {l.is_mocked && <Badge tone="red">mock</Badge>} {l.is_simulated && <SimBadge />}</Td>
+                    <Td className="text-xs">{l.source.toLowerCase()} {l.is_mocked && <Badge tone="red">mock</Badge>} {l.suspect_reason && <Badge tone="amber" title="Kept on the trail, not used for attendance or alerts">ignored: {Math.round(l.implied_speed_kmh)} km/h jump</Badge>} {l.is_simulated && <SimBadge />}</Td>
                   </tr>
                 ))}
               </tbody>

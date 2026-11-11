@@ -184,7 +184,7 @@ mount(facesRouter, '/api/v1/faces', 'faces', [
          JOIN shifts sh ON sh.id = ar.shift_id
          LEFT JOIN attendance_photos sp ON sp.id = ar.photo_id
          LEFT JOIN attendance_photos np ON np.id = ar.end_photo_id
-         WHERE ar.face_review = 'PENDING' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+         WHERE ar.face_review = 'PENDING' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2', 'ar.employee_id')}
          ORDER BY ar.recorded_at DESC LIMIT 200`,
         [user.orgId, user.sites],
       ),

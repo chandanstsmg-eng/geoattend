@@ -15,37 +15,59 @@ export const DEFAULT_ORG_ID = '00000000-0000-0000-0000-000000000001';
 /** SQL for an employee's current workplace. */
 export const employeeSite = (employeeCol: string) => `(SELECT wa.workplace_id FROM workplace_assignments wa WHERE wa.employee_id = ${employeeCol} AND wa.effective_to IS NULL LIMIT 1)`;
 
-// Each query returns the record's workplace (`wp`) if it belongs to the company ($2).
+/**
+ * Supervisor visibility (approved policy, Phase I): a supervisor sees only the employees assigned to them
+ * (employee_profiles.supervisor_id) at their own workplaces; owners see the whole company. The signed-in
+ * supervisor's id is set on the database connection (app.supervisor_id, lib/http.ts → db/pool.ts), so this
+ * condition needs no extra parameter and is true for owners, background jobs and system work.
+ */
+export const CALLER_SUPERVISOR = `NULLIF(current_setting('app.supervisor_id', true), '')::uuid`;
+
+/**
+ * SQL: the employee in `employeeExpr` is visible to the caller. Rows about no employee (a workplace-wide
+ * notification or task) are left to the workplace condition.
+ */
+export const teamFilter = (employeeExpr: string) =>
+  `(${CALLER_SUPERVISOR} IS NULL OR ${employeeExpr} IS NULL OR EXISTS (SELECT 1 FROM employee_profiles tp WHERE tp.user_id = ${employeeExpr} AND tp.supervisor_id = ${CALLER_SUPERVISOR}))`;
+
+// Each query returns the record's workplace (`wp`) if it belongs to the company ($2), and whether its employee
+// (if it concerns one) is in the calling supervisor's team (`in_team`, always true for owners).
+const t = teamFilter;
 const OWNERSHIP = {
-  employee: ['Employee', `SELECT ${employeeSite('u.id')} AS wp FROM users u WHERE u.id = $1 AND u.org_id = $2`],
-  workplace: ['Workplace', `SELECT id AS wp FROM workplaces WHERE id = $1 AND org_id = $2`],
-  shift: ['Shift', `SELECT s.workplace_id AS wp FROM shifts s JOIN workplaces w ON w.id = s.workplace_id WHERE s.id = $1 AND w.org_id = $2`],
-  session: ['Session', `SELECT s.workplace_id AS wp FROM tracking_sessions s JOIN users u ON u.id = s.employee_id WHERE s.id = $1 AND u.org_id = $2`],
-  attendance: ['Attendance record', `SELECT a.workplace_id AS wp FROM attendance_records a JOIN users u ON u.id = a.employee_id WHERE a.id = $1 AND u.org_id = $2`],
-  review: ['Review request', `SELECT ${employeeSite('u.id')} AS wp FROM review_requests r JOIN users u ON u.id = r.employee_id WHERE r.id = $1 AND u.org_id = $2`],
-  leave: ['Leave request', `SELECT ${employeeSite('u.id')} AS wp FROM leave_requests l JOIN users u ON u.id = l.employee_id WHERE l.id = $1 AND u.org_id = $2`],
-  device: ['Phone', `SELECT ${employeeSite('u.id')} AS wp FROM device_registrations d JOIN users u ON u.id = d.user_id WHERE d.id = $1 AND u.org_id = $2`],
-  holiday: ['Holiday', `SELECT workplace_id AS wp FROM holidays WHERE id = $1 AND org_id = $2`],
-  notification: ['Notification', `SELECT COALESCE(workplace_id, ${employeeSite('employee_id')}) AS wp FROM notifications WHERE id = $1 AND org_id = $2`],
-  payslip: ['Payslip', `SELECT ${employeeSite('p.employee_id')} AS wp FROM payslips p JOIN payroll_runs r ON r.id = p.run_id WHERE p.id = $1 AND r.org_id = $2`],
-  adjustment: ['Adjustment', `SELECT ${employeeSite('u.id')} AS wp FROM pay_adjustments a JOIN users u ON u.id = a.employee_id WHERE a.id = $1 AND u.org_id = $2`],
-  task: ['Task', `SELECT COALESCE(t.workplace_id, ${employeeSite('t.assignee_id')}) AS wp FROM tasks t WHERE t.id = $1 AND t.org_id = $2`],
-  sos: ['SOS', `SELECT COALESCE(s.workplace_id, ${employeeSite('s.employee_id')}) AS wp FROM sos_alerts s WHERE s.id = $1 AND s.org_id = $2`],
-  broadcast: ['Announcement', `SELECT b.workplace_id AS wp FROM broadcasts b WHERE b.id = $1 AND b.org_id = $2`],
-  overtime: ['Overtime', `SELECT o.workplace_id AS wp FROM overtime_entries o JOIN users u ON u.id = o.employee_id WHERE o.id = $1 AND u.org_id = $2`],
-  admin: ['Administrator', `SELECT NULL::uuid AS wp FROM users WHERE id = $1 AND org_id = $2 AND role = 'ADMIN'`],
+  employee: ['Employee', `SELECT ${employeeSite('u.id')} AS wp, ${t('u.id')} AS in_team FROM users u WHERE u.id = $1 AND u.org_id = $2`],
+  workplace: ['Workplace', `SELECT id AS wp, true AS in_team FROM workplaces WHERE id = $1 AND org_id = $2`],
+  shift: ['Shift', `SELECT s.workplace_id AS wp, true AS in_team FROM shifts s JOIN workplaces w ON w.id = s.workplace_id WHERE s.id = $1 AND w.org_id = $2`],
+  session: ['Session', `SELECT s.workplace_id AS wp, ${t('s.employee_id')} AS in_team FROM tracking_sessions s JOIN users u ON u.id = s.employee_id WHERE s.id = $1 AND u.org_id = $2`],
+  attendance: ['Attendance record', `SELECT a.workplace_id AS wp, ${t('a.employee_id')} AS in_team FROM attendance_records a JOIN users u ON u.id = a.employee_id WHERE a.id = $1 AND u.org_id = $2`],
+  review: ['Review request', `SELECT ${employeeSite('u.id')} AS wp, ${t('u.id')} AS in_team FROM review_requests r JOIN users u ON u.id = r.employee_id WHERE r.id = $1 AND u.org_id = $2`],
+  leave: ['Leave request', `SELECT ${employeeSite('u.id')} AS wp, ${t('u.id')} AS in_team FROM leave_requests l JOIN users u ON u.id = l.employee_id WHERE l.id = $1 AND u.org_id = $2`],
+  device: ['Phone', `SELECT ${employeeSite('u.id')} AS wp, (u.role <> 'EMPLOYEE' OR ${t('u.id')}) AS in_team FROM device_registrations d JOIN users u ON u.id = d.user_id WHERE d.id = $1 AND u.org_id = $2`],
+  holiday: ['Holiday', `SELECT workplace_id AS wp, true AS in_team FROM holidays WHERE id = $1 AND org_id = $2`],
+  notification: ['Notification', `SELECT COALESCE(workplace_id, ${employeeSite('employee_id')}) AS wp, ${t('employee_id')} AS in_team FROM notifications WHERE id = $1 AND org_id = $2`],
+  payslip: ['Payslip', `SELECT ${employeeSite('p.employee_id')} AS wp, ${t('p.employee_id')} AS in_team FROM payslips p JOIN payroll_runs r ON r.id = p.run_id WHERE p.id = $1 AND r.org_id = $2`],
+  adjustment: ['Adjustment', `SELECT ${employeeSite('u.id')} AS wp, ${t('u.id')} AS in_team FROM pay_adjustments a JOIN users u ON u.id = a.employee_id WHERE a.id = $1 AND u.org_id = $2`],
+  task: ['Task', `SELECT COALESCE(t.workplace_id, ${employeeSite('t.assignee_id')}) AS wp, ${t('t.assignee_id')} AS in_team FROM tasks t WHERE t.id = $1 AND t.org_id = $2`],
+  sos: ['SOS', `SELECT COALESCE(s.workplace_id, ${employeeSite('s.employee_id')}) AS wp, ${t('s.employee_id')} AS in_team FROM sos_alerts s WHERE s.id = $1 AND s.org_id = $2`],
+  broadcast: ['Announcement', `SELECT b.workplace_id AS wp, true AS in_team FROM broadcasts b WHERE b.id = $1 AND b.org_id = $2`],
+  overtime: ['Overtime', `SELECT o.workplace_id AS wp, ${t('o.employee_id')} AS in_team FROM overtime_entries o JOIN users u ON u.id = o.employee_id WHERE o.id = $1 AND u.org_id = $2`],
+  admin: ['Administrator', `SELECT NULL::uuid AS wp, true AS in_team FROM users WHERE id = $1 AND org_id = $2 AND role = 'ADMIN'`],
 } as const;
 
 export type Scope = keyof typeof OWNERSHIP;
 
 /**
  * Refuses (404) a record of another company, or — when `sites` is given (a supervisor) —
- * a record whose workplace is not one of their sites.
+ * a record whose workplace is not one of their sites, or whose employee is not in their team.
  */
 export async function assertInOrg(scope: Scope, id: string, orgId: string, sites: string[] | null = null) {
   const [what, sql] = OWNERSHIP[scope];
   const row = await one(sql, [id, orgId]);
-  if (!row || (sites && !sites.includes(row.wp))) throw notFound(what);
+  if (!row || (sites && !sites.includes(row.wp)) || row.in_team === false) throw notFound(what);
+}
+
+/** Whether the calling supervisor may see this employee (always true for owners and system work). */
+export async function inCallerTeam(employeeId: string) {
+  return !!(await one(`SELECT ${teamFilter('$1::uuid')} AS ok`, [employeeId]))?.ok;
 }
 
 /**
@@ -86,7 +108,19 @@ export const workJoinForDays = (from: string, to: string, ar = 'ar', alias = 'aw
 /** SQL: minutes of a record waiting for verification, shown apart from official time; NULL for any other record. */
 export const pendingMinutes = (ar = 'ar') => `CASE WHEN ${ar}.verification_status = 'PENDING_VERIFICATION' THEN (SELECT pw.worked_minutes FROM attendance_work_all pw WHERE pw.attendance_id = ${ar}.id) END`;
 
-export const siteFilter = (workplaceExpr: string, param: string) => `(${param}::uuid[] IS NULL OR ${workplaceExpr} = ANY(${param}::uuid[]))`;
+/**
+ * SQL: limits rows to the caller's reach. Workplace: a supervisor's sites (`param` holds `user.sites`, null for
+ * owners). Employee (when the rows are about one, `employeeExpr`): a supervisor's own team.
+ */
+export const siteFilter = (workplaceExpr: string, param: string, employeeExpr?: string) =>
+  `(${param}::uuid[] IS NULL OR ${workplaceExpr} = ANY(${param}::uuid[]))${employeeExpr ? ` AND ${teamFilter(employeeExpr)}` : ''}`;
+
+/**
+ * SQL: an owner's "filter by supervisor" (`param` holds that supervisor's id, or null) keeps that supervisor's
+ * team, so the owner sees exactly what the supervisor sees. Combined with SUPERVISOR_SITES for the workplaces.
+ */
+export const supervisorTeam = (param: string, employeeExpr: string) =>
+  `(${param}::uuid IS NULL OR EXISTS (SELECT 1 FROM employee_profiles st WHERE st.user_id = ${employeeExpr} AND st.supervisor_id = ${param}::uuid))`;
 
 /**
  * SQL array of the workplaces a supervisor (id in `param`) manages — used by "filter by supervisor"

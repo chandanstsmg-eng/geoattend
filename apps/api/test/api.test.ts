@@ -157,8 +157,11 @@ describe('arrival and attendance', () => {
   it('(4) rejects submission when the employee left before submitting', async () => {
     const ctx = await makeReady();
     const { photoId, key } = await capture(ctx);
+    // Approved policy (Phase I): the departure is confirmed first (exitMinReadings over exitStabilizationSec, 60 s).
     const away = await ctx.send(reading(90, 6, ctx.clock(3)));
-    expect(away.status.session.state).toBe('OUTSIDE_GEOFENCE');
+    expect(away.status.session.state).toBe('ATTENDANCE_SUBMISSION_PENDING');
+    const gone = await ctx.send(reading(95, 6, ctx.clock(61)));
+    expect(gone.status.session.state).toBe('OUTSIDE_GEOFENCE');
     const res = await request(app).post('/api/v1/attendance').set(bearer(ctx.token)).send({ sessionId: ctx.sessionId, photoId, idempotencyKey: key, evidence: reading(2, 5, ctx.clock(2)) }).expect(422);
     expect(['PHOTO_EXPIRED', 'NOT_ELIGIBLE']).toContain(res.body.error.code);
     expect((await one('SELECT count(*)::int AS n FROM attendance_records WHERE session_id = $1', [ctx.sessionId])).n).toBe(0);
@@ -167,12 +170,28 @@ describe('arrival and attendance', () => {
   it('(4b) re-validates the submitted evidence itself', async () => {
     const ctx = await makeReady();
     const { photoId, key } = await capture(ctx);
-    const res = await request(app).post('/api/v1/attendance').set(bearer(ctx.token)).send({ sessionId: ctx.sessionId, photoId, idempotencyKey: key, evidence: reading(120, 5, ctx.clock(2)) }).expect(422);
-    expect(res.body.error.code).toBe('NOT_ELIGIBLE');
+    // Outside the area, reached at walking pace: one reading does not re-lock (approved policy), but the
+    // evidence itself must be inside, so nothing is recorded and attendance waits for an inside fix.
+    const res = await request(app).post('/api/v1/attendance').set(bearer(ctx.token)).send({ sessionId: ctx.sessionId, photoId, idempotencyKey: key, evidence: reading(120, 5, ctx.clock(60)) }).expect(422);
+    expect(res.body.error.code).toBe('EVIDENCE_NOT_INSIDE');
     const st = await request(app).get(`/api/v1/tracking/sessions/${ctx.sessionId}`).set(bearer(ctx.token)).expect(200);
-    expect(st.body.session.state).toBe('OUTSIDE_GEOFENCE');
+    expect(st.body.session.state).toBe('ATTENDANCE_READY');
+    expect((await one('SELECT count(*)::int AS n FROM attendance_records WHERE session_id = $1', [ctx.sessionId])).n).toBe(0);
     const fail = await one(`SELECT 1 FROM notifications WHERE session_id = $1 AND type = 'ATTENDANCE_SUBMISSION_FAILED'`, [ctx.sessionId]);
     expect(fail).toBeTruthy();
+  });
+
+  it('(4c) refuses evidence that is an impossible jump, and keeps it flagged on the trail', async () => {
+    const ctx = await makeReady();
+    const { photoId, key } = await capture(ctx);
+    // 120 m two seconds after a fix at 4 m: about 190 km/h after both accuracies are allowed for.
+    const res = await request(app).post('/api/v1/attendance').set(bearer(ctx.token)).send({ sessionId: ctx.sessionId, photoId, idempotencyKey: key, evidence: reading(120, 5, ctx.clock(2)) }).expect(422);
+    expect(res.body.error.code).toBe('EVIDENCE_IMPLAUSIBLE');
+    expect((await one('SELECT count(*)::int AS n FROM attendance_records WHERE session_id = $1', [ctx.sessionId])).n).toBe(0);
+    const kept = await one(`SELECT suspect_reason, implied_speed_kmh FROM location_updates WHERE session_id = $1 AND source = 'SUBMISSION'`, [ctx.sessionId]);
+    expect(kept.suspect_reason).toBe('IMPOSSIBLE_SPEED');
+    expect(kept.implied_speed_kmh).toBeGreaterThan(150);
+    expect(await one(`SELECT 1 FROM audit_logs WHERE action = 'location.implausible_jump' AND resource_id = $1`, [ctx.sessionId])).toBeTruthy();
   });
 
   it('rejects stale evidence and non-image uploads', async () => {

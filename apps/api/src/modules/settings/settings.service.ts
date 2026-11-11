@@ -34,6 +34,11 @@ export const trackingSchema = z.object({
    * uploads), so a batch of readings with made-up phone times cannot unlock attendance at once.
    */
   entryMinServerSpanSec: z.number().int().min(0).max(600),
+  /**
+   * A reading implying travel faster than this from the last unflagged reading is an impossible jump: stored,
+   * flagged and audited, but left out of every automatic decision (approved policy, Phase I).
+   */
+  maxPlausibleSpeedKmh: z.number().min(50).max(1000),
   /** Location must be allowed "all the time": otherwise tracking stops when the app is closed. */
   requireBackgroundLocation: z.boolean(),
   /** Precise location must be on (Android "approximate" / iOS "precise off" are refused). */
@@ -205,6 +210,7 @@ export const DEFAULT_SETTINGS: Settings = {
     offlineQueueMax: 2000,
     offlineAttendanceHours: 24,
     entryMinServerSpanSec: 20,
+    maxPlausibleSpeedKmh: 150,
     requireBackgroundLocation: true,
     requirePreciseLocation: true,
     deviceIntegrityPolicy: 'BLOCK_ATTENDANCE',

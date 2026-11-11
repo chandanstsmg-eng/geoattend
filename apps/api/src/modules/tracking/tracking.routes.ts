@@ -6,7 +6,7 @@ import { OPEN_STATES } from '@geoattend/shared';
 import { one, q } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { forbidden, notFound } from '../../lib/errors.js';
-import { SUPERVISOR_SITES, siteFilter } from '../../lib/tenancy.js';
+import { SUPERVISOR_SITES, inCallerTeam, siteFilter, supervisorTeam } from '../../lib/tenancy.js';
 import { createDownloadUrl, requestOrigin } from '../../lib/storage.js';
 import { idParams, isoDate, mount, route } from '../../lib/http.js';
 import { audit } from '../../lib/audit.js';
@@ -48,7 +48,7 @@ async function saveDeviceStatus(sessionId: string, employeeId: string, d: z.infe
 
 async function ownOrAdmin(sessionId: string, user: { id: string; role: string; orgId: string; sites: string[] | null }) {
   const s = await one('SELECT s.employee_id, s.workplace_id, u.org_id FROM tracking_sessions s JOIN users u ON u.id = s.employee_id WHERE s.id = $1', [sessionId]);
-  if (!s || (user.role === 'ADMIN' && (s.org_id !== user.orgId || (user.sites && !user.sites.includes(s.workplace_id))))) throw notFound('Session');
+  if (!s || (user.role === 'ADMIN' && (s.org_id !== user.orgId || (user.sites && !user.sites.includes(s.workplace_id)) || !(await inCallerTeam(s.employee_id))))) throw notFound('Session');
   if (user.role !== 'ADMIN' && s.employee_id !== user.id) throw forbidden();
 }
 
@@ -295,9 +295,9 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
          LEFT JOIN session_breaks b ON b.session_id = s.id AND b.ended_at IS NULL
          LEFT JOIN overtime_entries ot ON ot.session_id = s.id AND ot.ended_at IS NULL
          LEFT JOIN attendance_records ar ON ar.employee_id = s.employee_id AND ar.shift_id = s.shift_id AND ar.shift_date = s.shift_date AND ar.verification_status <> 'VOIDED'
-         WHERE u.org_id = $3 AND ${siteFilter('s.workplace_id', '$4')} AND (s.ended_at IS NULL OR s.ended_at > now() - interval '12 hours')
+         WHERE u.org_id = $3 AND ${siteFilter('s.workplace_id', '$4', 's.employee_id')} AND (s.ended_at IS NULL OR s.ended_at > now() - interval '12 hours')
            AND ($1::uuid IS NULL OR s.workplace_id = $1) AND ($2 OR NOT s.is_simulated)
-           AND ($5::uuid IS NULL OR s.workplace_id = ANY(${SUPERVISOR_SITES('$5')}))
+           AND ($5::uuid IS NULL OR s.workplace_id = ANY(${SUPERVISOR_SITES('$5')})) AND ${supervisorTeam('$5', 's.employee_id')}
          ORDER BY u.full_name`,
         [query.workplaceId ?? null, query.includeSimulated === 'true', user.orgId, user.sites, query.supervisorId ?? null],
       );
@@ -330,7 +330,7 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
       q(
         `SELECT s.*, u.full_name, sh.name AS shift_name, w.name AS workplace_name FROM tracking_sessions s
          JOIN users u ON u.id = s.employee_id JOIN shifts sh ON sh.id = s.shift_id JOIN workplaces w ON w.id = s.workplace_id
-         WHERE u.org_id = $5 AND ${siteFilter('s.workplace_id', '$6')} AND ($1::date IS NULL OR s.shift_date = $1) AND ($2::uuid IS NULL OR s.workplace_id = $2) AND ($3::uuid IS NULL OR s.employee_id = $3)
+         WHERE u.org_id = $5 AND ${siteFilter('s.workplace_id', '$6', 's.employee_id')} AND ($1::date IS NULL OR s.shift_date = $1) AND ($2::uuid IS NULL OR s.workplace_id = $2) AND ($3::uuid IS NULL OR s.employee_id = $3)
          ORDER BY s.started_at DESC LIMIT $4`,
         [query.date ?? null, query.workplaceId ?? null, query.employeeId ?? null, query.limit, user.orgId, user.sites],
       ),
@@ -379,7 +379,8 @@ mount(trackingRouter, '/api/v1/tracking', 'tracking', [
     handler: async ({ params, user, req }) => {
       await audit({ actor: user, action: 'location_history.view', resourceType: 'tracking_session', resourceId: params.id, req });
       return q(
-        `SELECT id, latitude, longitude, accuracy_m, client_time, received_at, distance_m, classification, validation_status, source, is_mocked, is_simulated
+        `SELECT id, latitude, longitude, accuracy_m, client_time, received_at, distance_m, classification, validation_status, source, is_mocked, is_simulated,
+                suspect_reason, implied_speed_kmh
          FROM location_updates WHERE session_id = $1 ORDER BY client_time LIMIT 5000`,
         [params.id],
       );

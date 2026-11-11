@@ -77,9 +77,10 @@ export function mount(router: Router, basePath: string, tag: string, defs: Route
         else res.json(result);
       };
       try {
-        // A signed-in user's request reaches only their company's rows, enforced by the database.
-        // Public routes (sign-in, sign-up, refresh) work before anyone is known.
-        await (user ? withOrg(user.orgId, run) : asSystem(run));
+        // A signed-in user's request reaches only their company's rows, enforced by the database; a supervisor's
+        // also only their own team's employees (lib/tenancy.ts teamFilter). Public routes (sign-in, sign-up,
+        // refresh) work before anyone is known.
+        await (user ? withOrg(user.orgId, run, user.access === 'SUPERVISOR' ? user.id : null) : asSystem(run));
       } catch (err) {
         next(err);
       }

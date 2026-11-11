@@ -235,14 +235,15 @@ async function digestsForCompany(orgId: string, now: Date) {
 
     if (digest.supervisorSummaries) {
       const supervisors = await q(
-        `SELECT u.id, u.email, ap.site_ids FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id
+        `SELECT u.id, u.email, ap.site_ids, ARRAY(SELECT ep.user_id FROM employee_profiles ep WHERE ep.supervisor_id = u.id) AS team FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id
          WHERE u.org_id = $1 AND u.is_active AND NOT u.is_demo AND ap.access = 'SUPERVISOR' AND ap.notify_email AND cardinality(ap.site_ids) > 0`,
         [orgId],
       );
       for (const sup of supervisors) {
         work.push(() =>
           attempt(orgId, `weekly ${from} supervisor ${sup.id}`, async () => {
-            const rows = (await week()).rows.filter((r: any) => sup.site_ids.includes(r.workplace_id)); // their own sites, nothing else
+            // Their own sites and their own team, nothing else (approved policy, Phase I).
+            const rows = (await week()).rows.filter((r: any) => sup.site_ids.includes(r.workplace_id) && sup.team.includes(r.employee_id));
             return { email: await delivered([sup.email], `[GeoAttend] Your sites — attendance for ${label}`, `Attached: attendance summary for your sites, ${label} (${rows.length} employees).\n\nOpen the dashboard: ${config.dashboardUrl}`, `attendance_${from}.csv`, summaryCsv(rows)) };
           }),
         );

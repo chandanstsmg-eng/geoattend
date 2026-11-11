@@ -51,7 +51,7 @@ const LIST_SQL = `
   LEFT JOIN LATERAL (
     SELECT count(*)::int AS readings, count(*) FILTER (WHERE lu.distance_m <= w.radius_m)::int AS inside_readings, MAX(lu.distance_m)::float AS max_distance_m
     FROM location_updates lu
-    WHERE lu.session_id = o.session_id AND lu.client_time >= o.started_at - interval '2 minutes' AND (o.ended_at IS NULL OR lu.client_time <= o.ended_at + interval '2 minutes')
+    WHERE lu.session_id = o.session_id AND lu.suspect_reason IS NULL AND lu.client_time >= o.started_at - interval '2 minutes' AND (o.ended_at IS NULL OR lu.client_time <= o.ended_at + interval '2 minutes')
   ) loc ON true`;
 
 const decisionBody = z
@@ -100,7 +100,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
     handler: async ({ query, user }) =>
       q(
         `${LIST_SQL}
-         WHERE u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')}
+         WHERE u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2', 'o.employee_id')}
            AND ($3::date IS NULL OR o.shift_date >= $3) AND ($4::date IS NULL OR o.shift_date <= $4)
            AND ($5::text IS NULL OR ($5 = 'RUNNING' AND o.ended_at IS NULL) OR (o.ended_at IS NOT NULL AND o.status = $5))
            AND ($6::uuid IS NULL OR o.workplace_id = $6) AND ($7::uuid IS NULL OR o.employee_id = $7) AND ($8 OR NOT o.is_simulated)
@@ -118,7 +118,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
     handler: async ({ query, user }) => {
       const date = query.date ?? (await defaultDate(user.orgId, query.workplaceId));
       const params = [user.orgId, user.sites, date, query.workplaceId ?? null];
-      const where = `u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2')} AND ($4::uuid IS NULL OR o.workplace_id = $4) AND ${overtimeCounts()}`;
+      const where = `u.org_id = $1 AND ${siteFilter('o.workplace_id', '$2', 'o.employee_id')} AND ($4::uuid IS NULL OR o.workplace_id = $4) AND ${overtimeCounts()}`;
       const totals = await one(
         `SELECT count(*) FILTER (WHERE o.ended_at IS NULL)::int AS running,
                 count(DISTINCT o.employee_id) FILTER (WHERE o.shift_date = $3)::int AS workers,
@@ -210,7 +210,7 @@ mount(overtimeRouter, '/api/v1/overtime', 'overtime', [
         const done = await q(
           `UPDATE overtime_entries o SET status = 'APPROVED', approved_minutes = ${CLAIMED}, decided_by = $3, decided_at = now(), decision_note = NULL
            FROM users u
-           WHERE u.id = o.employee_id AND o.id = ANY($1::uuid[]) AND u.org_id = $2 AND ${siteFilter('o.workplace_id', '$4')}
+           WHERE u.id = o.employee_id AND o.id = ANY($1::uuid[]) AND u.org_id = $2 AND ${siteFilter('o.workplace_id', '$4', 'o.employee_id')}
              AND o.status = 'PENDING' AND o.ended_at IS NOT NULL AND ${overtimeCounts()}
            RETURNING o.*, o.approved_minutes AS claimed_minutes`,
           [body.ids, user.orgId, user.id, user.sites],

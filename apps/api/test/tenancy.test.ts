@@ -15,7 +15,7 @@ import { one, q } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { registry } from '../src/lib/http.js';
 import type { Scope } from '../src/lib/tenancy.js';
-import { adminAgent, createEmployee, createTestDatabase, mobileLogin, PASSWORD, seedBase, testSettings, WP } from './helpers.js';
+import { adminAgent, assignTeam, createEmployee, createTestDatabase, mobileLogin, PASSWORD, seedBase, testSettings, WP } from './helpers.js';
 
 let app: Express;
 let db: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -85,6 +85,7 @@ beforeAll(async () => {
   const supAgent = request.agent(app);
   await q('UPDATE users SET must_change_password = false WHERE email = $1', [supEmail]); // the temporary-password rule has its own test
   const supLogin = await supAgent.post('/api/v1/auth/login').send({ email: supEmail, password: added.body.temporaryPassword, client: 'web' }).expect(200);
+  await assignTeam(added.body.admin.id, visible.id); // their own team at their own site (Phase I visibility policy)
   supervisor = { agent: supAgent, csrf: supLogin.body.csrfToken, visibleEmployeeId: visible.id };
 
   // ── Company B signs up through the public endpoint. ──

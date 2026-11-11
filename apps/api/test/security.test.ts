@@ -10,7 +10,7 @@ import { DEFAULT_SETTINGS, saveSettingsSection } from '../src/modules/settings/s
 import { isPushService } from '../src/modules/notifications/notifications.routes.js';
 import { addClient, recheckClients } from '../src/modules/notifications/live-hub.js';
 import { DEFAULT_ORG_ID } from '../src/lib/tenancy.js';
-import { adminAgent, createEmployee, createTestDatabase, mobileLogin, PASSWORD, seedBase } from './helpers.js';
+import { adminAgent, assignTeam, createEmployee, createTestDatabase, mobileLogin, PASSWORD, seedBase } from './helpers.js';
 
 let app: Express;
 let db: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -168,6 +168,7 @@ describe('phone approval', () => {
     const s = await one(`INSERT INTO users (email, password_hash, role, full_name, org_id) SELECT $1, password_hash, 'ADMIN', 'Sup', org_id FROM users WHERE id = $2 RETURNING id, email`, [`sup-${crypto.randomUUID()}@test.local`, base.adminId]);
     await q(`INSERT INTO administrator_profiles (user_id, access, site_ids) VALUES ($1,'SUPERVISOR',$2)`, [s.id, [elsewhere.id]]);
     const sup = await adminAgent(app, s.email);
+    await assignTeam(s.id, emp.id); // in their team, but at a workplace that is not theirs: still refused below
     await sup.agent.post(`/api/v1/devices/${d.id}/approve`).set('X-CSRF-Token', sup.csrf).send({}).expect(404);
     await q(`UPDATE administrator_profiles SET site_ids = $2 WHERE user_id = $1`, [s.id, [base.workplaceId]]);
     await sup.agent.post(`/api/v1/devices/${d.id}/approve`).set('X-CSRF-Token', sup.csrf).send({}).expect(200);

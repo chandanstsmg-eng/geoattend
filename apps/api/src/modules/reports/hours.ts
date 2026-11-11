@@ -25,7 +25,7 @@
 import { DateTime } from 'luxon';
 import { q } from '../../db/pool.js';
 import type { AuthUser } from '../../lib/auth.js';
-import { SUPERVISOR_SITES, siteFilter, workJoinForDays } from '../../lib/tenancy.js';
+import { SUPERVISOR_SITES, siteFilter, supervisorTeam, workJoinForDays } from '../../lib/tenancy.js';
 
 export interface WorkRecord {
   employee_id: string;
@@ -178,10 +178,10 @@ export async function loadPendingHours(user: Pick<AuthUser, 'orgId' | 'sites'>, 
      JOIN ${workJoinForDays('$3::date', '$4::date', 'ar', 'aw', 'attendance_work_all')}
      JOIN users u ON u.id = ar.employee_id
      LEFT JOIN employee_profiles ep ON ep.user_id = u.id
-     WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+     WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2', 'ar.employee_id')}
        AND ar.shift_date BETWEEN $3::date AND $4::date
        AND ($5::uuid IS NULL OR ar.workplace_id = $5) AND ($6::uuid IS NULL OR ar.employee_id = $6)
-       AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
+       AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')})) AND ${supervisorTeam('$7', 'ar.employee_id')}
        AND ($8 OR (NOT ar.is_simulated AND NOT u.is_demo))
      GROUP BY ar.employee_id, u.full_name, ep.employee_code`,
     [user.orgId, user.sites, f.from, f.to, f.workplaceId ?? null, f.employeeId ?? null, f.supervisorId ?? null, !!f.includeSimulated],
@@ -205,10 +205,10 @@ export async function loadWorkRecords(user: Pick<AuthUser, 'orgId' | 'sites'>, f
      LEFT JOIN employee_profiles ep ON ep.user_id = u.id
      JOIN workplaces w ON w.id = ar.workplace_id
      LEFT JOIN tracking_sessions s ON s.id = ar.session_id
-     WHERE u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
+     WHERE u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2', 'ar.employee_id')}
        AND ar.shift_date BETWEEN $3::date AND $4::date
        AND ($5::uuid IS NULL OR ar.workplace_id = $5) AND ($6::uuid IS NULL OR ar.employee_id = $6)
-       AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
+       AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')})) AND ${supervisorTeam('$7', 'ar.employee_id')}
        -- Without simulated data, fictional demo employees are left out too — the same rule as the
        -- roster, so attendance rates and hours always describe the same people.
        AND ($8 OR (NOT ar.is_simulated AND NOT u.is_demo))`,

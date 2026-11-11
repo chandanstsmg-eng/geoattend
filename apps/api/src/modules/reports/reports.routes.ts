@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
-import { one, q, qPrepared } from '../../db/pool.js';
+import { asSupervisor, one, q, qPrepared } from '../../db/pool.js';
 import { DAY_LOOKUPS_AT_ONCE, mapLimit } from '../../lib/concurrency.js';
 import { dayEndSql, dayStartSql, orgTimezoneSql, orgToday } from '../../lib/dates.js';
 import { isoDate, mount, route } from '../../lib/http.js';
@@ -10,7 +10,7 @@ import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
-import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, workJoinForDays } from '../../lib/tenancy.js';
+import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, supervisorTeam, workJoinForDays } from '../../lib/tenancy.js';
 import { badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { computeHours, hoursText, loadPendingHours, loadWorkRecords, withPendingHours } from './hours.js';
@@ -60,7 +60,7 @@ export async function roster(orgId: string, date: string, workplaceId: string | 
        AND (ep.joined_on IS NULL OR $1::date >= ep.joined_on)
        AND (CASE WHEN ep.left_on IS NOT NULL THEN $1::date <= ep.left_on ELSE u.is_active END)
        AND EXTRACT(ISODOW FROM $1::date)::smallint = ANY (COALESCE(rev.days_of_week, sh.days_of_week))
-       AND ($2::uuid IS NULL OR w.id = $2) AND ($3 OR NOT u.is_demo) AND u.org_id = $4 AND ${siteFilter('w.id', '$5')}
+       AND ($2::uuid IS NULL OR w.id = $2) AND ($3 OR NOT u.is_demo) AND u.org_id = $4 AND ${siteFilter('w.id', '$5', 'u.id')}
      ORDER BY w.name, start_time, u.full_name`,
     [date, workplaceId, includeSimulated, orgId, sites],
   );
@@ -162,7 +162,7 @@ export async function rosterDayCounts(orgId: string, from: string, to: string, w
            AND (ep.joined_on IS NULL OR d.day >= ep.joined_on)
            AND (CASE WHEN ep.left_on IS NOT NULL THEN d.day <= ep.left_on ELSE u.is_active END)
            AND EXTRACT(ISODOW FROM d.day)::smallint = ANY (COALESCE(rev.days_of_week, sh.days_of_week))
-           AND ($3::uuid IS NULL OR w.id = $3) AND ($4 OR NOT u.is_demo) AND u.org_id = $5 AND ${siteFilter('w.id', '$6')}`,
+           AND ($3::uuid IS NULL OR w.id = $3) AND ($4 OR NOT u.is_demo) AND u.org_id = $5 AND ${siteFilter('w.id', '$6', 'u.id')}`,
         [a, b, workplaceId, includeSimulated, orgId, sites],
       )),
     );
@@ -251,7 +251,9 @@ export async function periodSummary(orgId: string, from: string, until: string, 
   const dates: string[] = [];
   for (let d = first; d <= last; d = d.plus({ days: 1 })) dates.push(d.toISODate()!);
   // Looked up a few days at a time, then counted in date order exactly as before.
-  const rowsByDay = await mapLimit(dates, DAY_LOOKUPS_AT_ONCE, async (date) => withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated, sites)));
+  // Filtered by a supervisor: their workplaces and, as they see it, only their own team (approved policy, Phase I).
+  const asThem = <T,>(fn: () => Promise<T>) => (scope.supervisorId ? asSupervisor(scope.supervisorId, fn) : fn());
+  const rowsByDay = await mapLimit(dates, DAY_LOOKUPS_AT_ONCE, async (date) => asThem(async () => withLeaveAndNoShow(orgId, date, await roster(orgId, date, workplaceId, includeSimulated, sites))));
   for (const [i, date] of dates.entries()) {
     const isToday = date === today.toISODate();
     const byEmployee = new Map<string, any[]>();
@@ -416,7 +418,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
       const wp = query.workplaceId ?? null;
       const rows = await withLeaveAndNoShow(org, date, await roster(org, date, wp, true, user.sites));
       // p = placeholder of the company id, s = of the supervisor's sites (null for owners)
-      const inOrg = (p: string, s: string) => `employee_id IN (SELECT id FROM users WHERE org_id = ${p}) AND ${siteFilter(employeeSite('employee_id'), s)}`;
+      const inOrg = (p: string, s: string) => `employee_id IN (SELECT id FROM users WHERE org_id = ${p}) AND ${siteFilter(employeeSite('employee_id'), s, 'employee_id')}`;
       // Sessions and attendance carry the rostered workplace, so they are scoped by where the work happens
       // (an employee rostered away from their home workplace still counts for that site's supervisor).
       const orgOnly = (p: string) => `employee_id IN (SELECT id FROM users WHERE org_id = ${p})`;
@@ -429,11 +431,11 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 count(*) FILTER (WHERE state IN ('TRACKING_INTERRUPTED', 'TRACKING_PERMISSION_REQUIRED'))::int AS interrupted,
                 count(*) FILTER (WHERE state = 'MANUAL_REVIEW_REQUIRED')::int AS review,
                 count(*)::int AS open
-         FROM tracking_sessions WHERE ended_at IS NULL AND ($1::uuid IS NULL OR workplace_id = $1) AND ${orgOnly('$2')} AND ${siteFilter('workplace_id', '$3')}`,
+         FROM tracking_sessions WHERE ended_at IS NULL AND ($1::uuid IS NULL OR workplace_id = $1) AND ${orgOnly('$2')} AND ${siteFilter('workplace_id', '$3', 'employee_id')}`,
         [wp, org, user.sites],
       );
       const late = await one(
-        `SELECT count(*)::int AS n FROM attendance_records ar WHERE shift_date = $1 AND is_late AND ${attendanceCounts()} AND ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4')}`,
+        `SELECT count(*)::int AS n FROM attendance_records ar WHERE shift_date = $1 AND is_late AND ${attendanceCounts()} AND ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4', 'ar.employee_id')}`,
         [date, wp, org, user.sites],
       );
       const openReviews = await one(`SELECT count(*)::int AS n FROM review_requests WHERE status = 'OPEN' AND kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') AND ${inOrg('$1', '$2')}`, [org, user.sites]);
@@ -443,7 +445,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
         `SELECT COALESCE(SUM(ROUND(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - started_at)) / 60)) FILTER (WHERE shift_date = $1), 0)::int AS today_minutes,
                 COALESCE(SUM(approved_minutes) FILTER (WHERE shift_date = $1 AND status = 'APPROVED'), 0)::int AS today_approved_minutes,
                 count(*) FILTER (WHERE status = 'PENDING' AND ended_at IS NOT NULL)::int AS pending
-         FROM overtime_entries WHERE ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4')} AND ${overtimeCounts('overtime_entries')}`,
+         FROM overtime_entries WHERE ($2::uuid IS NULL OR workplace_id = $2) AND ${orgOnly('$3')} AND ${siteFilter('workplace_id', '$4', 'employee_id')} AND ${overtimeCounts('overtime_entries')}`,
         [date, wp, org, user.sites],
       );
       const employees = new Set(rows.map((r) => r.employee_id));
@@ -524,7 +526,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 count(*) FILTER (WHERE ar.verification_status = 'PENDING_VERIFICATION')::int AS pending_verification
          FROM attendance_records ar JOIN workplaces w ON w.id = ar.workplace_id
          WHERE w.org_id = $5 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4 OR NOT ar.is_simulated) AND ar.verification_status <> 'VOIDED'
-           AND ($6::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$6')}))
+           AND ($6::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$6')})) AND ${supervisorTeam('$6', 'ar.employee_id')}
          GROUP BY ar.shift_date, w.name ORDER BY ar.shift_date DESC, w.name`,
         [query.from, query.to, query.workplaceId ?? null, query.includeSimulated === 'true', user.orgId, query.supervisorId ?? null],
       ),
@@ -553,7 +555,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
          JOIN workplaces w ON w.id = ar.workplace_id JOIN shifts sh ON sh.id = ar.shift_id LEFT JOIN tracking_sessions s ON s.id = ar.session_id
          LEFT JOIN ${workJoinForDays('$1::date', '$2::date')}
          WHERE u.org_id = $6 AND ar.shift_date BETWEEN $1 AND $2 AND ($3::uuid IS NULL OR ar.workplace_id = $3) AND ($4::uuid IS NULL OR ar.employee_id = $4) AND ($5 OR NOT ar.is_simulated)
-           AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
+           AND ($7::uuid IS NULL OR ar.workplace_id = ANY(${SUPERVISOR_SITES('$7')})) AND ${supervisorTeam('$7', 'ar.employee_id')}
          ORDER BY ar.shift_date, w.name, sh.name, u.full_name, ar.id`,
         [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId, query.supervisorId ?? null],
       );
@@ -587,7 +589,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
                 ROUND(EXTRACT(EPOCH FROM (COALESCE(a.ended_at, now()) - a.started_at)) / 60)::int AS minutes, a.is_simulated, w.timezone
          FROM absence_intervals a JOIN users u ON u.id = a.employee_id LEFT JOIN employee_profiles ep ON ep.user_id = u.id JOIN workplaces w ON w.id = a.workplace_id
          WHERE u.org_id = $6 AND a.started_at >= ${dayStartSql('$1', '$6')} AND a.started_at < ${dayEndSql('$2', '$6')} AND ($3::uuid IS NULL OR a.workplace_id = $3) AND ($4::uuid IS NULL OR a.employee_id = $4) AND ($5 OR NOT a.is_simulated)
-           AND ($7::uuid IS NULL OR a.workplace_id = ANY(${SUPERVISOR_SITES('$7')}))
+           AND ($7::uuid IS NULL OR a.workplace_id = ANY(${SUPERVISOR_SITES('$7')})) AND ${supervisorTeam('$7', 'a.employee_id')}
          ORDER BY a.started_at, a.id`,
         [from, to, query.workplaceId ?? null, query.employeeId ?? null, query.includeSimulated === 'true', user.orgId, query.supervisorId ?? null],
       );

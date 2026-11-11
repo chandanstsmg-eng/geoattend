@@ -140,7 +140,7 @@ async function entries(user: AuthUser, from: string, to: string, workplaceId: st
      JOIN shifts sh ON sh.id = esa.shift_id
      JOIN workplaces w ON w.id = sh.workplace_id
      LEFT JOIN users m ON m.id = esa.manager_id
-     WHERE u.org_id = $1 AND u.is_active AND ${siteFilter('w.id', '$2')}
+     WHERE u.org_id = $1 AND u.is_active AND ${siteFilter('w.id', '$2', 'u.id')}
        AND esa.effective_from <= $4::date AND (esa.effective_to IS NULL OR esa.effective_to >= $3::date)
        AND ($5::uuid IS NULL OR w.id = $5) AND ($6::uuid IS NULL OR esa.manager_id = $6)
      ORDER BY u.full_name, esa.effective_from, sh.start_time
@@ -208,7 +208,7 @@ mount(rosterRouter, '/api/v1/roster', 'roster', [
           `SELECT u.id, u.full_name, ep.employee_code, w.id AS workplace_id, w.name AS workplace_name
            FROM users u JOIN employee_profiles ep ON ep.user_id = u.id
            LEFT JOIN workplace_assignments wa ON wa.employee_id = u.id AND wa.effective_to IS NULL LEFT JOIN workplaces w ON w.id = wa.workplace_id
-           WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND u.is_active AND ${siteFilter('wa.workplace_id', '$2')} AND ($3::uuid IS NULL OR wa.workplace_id = $3)
+           WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND u.is_active AND ${siteFilter('wa.workplace_id', '$2', 'u.id')} AND ($3::uuid IS NULL OR wa.workplace_id = $3)
            ORDER BY u.full_name`,
           [user.orgId, user.sites, query.workplaceId ?? null],
         )

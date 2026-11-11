@@ -128,7 +128,7 @@ mount(devicesRouter, '/api/v1/devices', 'devices', [
     access: 'admin',
     query: z.object({ status: z.enum(['APPROVED', 'PENDING', 'REVOKED']).optional(), employeeId: z.uuid().optional() }),
     handler: async ({ query, user }) =>
-      q(`${SELECT} WHERE u.org_id = $3 AND ${siteFilter(employeeSite('u.id'), '$4')} AND ($1::text IS NULL OR d.status = $1) AND ($2::uuid IS NULL OR d.user_id = $2) AND u.role = 'EMPLOYEE' ORDER BY (d.status = 'PENDING') DESC, d.last_seen_at DESC LIMIT 200`, [query.status ?? null, query.employeeId ?? null, user.orgId, user.sites]),
+      q(`${SELECT} WHERE u.org_id = $3 AND ${siteFilter(employeeSite('u.id'), '$4', 'u.id')} AND ($1::text IS NULL OR d.status = $1) AND ($2::uuid IS NULL OR d.user_id = $2) AND u.role = 'EMPLOYEE' ORDER BY (d.status = 'PENDING') DESC, d.last_seen_at DESC LIMIT 200`, [query.status ?? null, query.employeeId ?? null, user.orgId, user.sites]),
   }),
   route({
     method: 'post',

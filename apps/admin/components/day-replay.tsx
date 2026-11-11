@@ -85,6 +85,7 @@ function Replay({ status, locations, timeline }: { status: any; locations: any[]
           <p className="text-gray-600">{metres(cur.distance_m)} from centre · ±{Math.round(cur.accuracy_m)} m</p>
           {state && <Badge tone={inside ? 'green' : 'amber'}>{STATE_LABELS[state] ?? state}</Badge>}
           {cur.is_mocked && <Badge tone="red">mock location</Badge>}
+          {cur.suspect_reason && <Badge tone="amber" title="Kept on the trail, not used for attendance or alerts">ignored: {Math.round(cur.implied_speed_kmh)} km/h jump</Badge>}
         </div>
       </div>
 

@@ -177,6 +177,8 @@ export async function submitAttendance(employeeId: string, input: SubmitInput, a
     const ingest = await ingestLocked(db, outbox, s, [{ ...ev, source: actor === 'SIMULATOR' ? 'SIMULATOR' : 'SUBMISSION' }], actor, now);
     const r0 = ingest.results[0];
     if (r0?.status === 'REJECTED') return fail(db, outbox, s, 'EVIDENCE_INVALID', `The location evidence was rejected (${r0.reason}).`);
+    // Approved policy (Phase I): an impossible jump never records attendance, even when it lands inside the area.
+    if (r0?.suspect) return fail(db, outbox, s, 'EVIDENCE_IMPLAUSIBLE', 'Your location jumped further than is possible since the last reading. Wait for a fresh GPS fix and retry.');
 
     // The state machine may just have re-locked attendance (employee left before submitting).
     if (!offline && s.state !== 'ATTENDANCE_SUBMISSION_PENDING' && s.state !== 'ATTENDANCE_READY') {
@@ -689,7 +691,7 @@ export async function overrideFaceRejection(owner: AuthUser, attendanceId: strin
 }
 
 /** Admin-entered attendance when no device evidence exists (e.g. broken phone). Always MANUAL_APPROVED and audited. */
-export async function createManualAttendance(admin: AuthUser, input: { employeeId: string; shiftId: string; shiftDate: string; recordedAt: string; workedMinutes?: number; reason: string }, req?: any) {
+export async function createManualAttendance(admin: AuthUser, input: { employeeId: string; shiftId: string; shiftDate: string; recordedAt: string; workedMinutes?: number; reason: string; extraDay?: boolean }, req?: any) {
   return tx(async (db) => {
     await assertPayrollMonthOpen(admin.orgId, input.shiftDate, db);
     const shift = await one(
@@ -703,7 +705,10 @@ export async function createManualAttendance(admin: AuthUser, input: { employeeI
     if (input.shiftDate > today) throw new HttpError(400, 'FUTURE_DATE', 'Attendance cannot be entered for a day that has not happened yet.');
     if (new Date(input.recordedAt).getTime() > Date.now() + 5 * 60_000) throw new HttpError(400, 'FUTURE_TIME', 'The arrival time is in the future.');
     const asThen = await one(
-      `SELECT COALESCE(rev.start_time, sh.start_time)::text AS start_time, COALESCE(rev.end_time, sh.end_time)::text AS end_time FROM shifts sh
+      `SELECT COALESCE(rev.start_time, sh.start_time)::text AS start_time, COALESCE(rev.end_time, sh.end_time)::text AS end_time,
+              EXTRACT(ISODOW FROM $2::date)::smallint = ANY (COALESCE(rev.days_of_week, sh.days_of_week)) AS working_day,
+              to_char($2::date, 'FMDay') AS weekday
+       FROM shifts sh
        LEFT JOIN LATERAL (SELECT r.* FROM shift_revisions r WHERE r.shift_id = sh.id AND $2::date <= r.valid_to AND (r.valid_from IS NULL OR $2::date >= r.valid_from) ORDER BY r.valid_to LIMIT 1) rev ON true
        WHERE sh.id = $1`,
       [shift.id, input.shiftDate],
@@ -713,23 +718,33 @@ export async function createManualAttendance(admin: AuthUser, input: { employeeI
     if (input.workedMinutes != null && input.workedMinutes > scheduled) {
       throw new HttpError(400, 'TOO_MANY_MINUTES', `Worked time cannot be longer than the shift (${scheduled} min). Record extra time as overtime.`);
     }
+    // Approved policy (Phase I): work on a day the shift does not run is recorded only as an explicit extra day,
+    // with a full reason, and counts only with the owner's approval (a supervisor's entry waits for the owner,
+    // like every supervisor entry). An extra day is never late: nobody was expected at the shift's start.
+    const extraDay = !asThen.working_day;
+    if (extraDay && !input.extraDay) {
+      throw conflict('NOT_A_WORKING_DAY', `This shift does not run on ${asThen.weekday}. To record work on a day off, add it as an extra day with the reason.`);
+    }
+    if (!extraDay && input.extraDay) throw badRequest('IS_A_WORKING_DAY', 'This shift runs on that day: record it as normal attendance, not as an extra day.');
+    if (extraDay && input.reason.trim().length < 10) throw badRequest('REASON_REQUIRED', 'Give the reason for the extra day (at least 10 characters), for example "Stocktaking on Sunday".');
     // A supervisor's entry is a correction: like other supervisor corrections it waits for the owner and does not count until then.
     const byOwner = admin.access === 'OWNER';
     const wp = await one('SELECT * FROM workplaces WHERE id = $1', [shift.workplace_id], db);
     const emp = await one('SELECT is_demo FROM users WHERE id = $1', [input.employeeId], db);
     const start = await shiftStartOn(db, shift.id, input.shiftDate);
     assertArrivalOnShift(input.recordedAt, start.at);
-    const { isLate, lateBy } = lateness(new Date(input.recordedAt), start.at, start.grace);
+    const { isLate, lateBy } = extraDay ? { isLate: false, lateBy: 0 } : lateness(new Date(input.recordedAt), start.at, start.grace);
+    const flags = [...(byOwner ? ['ADMIN_ENTERED'] : ['ADMIN_ENTERED', 'SUPERVISOR_ENTERED']), ...(extraDay ? ['EXTRA_DAY'] : [])];
     const rec = await one(
       `INSERT INTO attendance_records (employee_id, workplace_id, shift_id, shift_date, recorded_at, idempotency_key, radius_m_at_record, verification_status, risk_flags, is_simulated, is_late, late_by_minutes, manual_worked_minutes, approved_by, approved_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$13,$14,$8,$9,$10,$11,$12,CASE WHEN $12::uuid IS NULL THEN NULL ELSE now() END)
        ON CONFLICT (employee_id, shift_id, shift_date) DO NOTHING RETURNING *`,
       [input.employeeId, wp.id, shift.id, input.shiftDate, input.recordedAt, `manual:${crypto.randomUUID()}`, wp.radius_m, emp?.is_demo ?? false, isLate, lateBy, input.workedMinutes ?? null, byOwner ? admin.id : null,
-        byOwner ? 'MANUAL_APPROVED' : 'PENDING_VERIFICATION', byOwner ? ['ADMIN_ENTERED'] : ['ADMIN_ENTERED', 'SUPERVISOR_ENTERED']],
+        byOwner ? 'MANUAL_APPROVED' : 'PENDING_VERIFICATION', flags],
       db,
     );
     if (!rec) throw conflict('ALREADY_RECORDED', 'An attendance record already exists for this employee, shift and date.');
-    await audit({ actor: admin, action: 'attendance.manual_create', resourceType: 'attendance_record', resourceId: rec.id, after: rec, reason: input.reason, req }, db);
+    await audit({ actor: admin, action: extraDay ? 'attendance.extra_day' : 'attendance.manual_create', resourceType: 'attendance_record', resourceId: rec.id, after: { ...rec, weekday: extraDay ? asThen.weekday : undefined }, reason: input.reason, req }, db);
     return rec;
   });
 }

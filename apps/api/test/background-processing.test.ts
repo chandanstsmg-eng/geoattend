@@ -482,6 +482,11 @@ describe('summaries', () => {
     const nameOf = (id: string) => names.find((n) => n.id === id)!.full_name;
     const sup = await one(`INSERT INTO users (email, password_hash, role, full_name, org_id) VALUES ($1,'x','ADMIN','Sup',$2) RETURNING id, email`, [`sup-${crypto.randomUUID()}@test.local`, B.org]);
     await q(`INSERT INTO administrator_profiles (user_id, access, site_ids) VALUES ($1,'SUPERVISOR',$2)`, [sup.id, [B.workplaceId]]);
+    // Phase I visibility policy: their own team at their own sites. A worker at the site in nobody's team is left out too.
+    await q(`UPDATE employee_profiles SET supervisor_id = $1 WHERE user_id = $2`, [sup.id, mine.id]);
+    const unassigned = await createEmployee({ workplaceId: B.workplaceId, orgId: B.org });
+    await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,'2020-01-01')`, [unassigned.id, B.shiftId]);
+    const unassignedName = (await one(`SELECT full_name FROM users WHERE id = $1`, [unassigned.id])).full_name;
     await digest(B, { supervisorSummaries: true, emailRecipients: [] });
     const mail = captured();
     await sweepDigests(monday());
@@ -489,6 +494,7 @@ describe('summaries', () => {
     expect(forSup).toHaveLength(1);
     expect(forSup[0]!.csv).toContain(nameOf(mine.id));
     expect(forSup[0]!.csv).not.toContain(nameOf(theirs.id));
+    expect(forSup[0]!.csv).not.toContain(`,${unassignedName},`);
   });
 
   it('an employee\'s summary keeps pending days out of the count and says so', () => {

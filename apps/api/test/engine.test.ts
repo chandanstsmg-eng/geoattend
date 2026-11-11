@@ -54,10 +54,28 @@ describe('arrival', () => {
     expect(r.state).toBe('TRACKING_ACTIVE');
   });
 
-  it('re-locks attendance when the employee leaves before submitting (scenario 4)', () => {
-    const r = evaluate(session({ state: 'ATTENDANCE_SUBMISSION_PENDING' }), { distanceM: 80, accuracyM: 8, time: at(0) }, rules);
-    expect(r.state).toBe('OUTSIDE_GEOFENCE');
-    expect(r.effects.map((e) => e.kind)).toContain('CANCEL_SUBMISSION');
+  // Approved policy (Phase I): before attendance, leaving is confirmed like leaving after it (exitMinReadings over
+  // exitStabilizationSec); one stray reading no longer re-locks. Scenario 4 itself (a real departure) still re-locks.
+  it('re-locks attendance when the employee leaves before submitting, once the departure is confirmed (scenario 4)', () => {
+    const { results } = run(session({ state: 'ATTENDANCE_SUBMISSION_PENDING' }), [[0, 80, 8], [rules.exitStabilizationSec, 85, 8]]);
+    expect(results[0]!.state).toBe('ATTENDANCE_SUBMISSION_PENDING'); // one reading: not yet
+    expect(results[0]!.effects).toEqual([]);
+    expect(results[1]!.state).toBe('OUTSIDE_GEOFENCE');
+    expect(results[1]!.effects.map((e) => e.kind)).toEqual(['CANCEL_SUBMISSION', 'GEOFENCE_EVENT']);
+    expect(results[1]!.effects[1]).toMatchObject({ eventType: 'LEFT_BEFORE_ATTENDANCE', details: { departedAt: at(0).toISOString(), readings: 2 } });
+  });
+
+  it('a single stray reading before attendance does not re-lock, and a reading inside cancels it', () => {
+    const { final, results } = run(session({ state: 'ATTENDANCE_READY' }), [[0, 400, 8], [10, 8, 6], [rules.exitStabilizationSec + 5, 400, 8]]);
+    expect(results.map((r) => r.state)).toEqual(['ATTENDANCE_READY', 'ATTENDANCE_READY', 'ATTENDANCE_READY']);
+    expect(results[1]!.reason).toContain('departure candidate cancelled');
+    expect(final.candidateCount).toBe(1); // the third reading starts a new candidate, it does not finish the old one
+  });
+
+  it('never infers a departure before attendance from an uncertain reading', () => {
+    const { results } = run(session({ state: 'ATTENDANCE_READY' }), [[0, 80, 8], [30, 80, 60], [rules.exitStabilizationSec, 28, 12]]);
+    expect(results.every((r) => r.state === 'ATTENDANCE_READY')).toBe(true);
+    expect(results[1]!.candidateCount).toBe(1); // an inaccurate reading neither counts nor cancels
   });
 
   it('a single outside reading during the candidate phase resets it', () => {
