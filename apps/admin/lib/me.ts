@@ -10,8 +10,18 @@ export interface Me {
   demoMode: boolean;
   /** The generated sample company (a *_demo database): show the sample-data banner and chip. */
   sampleData?: boolean;
-  /** Parts of the product switched on for this server. */
-  features?: { payroll: boolean };
+  /** Optional modules switched on for this company's plan (payroll also needs the server switch). */
+  features?: { payroll: boolean; announcements?: boolean; tasks?: boolean; overtime?: boolean };
+  /** The company's edition and subscription; limits and usage are sent to owners only. */
+  plan?: Plan;
+}
+
+export type SubscriptionState = 'ACTIVE' | 'TRIAL' | 'EXPIRING' | 'GRACE' | 'EXPIRED';
+export interface Plan {
+  edition: { code: string; name: string };
+  subscription: { status: 'TRIAL' | 'ACTIVE' | 'CANCELLED'; startsOn: string | null; endsOn: string | null; state: SubscriptionState; daysLeft: number | null; readOnly: boolean };
+  limits?: { employees: number | null; supervisors: number | null };
+  usage?: { employees: number; supervisors: number; owners: number };
 }
 
 /** The signed-in administrator (shared cache with the dashboard layout). */

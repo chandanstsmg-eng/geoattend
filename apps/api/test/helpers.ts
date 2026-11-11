@@ -7,6 +7,7 @@ import { closePool, initPool, one, prepareTenantLogin, q } from '../src/db/pool.
 import { migrate } from '../src/db/migrate.js';
 import { hashPassword } from '../src/lib/password.js';
 import { DEFAULT_ORG_ID } from '../src/lib/tenancy.js';
+import { invalidatePlatformSettings } from '../src/lib/company.js';
 import { DEFAULT_SETTINGS, invalidateSettings, saveSettingsSection } from '../src/modules/settings/settings.service.js';
 
 export const WP = { lat: 12.9716, lng: 77.5946 };
@@ -28,6 +29,10 @@ export async function createTestDatabase() {
   const pool = initPool(await ensureDatabase(name));
   await migrate(pool);
   await prepareTenantLogin();
+  // Companies that sign themselves up start on the Starter trial. Tests about other things keep every module and no
+  // limit, as every company had before editions existed; test/platform.test.ts restores the real default.
+  await q(`UPDATE platform_settings SET value = jsonb_set(value, '{editionCode}', '"ENTERPRISE"') WHERE key = 'signup'`);
+  invalidatePlatformSettings();
   invalidateSettings();
   await testSettings(DEFAULT_ORG_ID);
   return {

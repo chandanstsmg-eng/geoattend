@@ -38,6 +38,7 @@ import { broadcastsRouter, sosRouter } from './modules/sos/sos.routes.js';
 import { overtimeRouter } from './modules/overtime/overtime.routes.js';
 import { analyticsRouter } from './modules/reports/analytics.routes.js';
 import { hasOpsToken, opsRouter } from './modules/ops/ops.routes.js';
+import { platformAuthRouter, platformRouter } from './modules/platform/platform.routes.js';
 
 export function createApp() {
   const app = express();
@@ -150,6 +151,9 @@ export function createApp() {
   app.use('/api/v1/overtime', overtimeRouter);
   app.use('/api/v1/analytics', analyticsRouter);
   app.use('/api/v1/ops', opsRouter);
+  // Platform administration: separate accounts, separate sign-in (lib/platform-auth.ts).
+  app.use('/api/v1/platform/auth', platformAuthRouter);
+  app.use('/api/v1/platform', platformRouter);
   if (config.demoMode) app.use('/api/v1/demo', demoRouter);
 
   // The API map is for development; production does not publish it.

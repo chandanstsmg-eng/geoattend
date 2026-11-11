@@ -10,6 +10,8 @@ import { hashPassword, passwordPolicyError } from '../../lib/password.js';
 import { revokeAllForUser, type AuthUser } from '../../lib/auth.js';
 import { assertInOrg, siteFilter, emailTaken } from '../../lib/tenancy.js';
 import { audit } from '../../lib/audit.js';
+import { assertWithinLimit } from '../../lib/company.js';
+import { issueAccountToken, sendInvitation, unusablePassword } from '../../lib/account-tokens.js';
 import { endSession } from '../tracking/tracking.service.js';
 import { addRosterEntry, rosterEntryBody } from '../roster/roster.js';
 import { defaultDate } from '../reports/reports.routes.js';
@@ -86,26 +88,31 @@ export function tempPassword() {
 /** Creates one employee account (and optional workplace / shift assignment) inside `db`. */
 async function createEmployee(
   db: Queryable,
-  body: z.infer<typeof employeeBody> & { password?: string; workplaceId?: string; shiftId?: string },
+  body: z.infer<typeof employeeBody> & { password?: string; workplaceId?: string; shiftId?: string; delivery?: 'temporary-password' | 'invitation' },
   actor: AuthUser,
   req: Request,
   action = 'employee.create',
 ) {
-  const password = body.password || tempPassword();
+  const invite = body.delivery === 'invitation';
+  if (invite && body.password) throw badRequest('PASSWORD_WITH_INVITATION', 'An invited employee chooses their own password: leave the password empty.');
+  // Invited: nobody knows the password until the employee chooses one from the link.
+  const password = invite ? unusablePassword() : body.password || tempPassword();
   const policy = passwordPolicyError(password);
   if (policy) throw badRequest('WEAK_PASSWORD', policy);
+  await assertWithinLimit('employee', actor.orgId, db);
   if (await emailTaken(body.email)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
   if (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND org_id = $2', [body.employeeCode, actor.orgId], db)) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
   if (body.workplaceId) await assertInOrg('workplace', body.workplaceId, actor.orgId);
   const u = await one(
     `INSERT INTO users (email, password_hash, role, full_name, must_change_password, org_id) VALUES ($1,$2,'EMPLOYEE',$3,$4,$5) RETURNING id`,
-    [body.email, await hashPassword(password), body.fullName, !body.password, actor.orgId],
+    [body.email, await hashPassword(password), body.fullName, !body.password && !invite, actor.orgId],
     db,
   );
   await q(`INSERT INTO employee_profiles (user_id, employee_code, phone, department, designation, joined_on) VALUES ($1,$2,$3,$4,$5,$6)`, [u.id, body.employeeCode, body.phone ?? null, body.department ?? null, body.designation ?? null, body.joinedOn ?? null], db);
   if (body.workplaceId) await q(`INSERT INTO workplace_assignments (employee_id, workplace_id, created_by, effective_from) VALUES ($1,$2,$3,(SELECT ${localDaySql('w.timezone')} FROM workplaces w WHERE w.id = $2))`, [u.id, body.workplaceId, actor.id], db);
   if (body.shiftId) await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, created_by, effective_from) VALUES ($1,$2,$3,(SELECT ${localDaySql('sh.timezone')} FROM shifts sh WHERE sh.id = $2))`, [u.id, body.shiftId, actor.id], db);
   await audit({ actor, action, resourceType: 'user', resourceId: u.id, after: { ...body, password: undefined }, req }, db);
+  if (invite) return { id: u.id as string, invitation: await issueAccountToken(u.id, 'INVITE', actor.id, db) };
   return { id: u.id as string, temporaryPassword: body.password ? undefined : password };
 }
 
@@ -141,13 +148,21 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
   route({
     method: 'post',
     path: '/',
-    summary: 'Create an employee (returns a one-time temporary password)',
+    summary: 'Create an employee: a one-time temporary password (default), or an invitation link to choose their own',
     access: 'admin',
     ownerOnly: true,
-    body: employeeBody.extend({ password: z.string().max(200).optional(), workplaceId: z.uuid().optional() }),
+    body: employeeBody.extend({
+      password: z.string().max(200).optional(),
+      workplaceId: z.uuid().optional(),
+      delivery: z.enum(['temporary-password', 'invitation']).default('temporary-password'),
+    }),
     handler: async ({ body, user, req, res }) => {
       const created = await tx((db) => createEmployee(db, body, user, req));
       res.status(201);
+      if (created.invitation) {
+        const emailed = await sendInvitation(created.id, created.invitation);
+        return { employee: await loadEmployee(created.id), invitation: { url: created.invitation.url, expiresAt: created.invitation.expiresAt, emailed } };
+      }
       return { employee: await loadEmployee(created.id), temporaryPassword: created.temporaryPassword };
     },
   }),
@@ -265,8 +280,9 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     params: idParams,
     scope: 'employee',
     handler: async ({ params, user, req }) => {
-      await loadEmployee(params.id);
+      const current = await loadEmployee(params.id);
       const ended = await tx(async (db) => {
+        if (!current.is_active) await assertWithinLimit('employee', user.orgId, db);
         // The roster in force when they left ends on their last day. Otherwise clearing the leaving date below
         // would make every day away an expected shift, and so an absence. Entries that only began after they
         // left never applied, and are removed. The rows are kept in the audit entry.
@@ -299,6 +315,24 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
       await revokeAllForUser(params.id);
       await audit({ actor: user, action: 'employee.reset_password', resourceType: 'user', resourceId: params.id, req });
       return { temporaryPassword: pw };
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/invitation',
+    summary: 'Send a new invitation link to an employee who has not signed in yet (the previous link stops working)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'employee',
+    handler: async ({ params, user, req }) => {
+      const e = await loadEmployee(params.id);
+      if (!e.is_active) throw conflict('INACTIVE', 'Reactivate this employee first.');
+      if (e.last_login_at) throw conflict('ALREADY_SIGNED_IN', 'This employee has already signed in. Use “Reset password” instead.');
+      const link = await tx((db) => issueAccountToken(params.id, 'INVITE', user.id, db));
+      const emailed = await sendInvitation(params.id, link);
+      await audit({ actor: user, action: 'employee.invite', resourceType: 'user', resourceId: params.id, after: { emailed }, req });
+      return { invitation: { url: link.url, expiresAt: link.expiresAt, emailed } };
     },
   }),
   route({

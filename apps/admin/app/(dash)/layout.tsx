@@ -18,6 +18,7 @@ import {
   Inbox,
   LayoutDashboard,
   Megaphone,
+  MonitorSmartphone,
   LogOut,
   Map as MapIcon,
   Menu as MenuIcon,
@@ -100,6 +101,14 @@ const NAV: NavGroup[] = [
   },
 ];
 
+/** Pages of an optional module are shown only when the company's plan includes it (the API refuses them otherwise). */
+const MODULE_PAGES: Record<string, 'payroll' | 'announcements' | 'overtime'> = { '/payroll': 'payroll', '/announcements': 'announcements', '/overtime': 'overtime' };
+const moduleOn = (href: string, me: Me) => {
+  const m = MODULE_PAGES[href];
+  if (!m) return true;
+  return m === 'payroll' ? !!me.features?.payroll : me.features?.[m] !== false;
+};
+
 const isActive = (href: string, path: string) => (href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`));
 
 /** Sidebar preferences survive reloads; a blocked or empty storage just means the defaults. */
@@ -179,7 +188,7 @@ const initials = (name: string) =>
     .map((p) => p[0]!.toUpperCase())
     .join('');
 
-function UserMenu({ me, isOwner, onAway, onSignOut }: { me: Me; isOwner: boolean; onAway: () => void; onSignOut: () => void }) {
+function UserMenu({ me, isOwner, onAway, onSessions, onSignOut }: { me: Me; isOwner: boolean; onAway: () => void; onSessions: () => void; onSignOut: () => void }) {
   const away = isAway(me.access?.awayUntil);
   const back = useSetAway();
   return (
@@ -218,6 +227,7 @@ function UserMenu({ me, isOwner, onAway, onSignOut }: { me: Me; isOwner: boolean
           ? { label: <>I’m back <span className="ml-auto text-xs text-gray-500">away until {fmtDate(me.access!.awayUntil)}</span></>, icon: <Plane />, onSelect: () => back.mutate(null) }
           : { label: 'Set away status…', icon: <Plane />, onSelect: onAway },
         { label: 'Notifications', icon: <Bell />, href: '/notifications' },
+        { label: 'Signed-in devices', icon: <MonitorSmartphone />, onSelect: onSessions },
         ...(isOwner ? [{ label: 'Settings', icon: <Settings />, href: '/settings' }] : []),
         'separator',
         { label: 'Sign out', icon: <LogOut />, onSelect: onSignOut },
@@ -232,6 +242,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
   const [open, setOpen] = useState(false); // phone / tablet drawer
   const [prefs, setPrefs] = useState(loadPrefs);
   const [awayOpen, setAwayOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [tip, setTip] = useState<{ label: string; top: number } | null>(null);
   // Phone menu as a dialog: focus moves into it when it opens, the page behind is inert while it is open,
   // and closing it yourself (Escape, the X, the backdrop) returns focus to the menu button.
@@ -281,7 +292,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
   const ownerPage = NAV.flatMap((g) => g.items).some((n) => n.owner && isActive(n.href, path));
   // Supervisors see day-to-day pages only (the API refuses the rest anyway).
   const groups = (me.demoMode ? [...NAV, { title: 'Demo', items: [{ href: '/demo', label: 'Demo simulator', icon: FlaskConical, owner: true }] }] : NAV)
-    .map((g) => ({ ...g, items: g.items.filter((n) => (isOwner || !n.owner) && (n.href !== '/payroll' || me.features?.payroll)) }))
+    .map((g) => ({ ...g, items: g.items.filter((n) => (isOwner || !n.owner) && moduleOn(n.href, me)) }))
     .filter((g) => g.items.length > 0);
   // Arriving on a page inside a collapsed group (a link, the back button) opens that group again.
   const currentGroup = groups.find((g) => g.items.some((n) => isActive(n.href, path)))?.title;
@@ -447,13 +458,15 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
           <span className="hidden sm:inline-flex"><LiveIndicator /></span>
           <BellButton />
           <span className="hidden h-6 w-px bg-gray-200 sm:block" aria-hidden />
-          <UserMenu me={me} isOwner={isOwner} onAway={() => setAwayOpen(true)} onSignOut={signOut} />
+          <UserMenu me={me} isOwner={isOwner} onAway={() => setAwayOpen(true)} onSessions={() => setSessionsOpen(true)} onSignOut={signOut} />
         </div>
       </header>
       <SosBanner />
+      <SubscriptionBanner plan={me.plan} isOwner={isOwner} />
       {me.sampleData && <SampleBanner />}
       <main id="main" tabIndex={-1} inert={open || undefined} className="mx-auto max-w-[1600px] outline-none px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{ownerPage && !isOwner ? <EmptyState title="Not available">This page is for company owners.</EmptyState> : children}</main>
       <AwayDialog open={awayOpen} onOpenChange={setAwayOpen} />
+      <SessionsDialog open={sessionsOpen} onOpenChange={setSessionsOpen} />
     </div>
   );
 }
@@ -497,6 +510,8 @@ function SampleBanner() {
 }
 
 import { ChangePassword } from '@/components/change-password';
+import { SessionsDialog } from '@/components/sessions-dialog';
+import { SubscriptionBanner } from '@/components/subscription-banner';
 
 export default function DashLayout({ children }: { children: ReactNode }) {
   const me = useQuery({ queryKey: ['me'], queryFn: () => get<Me>('/auth/me'), retry: false, staleTime: 5 * 60_000 });

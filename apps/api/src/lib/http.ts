@@ -8,9 +8,12 @@ import { z } from 'zod';
 import { asSystem, withOrg } from '../db/pool.js';
 import { HttpError } from './errors.js';
 import { requireAuth, type AuthUser } from './auth.js';
+import { requirePlatform, type PlatformAdmin } from './platform-auth.js';
+import { FEATURE_BY_BASE } from './company.js';
 import { assertInOrg, type Scope } from './tenancy.js';
 
-export type Access = 'public' | 'authenticated' | 'admin' | 'employee';
+/** `platform`: platform super administrators only (lib/platform-auth.ts); never a company account. */
+export type Access = 'public' | 'authenticated' | 'admin' | 'employee' | 'platform';
 
 export interface RouteDef<B extends z.ZodType = z.ZodType, Q extends z.ZodType = z.ZodType, P extends z.ZodType = z.ZodType> {
   method: 'get' | 'post' | 'put' | 'patch' | 'delete';
@@ -32,6 +35,8 @@ export interface RouteDef<B extends z.ZodType = z.ZodType, Q extends z.ZodType =
     req: Request;
     res: Response;
     user: AuthUser;
+    /** Platform routes only: the signed-in platform administrator. */
+    platform: PlatformAdmin;
     body: z.infer<B>;
     query: z.infer<Q>;
     params: z.infer<P>;
@@ -59,19 +64,26 @@ function parse<T extends z.ZodType>(schema: T | undefined, value: unknown, where
 }
 
 export function mount(router: Router, basePath: string, tag: string, defs: RouteDef<any, any, any>[]) {
+  // An optional module (announcements, tasks, overtime, payroll): its administrator routes need it in the company's plan.
+  const feature = FEATURE_BY_BASE[basePath];
   for (const def of defs) {
     registry.push({ tag, fullPath: basePath + def.path, def });
-    const guards = def.access === 'public' ? [] : [requireAuth(def.access === 'authenticated' ? undefined : def.access === 'admin' ? 'ADMIN' : 'EMPLOYEE')];
+    const guards =
+      def.access === 'public' ? [] : def.access === 'platform' ? [requirePlatform()] : [requireAuth(def.access === 'authenticated' ? undefined : def.access === 'admin' ? 'ADMIN' : 'EMPLOYEE')];
     router[def.method](def.path, ...(def.pre ?? []), ...guards, async (req: Request, res: Response, next: NextFunction) => {
       const user = (req as any).user as AuthUser | undefined;
+      const platform = (req as any).platformAdmin as PlatformAdmin | undefined;
       const run = async () => {
+        if (feature && def.access === 'admin' && user?.company && !user.company.features[feature]) {
+          throw new HttpError(403, 'FEATURE_NOT_IN_PLAN', 'This module is not part of your GeoAttend plan.', { feature });
+        }
         if (def.ownerOnly && user?.access !== 'OWNER') throw new HttpError(403, 'OWNER_ONLY', 'Only the company owner can do this.');
         const params = parse(def.params, req.params, 'path parameters');
         // Before body validation, so another company's ids always answer 404 and nothing else.
         if (def.scope) await assertInOrg(def.scope, (params as { id: string }).id, user!.orgId, user!.sites);
         const body = parse(def.body, req.body, 'request body');
         const query = parse(def.query, req.query, 'query parameters');
-        const result = await def.handler({ req, res, user: (req as any).user, body, query, params });
+        const result = await def.handler({ req, res, user: (req as any).user, platform: platform!, body, query, params });
         if (def.raw || res.headersSent) return;
         if (result === undefined) res.status(204).end();
         else res.json(result);
@@ -79,8 +91,8 @@ export function mount(router: Router, basePath: string, tag: string, defs: Route
       try {
         // A signed-in user's request reaches only their company's rows, enforced by the database; a supervisor's
         // also only their own team's employees (lib/tenancy.ts teamFilter). Public routes (sign-in, sign-up,
-        // refresh) work before anyone is known.
-        await (user ? withOrg(user.orgId, run, user.access === 'SUPERVISOR' ? user.id : null) : asSystem(run));
+        // refresh) work before anyone is known. Platform routes span companies by design (lib/platform-auth.ts).
+        await (user && def.access !== 'platform' ? withOrg(user.orgId, run, user.access === 'SUPERVISOR' ? user.id : null) : asSystem(run));
       } catch (err) {
         next(err);
       }

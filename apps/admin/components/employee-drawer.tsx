@@ -11,6 +11,7 @@ import { RosterEntryForm } from './roster-form';
 import { PayForm } from './pay-form';
 import { DayReplay } from './day-replay';
 import { useMe } from '@/lib/me';
+import { InvitationResult, type Invitation } from './invitation';
 
 export function EmployeeDrawer({ employeeId, onClose }: { employeeId: string | null; onClose: () => void }) {
   return (
@@ -123,6 +124,8 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
   const deactivate = useMutation({ meta: { success: 'Employee deactivated' }, mutationFn: () => post(`/employees/${e.id}/deactivate`, { reason }), onSuccess: () => { setReasonFor(null); setReason(''); onChanged(); } });
   const reactivate = useMutation({ meta: { success: 'Employee reactivated', toastError: true }, mutationFn: () => post(`/employees/${e.id}/reactivate`), onSuccess: onChanged });
   const resetPw = useMutation({ mutationFn: () => post(`/employees/${e.id}/reset-password`), onSuccess: (r: any) => setTempPw(r.temporaryPassword) });
+  const [invitation, setInvitation] = useState<Invitation | null>(null);
+  const reinvite = useMutation({ mutationFn: () => post(`/employees/${e.id}/invitation`), onSuccess: (r: any) => setInvitation(r.invitation) });
 
   const set = (k: keyof typeof form) => (ev: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: ev.target.value });
 
@@ -188,6 +191,7 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
       <Card title="Account">
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => resetPw.mutate()} loading={resetPw.isPending}>Reset password</Button>
+          {e.is_active && !e.last_login_at && <Button onClick={() => reinvite.mutate()} loading={reinvite.isPending}>Send invitation again</Button>}
           {e.is_active ? (
             <Button variant="danger" onClick={() => setReasonFor('deactivate')}>Deactivate</Button>
           ) : (
@@ -195,7 +199,7 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
           )}
         </div>
         <p className="mt-2 text-xs text-gray-500">Last sign-in: {e.last_login_at ? fmtDateTime(e.last_login_at) : 'never'}. Deactivating ends any open shift session, signs the employee out everywhere and keeps all history.</p>
-        <InlineError error={resetPw.error ?? reactivate.error} />
+        <InlineError error={resetPw.error ?? reactivate.error ?? reinvite.error} />
       </Card>
 
       <Modal open={reasonFor === 'deactivate'} onOpenChange={(o) => !o && setReasonFor(null)} title={`Deactivate ${e.full_name}?`} description="A reason is required and recorded in the audit log.">
@@ -210,6 +214,9 @@ function ProfileTab({ e, onChanged }: { e: any; onChanged: () => void }) {
       </Modal>
       <Modal open={!!tempPw} onOpenChange={(o) => !o && setTempPw(null)} title="Temporary password" description="Shown once. Share it securely; the employee should change it after signing in.">
         <p className="rounded-md bg-gray-100 p-3 font-mono text-sm select-all">{tempPw}</p>
+      </Modal>
+      <Modal open={!!invitation} onOpenChange={(o) => !o && setInvitation(null)} title="New invitation link" description="The earlier link no longer works. The employee chooses their password from this one.">
+        {invitation && <InvitationResult invitation={invitation} />}
       </Modal>
     </div>
   );

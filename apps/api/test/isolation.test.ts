@@ -25,7 +25,8 @@ let A: Company;
 let B: Company;
 
 /** Tables with no company in them, which requests must not be able to touch at all. */
-const NOT_TENANT_DATA = ['schema_migrations', 'job_state', 'job_failures', 'job_runs', 'ops_alerts'];
+// Platform data (migration 032) is not any company's: the restricted login has no rights on it at all.
+const NOT_TENANT_DATA = ['schema_migrations', 'job_state', 'job_failures', 'job_runs', 'ops_alerts', 'editions', 'platform_admins', 'platform_sessions', 'platform_settings', 'platform_audit_logs'];
 
 async function company(name: string, orgId?: string) {
   const org = orgId ?? (await one(`INSERT INTO organizations (name) VALUES ($1) RETURNING id`, [name])).id;
@@ -316,9 +317,23 @@ describe('every route', () => {
     expect(r.org || null).toBeNull();
   });
 
-  it('the only public routes are the four that work before sign-in', () => {
+  it('the only public routes are the ones that work before sign-in', () => {
     const open = registry.filter((r) => r.def.access === 'public').map((r) => r.fullPath).filter((p) => !p.includes('/demo/')).sort();
-    expect(open).toEqual(['/api/v1/auth/login', '/api/v1/auth/logout', '/api/v1/auth/refresh', '/api/v1/auth/signup']);
+    expect(open).toEqual([
+      // A one-time link (reset, invitation) is used before its owner can sign in.
+      '/api/v1/auth/accept-invitation',
+      '/api/v1/auth/forgot-password',
+      '/api/v1/auth/invitation',
+      '/api/v1/auth/login',
+      '/api/v1/auth/logout',
+      '/api/v1/auth/refresh',
+      '/api/v1/auth/reset-password',
+      '/api/v1/auth/signup',
+      // Platform administrators sign in separately (lib/platform-auth.ts).
+      '/api/v1/platform/auth/login',
+      '/api/v1/platform/auth/logout',
+      '/api/v1/platform/auth/refresh',
+    ]);
   });
 });
 

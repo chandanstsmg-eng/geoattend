@@ -27,7 +27,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "demo:seed": "tsx scripts/sample-seed.ts",
-    "demo:verify": "tsx scripts/sample-verify.ts"
+    "demo:verify": "tsx scripts/sample-verify.ts",
+    "platform:admin": "tsx scripts/platform-admin.ts",
+    "demo:provision": "tsx scripts/provision-demo-company.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1157.0",

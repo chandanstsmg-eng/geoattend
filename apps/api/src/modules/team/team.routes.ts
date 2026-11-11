@@ -13,6 +13,8 @@ import { hashPassword } from '../../lib/password.js';
 import { revokeAllForUser } from '../../lib/auth.js';
 import { audit } from '../../lib/audit.js';
 import { emailTaken } from '../../lib/tenancy.js';
+import { assertWithinLimit } from '../../lib/company.js';
+import { issueAccountToken, sendInvitation, unusablePassword } from '../../lib/account-tokens.js';
 
 const SELECT = `
   SELECT u.id, u.email, u.full_name, u.is_active, u.last_login_at, ap.access, ap.site_ids, ap.away_until, ap.phone,
@@ -53,7 +55,7 @@ mount(teamRouter, '/api/v1/team', 'team', [
   route({
     method: 'post',
     path: '/',
-    summary: 'Add an owner or a supervisor (returns a one-time temporary password)',
+    summary: 'Add an owner or a supervisor: a one-time temporary password (default), or an invitation link to choose their own',
     access: 'admin',
     ownerOnly: true,
     body: z.object({
@@ -62,21 +64,44 @@ mount(teamRouter, '/api/v1/team', 'team', [
       phone: z.string().trim().max(40).optional(),
       access: z.enum(['OWNER', 'SUPERVISOR']),
       siteIds: z.array(z.uuid()).max(200).default([]),
+      delivery: z.enum(['temporary-password', 'invitation']).default('temporary-password'),
     }),
     handler: async ({ body, user, req, res }) => {
       if (body.access === 'SUPERVISOR' && !body.siteIds.length) throw badRequest('SITES_REQUIRED', 'Choose at least one workplace for a supervisor.');
       await checkSites(user.orgId, body.siteIds);
-      const password = tempPassword();
+      const invite = body.delivery === 'invitation';
+      const password = invite ? unusablePassword() : tempPassword();
       const hash = await hashPassword(password);
-      const id = await tx(async (db) => {
+      const created = await tx(async (db) => {
+        if (body.access === 'SUPERVISOR') await assertWithinLimit('supervisor', user.orgId, db);
         if (await emailTaken(body.email)) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
-        const u = await one(`INSERT INTO users (email, password_hash, role, full_name, must_change_password, org_id) VALUES ($1,$2,'ADMIN',$3,true,$4) RETURNING id`, [body.email, hash, body.fullName, user.orgId], db);
+        const u = await one(`INSERT INTO users (email, password_hash, role, full_name, must_change_password, org_id) VALUES ($1,$2,'ADMIN',$3,$4,$5) RETURNING id`, [body.email, hash, body.fullName, !invite, user.orgId], db);
         await q(`INSERT INTO administrator_profiles (user_id, phone, access, site_ids) VALUES ($1,$2,$3,$4)`, [u.id, body.phone || null, body.access, body.access === 'OWNER' ? [] : body.siteIds], db);
         await audit({ actor: user, action: 'team.add', resourceType: 'user', resourceId: u.id, after: { ...body }, req }, db);
-        return u.id as string;
+        return { id: u.id as string, link: invite ? await issueAccountToken(u.id, 'INVITE', user.id, db) : null };
       });
       res.status(201);
-      return { admin: await one(`${SELECT} WHERE u.id = $1`, [id]), temporaryPassword: password };
+      const admin = await one(`${SELECT} WHERE u.id = $1`, [created.id]);
+      if (created.link) return { admin, invitation: { url: created.link.url, expiresAt: created.link.expiresAt, emailed: await sendInvitation(created.id, created.link) } };
+      return { admin, temporaryPassword: password };
+    },
+  }),
+  route({
+    method: 'post',
+    path: '/:id/invitation',
+    summary: 'Send a new invitation link to an administrator who has not signed in yet (the previous link stops working)',
+    access: 'admin',
+    ownerOnly: true,
+    params: idParams,
+    scope: 'admin',
+    handler: async ({ params, user, req }) => {
+      const a = await one('SELECT is_active, last_login_at FROM users WHERE id = $1', [params.id]);
+      if (!a.is_active) throw conflict('INACTIVE', 'Reactivate this administrator first.');
+      if (a.last_login_at) throw conflict('ALREADY_SIGNED_IN', 'This administrator has already signed in. Use “Reset password” instead.');
+      const link = await tx((db) => issueAccountToken(params.id, 'INVITE', user.id, db));
+      const emailed = await sendInvitation(params.id, link);
+      await audit({ actor: user, action: 'team.invite', resourceType: 'user', resourceId: params.id, after: { emailed }, req });
+      return { invitation: { url: link.url, expiresAt: link.expiresAt, emailed } };
     },
   }),
   route({
@@ -96,6 +121,8 @@ mount(teamRouter, '/api/v1/team', 'team', [
       if (before.access === 'OWNER' && access === 'SUPERVISOR') await assertAnotherOwner(user.orgId, params.id);
       await checkSites(user.orgId, sites);
       await tx(async (db) => {
+        // An active owner becoming a supervisor takes up a supervisor place.
+        if (before.access !== 'SUPERVISOR' && access === 'SUPERVISOR' && before.is_active) await assertWithinLimit('supervisor', user.orgId, db);
         await q(
           `UPDATE administrator_profiles SET access = $2, site_ids = $3, away_until = CASE WHEN $4::boolean THEN $5::date ELSE away_until END WHERE user_id = $1`,
           [params.id, access, sites, 'awayUntil' in body, body.awayUntil ?? null],
@@ -144,7 +171,11 @@ mount(teamRouter, '/api/v1/team', 'team', [
         if (params.id === user.id) throw badRequest('SELF', 'You cannot deactivate yourself.');
         await assertAnotherOwner(user.orgId, params.id);
       }
-      await q('UPDATE users SET is_active = $2, updated_at = now() WHERE id = $1', [params.id, body.isActive]);
+      await tx(async (db) => {
+        const was = await one('SELECT u.is_active, ap.access FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1', [params.id], db);
+        if (body.isActive && !was.is_active && was.access === 'SUPERVISOR') await assertWithinLimit('supervisor', user.orgId, db);
+        await q('UPDATE users SET is_active = $2, updated_at = now() WHERE id = $1', [params.id, body.isActive], db);
+      });
       if (!body.isActive) {
         await revokeAllForUser(params.id);
         await unlinkStaleSupervisors(getPool(), user.orgId);

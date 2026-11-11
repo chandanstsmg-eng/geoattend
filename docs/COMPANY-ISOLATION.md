@@ -35,6 +35,9 @@ The second layer exists for the day the first has a bug.
 | Stream re-checks (`recheckClients`) | Reads whether a signed-in user is still active |
 | The operations API and alerts | For whoever runs the platform, behind `OPS_TOKEN`; job records, counts and company names only |
 | Sample company heartbeat | Development only; never in production |
+| Platform administration (`/api/v1/platform`, migration 032) | For platform super administrators only (separate accounts, key and cookies, [lib/platform-auth.ts](../apps/api/src/lib/platform-auth.ts)). Reads company registration, status, plan, active-people counts and owners' names and addresses; never attendance, locations, photos, leave or pay |
+| Reset and invitation links (`forgot-password`, `reset-password`, `invitation`, `accept-invitation`) | Nobody is signed in yet; the one-time token decides whose account it is |
+| Reading a company's edition name and the platform settings | Platform data, which the restricted login cannot read at all |
 | Migrations and scripts | They change the schema, or run by hand |
 
 ## Adding to the system

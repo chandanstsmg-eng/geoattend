@@ -14,6 +14,7 @@ import { config } from '../config.js';
 import { asSystem, one, q, tx } from '../db/pool.js';
 import { audit } from './audit.js';
 import { HttpError, forbidden, unauthorized } from './errors.js';
+import { STANDING_COLUMNS, standingFromRow, suspendedError, type CompanyStanding } from './company.js';
 
 export type Role = 'ADMIN' | 'EMPLOYEE';
 export interface AuthUser {
@@ -32,6 +33,8 @@ export interface AuthUser {
   /** The phone this sign-in belongs to, from the token, so a client cannot claim another one. */
   deviceId?: string | null;
   mustChangePassword?: boolean;
+  /** The company's standing on the platform: suspension, edition, modules, limits, subscription. */
+  company?: CompanyStanding;
 }
 
 export const ACCESS_COOKIE = 'ga_at';
@@ -39,7 +42,7 @@ export const REFRESH_COOKIE = 'ga_rt';
 export const CSRF_COOKIE = 'ga_csrf';
 
 const secret = () => new TextEncoder().encode(config.jwtSecret);
-const sha256 = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
+export const sha256 = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
 
 export async function signAccessToken(user: { id: string; role: Role }, deviceId?: string | null) {
   return new SignJWT({ role: user.role, ...(deviceId ? { did: deviceId } : {}) })
@@ -98,7 +101,7 @@ function openSuccessor(box: string, oldToken: string, requestId: string): string
 export async function rotateRefreshToken(token: string, requestId?: string) {
   const outcome = await tx(async (db) => {
     const row = await one(
-      `SELECT rt.*, u.role, u.is_active, u.org_id FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id WHERE rt.token_hash = $1 FOR UPDATE OF rt`,
+      `SELECT rt.*, u.role, u.is_active AND o.status = 'ACTIVE' AS is_active, u.org_id FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id JOIN organizations o ON o.id = u.org_id WHERE rt.token_hash = $1 FOR UPDATE OF rt`,
       [sha256(token)],
       db,
     );
@@ -196,14 +199,18 @@ async function resolveUser(req: Request): Promise<AuthUser | null> {
   }
   // Re-read the user so deactivation and role changes take effect immediately.
   const u = await one(
-    `SELECT u.id, u.role, u.email, u.full_name, u.is_active, u.is_demo, u.org_id, u.must_change_password, ap.access, ap.site_ids
-     FROM users u LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
+    `SELECT u.id, u.role, u.email, u.full_name, u.is_active, u.is_demo, u.org_id, u.must_change_password, ap.access, ap.site_ids, ${STANDING_COLUMNS}
+     FROM users u JOIN organizations o ON o.id = u.org_id LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
     [sub],
   );
   if (!u || !u.is_active) throw unauthorized('Account is inactive');
   const access = u.role === 'ADMIN' ? (u.access ?? 'OWNER') : undefined;
-  return { id: u.id, role: u.role, email: u.email, fullName: u.full_name, isDemo: u.is_demo, orgId: u.org_id, access, sites: access === 'SUPERVISOR' ? (u.site_ids ?? []) : null, via, deviceId, mustChangePassword: u.must_change_password };
+  const company = await standingFromRow(u);
+  return { id: u.id, role: u.role, email: u.email, fullName: u.full_name, isDemo: u.is_demo, orgId: u.org_id, access, sites: access === 'SUPERVISOR' ? (u.site_ids ?? []) : null, via, deviceId, mustChangePassword: u.must_change_password, company };
 }
+
+/** What an administrator of a company past its grace period may still change: their own sign-in and password. */
+const allowedWhenReadOnly = (url: string) => url.startsWith('/api/v1/auth/');
 
 /** What someone on a temporary password may still do: read, sign in and out, change it, register their phone. */
 const allowedOnTemporaryPassword = (url: string) => url.startsWith('/api/v1/auth/') || url.startsWith('/api/v1/me/devices');
@@ -216,6 +223,8 @@ export function requireAuth(role?: Role) {
       // The company is not known until the user has been read.
       const user = await asSystem(() => resolveUser(req));
       if (!user) throw unauthorized();
+      // A suspended company is closed to all of its accounts, whatever they still hold.
+      if (user.company?.status === 'SUSPENDED') throw suspendedError();
       if (user.via === 'cookie' && !SAFE_METHODS.has(req.method)) {
         const header = req.headers['x-csrf-token'];
         const cookie = req.cookies?.[CSRF_COOKIE];
@@ -227,6 +236,10 @@ export function requireAuth(role?: Role) {
         throw new HttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Change your temporary password first (Account › Change password).');
       }
       if (role && user.role !== role) throw forbidden();
+      // Expired past the grace period: administrators keep reading and exporting; nothing is removed. Employees keep recording attendance.
+      if (user.role === 'ADMIN' && user.company?.subscription.readOnly && !SAFE_METHODS.has(req.method) && !allowedWhenReadOnly(req.originalUrl)) {
+        throw new HttpError(403, 'SUBSCRIPTION_EXPIRED', 'Your GeoAttend subscription has ended. Your data is kept and you can still view and export it; renew to make changes again.');
+      }
       (req as any).user = user;
       next();
     } catch (err) {

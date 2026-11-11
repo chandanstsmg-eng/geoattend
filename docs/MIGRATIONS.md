@@ -4,6 +4,16 @@ Migrations are the numbered files in `apps/api/src/db/migrations`. Each runs onc
 
 Before applying one to a database that matters, follow "Before any risky migration" in [RUNBOOK.md](RUNBOOK.md).
 
+## 032_platform_and_subscriptions
+
+Platform administrators, editions, company status and subscriptions, invitations and password resets ([PLATFORM-ADMIN.md](PLATFORM-ADMIN.md)). Additive: new tables and new defaulted columns on `organizations`; no existing row changes meaning.
+
+- Every existing company becomes ACTIVE, ENTERPRISE, no employee or supervisor limit, every module on, no subscription end date. Nothing it can do today is taken away.
+- `editions`, `platform_admins`, `platform_sessions`, `platform_settings`, `platform_audit_logs`: no rights at all for the restricted login. `account_tokens`: row-level security through the user, like `refresh_tokens`.
+- A trigger refuses any change by the restricted login to a company's status, edition, limits, modules, subscription or registration.
+- Rollback: [migrations/032_rollback.sql](migrations/032_rollback.sql).
+- **Rehearsed 11 Nov 2026** on the disposable 1,038-user copy (D:\gr, 69,266 attendance records, 322,032 locations): apply, roll back, apply again. Row counts of all 51 tables and checksums of companies, users, employee profiles, attendance, leave, payslips and refresh tokens were identical before and after each step. Not applied to `geoattend` (still 020) or to `geoattend_demo` (still 031).
+
 ## 021_attendance_and_payroll_history
 
 Keeps history that later edits used to rewrite. Rollback: [migrations/021_rollback.sql](migrations/021_rollback.sql).

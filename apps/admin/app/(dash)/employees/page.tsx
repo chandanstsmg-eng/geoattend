@@ -10,6 +10,7 @@ import { useDebounced } from '@/lib/use-debounced';
 import { get, post, qs } from '@/lib/api';
 import { ago } from '@/lib/format';
 import { Badge, Button, Card, cx, DemoTag, EmptyState, Field, InlineError, Input, Modal, PageHeader, Pagination, QueryState, rowKeys, rowLink, SearchInput, Select, SortTh, Table, Td, Th, Toolbar, type SortDir } from '@/components/ui';
+import { DeliveryChoice, InvitationResult, type Delivery, type Invitation } from '@/components/invitation';
 import { StateBadge } from '@/components/state-badge';
 import { SupervisorSelect, WorkplaceSelect, useEmployees, useWorkplaces } from '@/components/filters';
 import { EmployeeDrawer } from '@/components/employee-drawer';
@@ -156,29 +157,40 @@ function CreateEmployee({ open, onClose, onCreated }: { open: boolean; onClose: 
   const wps = useWorkplaces();
   const empty = { fullName: '', email: '', employeeCode: '', phone: '', department: '', designation: '', workplaceId: '' };
   const [f, setF] = useState(empty);
-  const [result, setResult] = useState<{ id: string; pw?: string } | null>(null);
+  const [delivery, setDelivery] = useState<Delivery>('temporary-password');
+  const [result, setResult] = useState<{ id: string; pw?: string; invitation?: Invitation } | null>(null);
   const create = useMutation({
-    mutationFn: () => post('/employees', { ...f, phone: f.phone || null, department: f.department || null, designation: f.designation || null, workplaceId: f.workplaceId || undefined }),
+    mutationFn: () => post('/employees', { ...f, phone: f.phone || null, department: f.department || null, designation: f.designation || null, workplaceId: f.workplaceId || undefined, delivery }),
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ['employees'] });
-      setResult({ id: r.employee.id, pw: r.temporaryPassword });
+      setResult({ id: r.employee.id, pw: r.temporaryPassword, invitation: r.invitation });
     },
   });
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
   const close = () => {
     if (result) onCreated(result.id);
     setF(empty);
+    setDelivery('temporary-password');
     setResult(null);
     create.reset();
     onClose();
   };
 
   return (
-    <Modal open={open} onOpenChange={(o) => !o && close()} title="New employee" description="A temporary password is generated and shown once. Assign shifts after creating the account.">
+    <Modal open={open} onOpenChange={(o) => !o && close()} title="New employee" description="Choose a temporary password or an invitation link. Assign shifts after creating the account.">
       {result ? (
         <div className="space-y-3">
-          <p className="text-sm text-gray-700">Account created. Share this temporary password securely — it will not be shown again:</p>
-          <p className="rounded-md bg-gray-100 p-3 font-mono text-sm select-all">{result.pw}</p>
+          {result.invitation ? (
+            <>
+              <p className="text-sm text-gray-700">Account created. The employee chooses their password from this link, then signs in to the GeoAttend mobile app:</p>
+              <InvitationResult invitation={result.invitation} />
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-gray-700">Account created. Share this temporary password securely — it will not be shown again:</p>
+              <p className="rounded-md bg-gray-100 p-3 font-mono text-sm select-all">{result.pw}</p>
+            </>
+          )}
           <div className="flex justify-end">
             <Button variant="primary" onClick={close}>Continue to assignment</Button>
           </div>
@@ -199,6 +211,7 @@ function CreateEmployee({ open, onClose, onCreated }: { open: boolean; onClose: 
               </Select>
             </Field>
           </div>
+          <div className="sm:col-span-2"><DeliveryChoice value={delivery} onChange={setDelivery} /></div>
           <div className="sm:col-span-2"><InlineError error={create.error} /></div>
           <div className="sm:col-span-2 flex justify-end gap-2">
             <Button type="button" onClick={close}>Cancel</Button>

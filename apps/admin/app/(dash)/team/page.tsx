@@ -6,6 +6,7 @@ import { get, patch, post } from '@/lib/api';
 import { ago, fmtDate, todayISO } from '@/lib/format';
 import { Badge, Button, Card, ConfirmButton, Field, InlineError, Input, Modal, PageHeader, QueryState, Select, Table, Td, Th } from '@/components/ui';
 import { useWorkplaces } from '@/components/filters';
+import { DeliveryChoice, InvitationResult, type Delivery, type Invitation } from '@/components/invitation';
 
 type Access = 'OWNER' | 'SUPERVISOR';
 
@@ -69,23 +70,34 @@ function AddPerson({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const empty = { fullName: '', email: '', phone: '', access: 'SUPERVISOR' as Access, siteIds: [] as string[] };
   const [f, setF] = useState(empty);
+  const [delivery, setDelivery] = useState<Delivery>('temporary-password');
   const [pw, setPw] = useState<string | null>(null);
+  const [invitation, setInvitation] = useState<Invitation | null>(null);
   const add = useMutation({
-    mutationFn: () => post('/team', { ...f, phone: f.phone || undefined }),
+    mutationFn: () => post('/team', { ...f, phone: f.phone || undefined, delivery }),
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ['team'] });
-      setPw(r.temporaryPassword);
+      if (r.invitation) setInvitation(r.invitation);
+      else setPw(r.temporaryPassword);
     },
   });
   const close = () => {
     setF(empty);
+    setDelivery('temporary-password');
     setPw(null);
+    setInvitation(null);
     add.reset();
     onClose();
   };
   return (
-    <Modal open={open} onOpenChange={(o) => !o && close()} title="Add an owner or supervisor" description="They sign in to this dashboard with their email and a temporary password, and are asked to change it.">
-      {pw ? (
+    <Modal open={open} onOpenChange={(o) => !o && close()} title="Add an owner or supervisor" description="They sign in to this dashboard with their email, using a temporary password or a password they choose from an invitation link.">
+      {invitation ? (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-700">Account created. They choose their password from this link, then sign in to this dashboard:</p>
+          <InvitationResult invitation={invitation} />
+          <div className="flex justify-end"><Button variant="primary" onClick={close}>Done</Button></div>
+        </div>
+      ) : pw ? (
         <div className="space-y-3">
           <p className="text-sm text-gray-700">Account created. Share this temporary password securely — it will not be shown again:</p>
           <p className="select-all rounded-md bg-gray-100 p-3 font-mono text-sm">{pw}</p>
@@ -105,6 +117,7 @@ function AddPerson({ open, onClose }: { open: boolean; onClose: () => void }) {
           {f.access === 'SUPERVISOR' && (
             <div className="sm:col-span-2"><Field label="Workplaces they supervise"><SitePicker value={f.siteIds} onChange={(siteIds) => setF({ ...f, siteIds })} /></Field></div>
           )}
+          <div className="sm:col-span-2"><DeliveryChoice value={delivery} onChange={setDelivery} /></div>
           <div className="sm:col-span-2"><InlineError error={add.error} /></div>
           <div className="flex justify-end gap-2 sm:col-span-2">
             <Button type="button" onClick={close}>Cancel</Button>
@@ -129,8 +142,10 @@ function EditPerson({ person, onClose }: { person: any | null; onClose: () => vo
   const status = useMutation({ meta: { success: 'Supervisor updated', toastError: true }, mutationFn: (isActive: boolean) => post(`/team/${person.id}/status`, { isActive }), onSuccess: done });
   const [tempPw, setTempPw] = useState<string | null>(null);
   const resetPw = useMutation({ mutationFn: () => post(`/team/${person.id}/reset-password`), onSuccess: (r: any) => setTempPw(r.temporaryPassword) });
+  const [invitation, setInvitation] = useState<Invitation | null>(null);
+  const reinvite = useMutation({ mutationFn: () => post(`/team/${person.id}/invitation`), onSuccess: (r: any) => setInvitation(r.invitation) });
   return (
-    <Modal open={!!person} onOpenChange={(o) => !o && (setF(null), setTempPw(null), onClose())} title={person?.full_name ?? ''} description={person?.email}>
+    <Modal open={!!person} onOpenChange={(o) => !o && (setF(null), setTempPw(null), setInvitation(null), onClose())} title={person?.full_name ?? ''} description={person?.email}>
       {cur && (
         <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
           <Field label="Role">
@@ -140,7 +155,8 @@ function EditPerson({ person, onClose }: { person: any | null; onClose: () => vo
             </Select>
           </Field>
           {cur.access === 'SUPERVISOR' && <Field label="Workplaces"><SitePicker value={cur.siteIds} onChange={(siteIds) => setF({ ...cur, siteIds })} /></Field>}
-          <InlineError error={save.error ?? status.error ?? resetPw.error} />
+          <InlineError error={save.error ?? status.error ?? resetPw.error ?? reinvite.error} />
+          {invitation && <InvitationResult invitation={invitation} />}
           {tempPw && (
             <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               Temporary password, shown once: <code className="select-all font-semibold">{tempPw}</code>. They must choose a new one when they sign in, and their other sign-ins have ended.
@@ -150,6 +166,7 @@ function EditPerson({ person, onClose }: { person: any | null; onClose: () => vo
             {person.is_active ? (
               <>
                 <ConfirmButton variant="danger" danger className="mr-auto" loading={status.isPending} title={`Deactivate ${person.full_name}?`} description="They are signed out." confirmLabel="Deactivate" onConfirm={() => status.mutate(false)}>Deactivate</ConfirmButton>
+                {!person.last_login_at && <Button type="button" loading={reinvite.isPending} onClick={() => reinvite.mutate()}>Send invitation again</Button>}
                 <ConfirmButton loading={resetPw.isPending} title={`Reset ${person.full_name}’s password?`} description="They are signed out and get a temporary password, which you pass on to them." confirmLabel="Reset password" onConfirm={() => resetPw.mutate()}>Reset password</ConfirmButton>
               </>
             ) : (

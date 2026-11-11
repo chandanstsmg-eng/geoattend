@@ -41,6 +41,9 @@ function LoginForm() {
       <Field label="Password">
         <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
+      <div className="-mt-2 text-right">
+        <Link href="/forgot-password" className="text-body-sm font-medium text-primary-600 underline underline-offset-2">Forgot password?</Link>
+      </div>
       <InlineError error={error} />
       <Button type="submit" variant="primary" className="w-full" loading={busy} disabled={!ready}>
         Sign in
