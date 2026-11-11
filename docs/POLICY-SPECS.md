@@ -1,6 +1,21 @@
-# Business policy specifications: waiting for approval
+# Business policy specifications
 
-These are implementation specifications for the four rules in [POLICY-DECISIONS.md](POLICY-DECISIONS.md), in the direction chosen on 11 November 2026. **Nothing here is implemented.** Each rule ships alone, with its own tests and a full regression run, after approval.
+These are implementation specifications for the four rules in [POLICY-DECISIONS.md](POLICY-DECISIONS.md), in the direction chosen on 11 November 2026.
+
+## Status: implemented on branch `phase-i-policies` (commit `a3738e0`), not merged
+
+The rules were approved on 11 November 2026, and the specifications below were written before that approval. Where the build differs, the approval's wording was followed:
+
+| Rule | Built | Differs from the draft below |
+|---|---|---|
+| 1. Extra day | A day the shift does not run needs **Extra day** and a reason of at least 10 characters. It is never late, is flagged `EXTRA_DAY` and is audited as `attendance.extra_day`. The hours count it | "Only with owner approval": a **supervisor may enter one, and it waits for the owner** (the existing approval step), where the draft refused it. The monthly "Extra days" column and the overview row are **not built**; the record is flagged instead |
+| 2. Leave | Full-day leave is refused on any attended day, pending records included, and checked again at approval. Half-day leave is allowed. A half day worked counts as present and expected on the dashboard, with lateness measured from the shift start | The reverse case (checking in on a day of approved leave, item 4) was **not built**: it was not in the approved list |
+| 3. GPS | 150 km/h limit (a company setting). Readings above it are kept, flagged, audited and shown on the trail, and used for no automatic decision. Leaving before check-in is confirmed like leaving after it. Migration 031 | Added: three readings that agree **re-anchor** after a bad first fix, check-in evidence that is a jump is refused (`EVIDENCE_IMPLAUSIBLE`), and the demo simulator "walks". Mock readings were **not** excluded (not approved) |
+| 4. Supervisors | Their own team (`supervisor_id`) at their own workplaces, everywhere. An owner's "filter by supervisor" shows the same | Applied **strictly, including the live map, today's headcount and SOS** ("only"), where the draft recommended site-wide for safety. The owner always sees everything. On the owner's supervisor summary, "workers" and "checked in" still count the whole site |
+
+Tests: `apps/api/test/policies.test.ts` (20 tests). Disabling any one rule makes its tests fail.
+
+The draft below is kept as the record of what was proposed.
 
 Throughout, **"refused"** means the API answers 409 with the code given, the screen shows the message, and nothing is written.
 

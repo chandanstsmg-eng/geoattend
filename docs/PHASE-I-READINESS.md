@@ -268,6 +268,47 @@ Business rule specifications: [POLICY-SPECS.md](POLICY-SPECS.md). Backup recover
 
 Business decisions: [POLICY-DECISIONS.md](POLICY-DECISIONS.md).
 
+## Final integration (11 November 2026)
+
+**Merges** (approved), each kept as a merge commit, with history preserved and nothing force-pushed:
+
+| Merge | Commit | Result |
+|---|---|---|
+| Rollback tag first | `before-phase-i-integration` → `1959a30` | — |
+| `phase-i-staging-exec` into `production-remediation` | `abf7f36` | Its tree is identical to the merged branch |
+| `post-phase-i-fixes` into `production-remediation` | `c2c2a04` | Its tree is identical to the merged branch (`b494bd1`, which passed 654/654) |
+
+**Approved business rules:** built on branch `phase-i-policies` (`a3738e0`), which is **not merged**. What was built, and how it differs from the draft: [POLICY-SPECS.md](POLICY-SPECS.md).
+
+**Migration 031** (two nullable columns on `location_updates`):
+- **Review:** it adds nothing that must be filled in, rewrites no row and adds one check. Code older than it ignores the columns, so the running dev stack keeps working.
+- **Backup first:** `geoattend-2026-11-11T06-42-20-524Z.dump`, with its SHA-256 matching the manifest.
+- **Rehearsal** on a restored copy (throw-away cluster): applied in 2.8 s, then rolled back with `docs/migrations/031_rollback.sql`, then applied again. Every table's row count was unchanged at each step.
+- **Dev database:** applied to `geoattend_demo` in 3.1 s. The only tables that changed were `job_runs` (the running dev server) and `schema_migrations`.
+- **Live database:** `geoattend` was not changed (still migration 020, same counts). No earlier backup was changed.
+
+**Regression** on a clean clone of `a3738e0`, with no `.env`:
+- **Full API suite, twice:** 678/678, S3 included (654 before; 24 tests added).
+- **Other suites:** dashboard 6/6, shared 8/8, mobile 51/51.
+- **Typecheck and builds:** release builds pass, with 0 server secrets in the browser files.
+- **By area:** every area passes, including the 20 business-rule tests, 121 isolation, 41 payroll and 3 time zones × 105. The previously flaky test passed 20/20.
+
+**Tests changed for the approved rules**, each to the new rule, not loosened:
+- the single-reading re-lock tests now require a confirmed departure, and a new test shows one stray reading does not re-lock;
+- the "half day worked" dashboard count is now 1/1, not 0/0;
+- supervisor fixtures now put workers in the supervisor's team.
+
+**Browser** (real Chrome, disposable stack): 34/34. This covered:
+- both dashboards;
+- the supervisor seeing exactly their team (8 of the 16 at the site);
+- the extra-day form;
+- the refusal of leave on an attended day;
+- the GPS limit in Settings;
+- reports and exports;
+- every menu link;
+- phone widths;
+- no script errors.
+
 ## Open, not fixed
 
 - **Employee notifications:** employees have no in-app list of their notifications; they rely on push, which is not configured.
