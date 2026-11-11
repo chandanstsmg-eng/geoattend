@@ -14,9 +14,32 @@ const WAIT_HOURS = 24;
 export const sweepOverdueApprovals = (now = new Date()) => eachCompany(() => overdueForCompany(now));
 
 async function overdueForCompany(now: Date) {
+  const items = await overdueItems(now);
+  if (!items.length) return;
+  const outbox = new Outbox();
+  const failures = await eachRecord(items, async (it) => {
+    const hours = Math.round((now.getTime() - new Date(it.created_at).getTime()) / 3600_000);
+    await notify(getPool(), outbox, {
+      type: 'APPROVAL_OVERDUE',
+      severity: 'WARNING',
+      body: `${it.full_name}'s ${it.what} has been waiting ${hours} hours for a decision. Open Approvals to answer it.`,
+      employeeId: it.employee_id,
+      data: { kind: it.kind, id: it.id },
+      dedupeKey: `overdue:${it.kind}:${it.id}`,
+    });
+  });
+  outbox.flush();
+  throwIfAny(failures);
+}
+
+/** What the current company still has to be told about: waiting over a day, and not raised yet. */
+export async function overdueItems(now = new Date()) {
   const cutoff = new Date(now.getTime() - WAIT_HOURS * 3600_000);
-  const items = await q(
-    `SELECT 'leave' AS kind, l.id, l.employee_id, u.full_name, l.created_at, 'a leave request' AS what FROM leave_requests l JOIN users u ON u.id = l.employee_id
+  // Items already raised are left out here (the same dedupe key notify() would refuse): otherwise every
+  // run re-sent the whole backlog to notify(), one round trip each — 37 s for a 1,000-person company.
+  return q(
+    `SELECT x.* FROM (
+     SELECT 'leave' AS kind, l.id, l.employee_id, u.full_name, l.created_at, 'a leave request' AS what FROM leave_requests l JOIN users u ON u.id = l.employee_id
        WHERE l.status = 'PENDING' AND l.created_at < $1
      UNION ALL
      SELECT 'review', r.id, r.employee_id, u.full_name, r.created_at,
@@ -37,22 +60,9 @@ async function overdueForCompany(now: Date) {
        WHERE r.status = 'OPEN' AND r.kind = 'ADMIN_CORRECTION' AND r.created_at < $1
      UNION ALL
      SELECT 'overtime', o.id, o.employee_id, u.full_name, o.created_at, 'overtime' FROM overtime_entries o JOIN users u ON u.id = o.employee_id
-       WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND o.created_at < $1`,
+       WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND o.created_at < $1
+     ) x
+     WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.dedupe_key = 'overdue:' || x.kind || ':' || x.id)`,
     [cutoff],
   );
-  if (!items.length) return;
-  const outbox = new Outbox();
-  const failures = await eachRecord(items, async (it) => {
-    const hours = Math.round((now.getTime() - new Date(it.created_at).getTime()) / 3600_000);
-    await notify(getPool(), outbox, {
-      type: 'APPROVAL_OVERDUE',
-      severity: 'WARNING',
-      body: `${it.full_name}'s ${it.what} has been waiting ${hours} hours for a decision. Open Approvals to answer it.`,
-      employeeId: it.employee_id,
-      data: { kind: it.kind, id: it.id },
-      dedupeKey: `overdue:${it.kind}:${it.id}`,
-    });
-  });
-  outbox.flush();
-  throwIfAny(failures);
 }

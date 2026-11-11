@@ -70,7 +70,7 @@ mount(workplacesRouter, '/api/v1/workplaces', 'workplaces', [
     body: createBody,
     handler: async ({ body, user, req, res }) => {
       await checkRadius(body.radiusM, user.orgId);
-      if (!isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone.');
+      if (!isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone. Use a name such as Asia/Kolkata, not an abbreviation such as IST.');
       const w = await one(
         `INSERT INTO workplaces (name, address, latitude, longitude, radius_m, timezone, default_grace_minutes, absence_threshold_minutes, created_by, org_id, place_id, min_staff)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
@@ -112,7 +112,7 @@ mount(workplacesRouter, '/api/v1/workplaces', 'workplaces', [
     body: workplaceBody.partial().extend({ reason: z.string().trim().max(500).optional() }),
     handler: async ({ params, body, user, req }) => {
       if (body.radiusM !== undefined) await checkRadius(body.radiusM, user.orgId);
-      if (body.timezone && !isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone.');
+      if (body.timezone && !isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone. Use a name such as Asia/Kolkata, not an abbreviation such as IST.');
       const outbox = new Outbox();
       const after = await tx(async (db) => {
         const before = await one(`${SELECT} WHERE w.id = $1 FOR UPDATE OF w`, [params.id], db);

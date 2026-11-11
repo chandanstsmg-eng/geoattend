@@ -1,6 +1,6 @@
 # Phase I: staging and production readiness
 
-**Branch.** `phase-i-staging`, from `production-remediation` at `3ef7f8f`. Not merged, not deployed.
+**Branch.** `phase-i-staging`, from `production-remediation` at `3ef7f8f`. Merged on 9 November 2026 (merge `1959a30`, rollback tag `before-phase-i`). Not deployed.
 
 **Machine.** Everything ran on the Windows development machine, against a disposable staging copy: API 4410, dashboard 3410, PostgreSQL 18.4 on 54352, data in `D:\gh`, restored from a verified backup. The live `geoattend` database (migration 020) and your development stack were not touched.
 
@@ -73,6 +73,172 @@ Each fix has a test, and each test fails when its fix is undone. The backup scri
 - **Reversing leave.** Should an owner be able to reverse a decided leave?
 - **Offline arrival time.** Should it be the phone's time (now) or the time it reached the server?
 - **Owner notification.** Should the owner be notified when a supervisor enters attendance?
+
+## Staging execution preparation (after the merge)
+
+Found by reading the Docker setup; **not yet proven, because Docker is not available here:**
+
+| Defect | Fix |
+|---|---|
+| The API image installed Debian's `pg_dump` 15, which refuses to dump the PostgreSQL 17 database, so backups and restores in the container would fail | It installs the PostgreSQL 17 client from the PostgreSQL project's repository |
+| The API's hourly backup check read a folder inside its container, which no backup ever writes to. In production it would have warned every hour | The host's backup folder is mounted into the API read-only (`BACKUP_DIR=/backups`) |
+| The backup timer needed Node and a matching PostgreSQL client installed on the host | The backup runs as the `backup` Compose service in the API image; the host needs Docker only |
+
+New, for the Linux server ([STAGING.md](STAGING.md)):
+- `deploy/staging-bootstrap.sh`: Docker, Caddy and the firewall, plus secrets generated into chmod-600 files.
+- `deploy/staging-verify.sh`: health, loopback-only ports, HTTPS, SIGTERM, kill -9 recovery, persistence, backup.
+- `deploy/staging.env.example` and `deploy/backup.env.example`.
+- `npm run integrations:check`: real sends. Off-site and photo buckets are PASS only after a checksum read-back; e-mail, push, WhatsApp and webhooks are only ACCEPTED until a person confirms receipt.
+
+**Locally verified:** the integration check's PASS, ACCEPTED, FAIL and BLOCKED paths, against a local S3 server, a local webhook and a closed SMTP port. The probe object was removed afterwards. **Not verified:** any real service.
+
+Note: the server marks an employee push `SENT` when Expo accepts it; it does not read Expo's receipts. Treat `SENT` as "accepted", not "delivered".
+
+## Infrastructure preparation and deployment validation
+
+**PostgreSQL 17, verified here:**
+- **Full API suite on PostgreSQL 17.10:** every migration ran, and 624 tests passed with 9 skipped (the cloud-bucket tests, which need S3 settings). Earlier, every test had run on 18.4 only.
+- **Backup drill on a 17.6 server with the 17.6 tools:**
+  - The logins from `docker/db-init` were created correctly.
+  - `db:backup:production` reached RESTORE_PROVEN, with the off-site copy verified.
+  - The downloaded copy restored into a separate database with identical counts.
+  - Tools older than the server are refused, and that run is recorded `FAILED` ([BACKUPS.md](BACKUPS.md)).
+
+**Found and fixed in this round:**
+
+| Problem | Fix | Test |
+|---|---|---|
+| The dashboard's proxy for live updates dropped `X-Forwarded-For`, so the API saw every user's stream as coming from the dashboard container, under one shared per-address rate limit | The proxy passes the client address on, like the generic `/api` rewrite | `apps/admin/lib/stream-headers.test.ts` (new; the dashboard now has `npm test`, run by CI) |
+| No way to check a server's settings before deploying; the first sign was a refused start | `npm run config:check`: the API's own start-up rules; names only, never values | `apps/api/test/deploy-config.test.ts` (3 tests, including that no secret is printed) |
+| The dashboard and website images had no version tags, so a release could not be undone | Images tagged per commit; `deploy/staging-deploy.sh` and `deploy/staging-rollback.sh` | Script syntax only; needs a server |
+| Docker's 10 s stop limit can cut PostgreSQL's shutdown checkpoint short | `stop_grace_period: 60s` on `db` | Needs Docker |
+| My own earlier `staging-verify.sh` would always fail its placeholder check: the template's comments mention the placeholders and are copied into `.env` | Comment lines are skipped | Needs a server |
+
+**Reviewed, no change needed:**
+
+| Area | Finding |
+|---|---|
+| Restart policies | `unless-stopped` on db, minio, api, admin, web and redis; the one-off jobs have none |
+| Start-up order | After a reboot Docker ignores `depends_on`. An API that starts before the database exits 1 and is restarted until the database answers |
+| API shutdown | SIGTERM closes connections cleanly (exit 0) inside the 30 s grace |
+| PostgreSQL shutdown | The image stops PostgreSQL with SIGINT (fast shutdown) |
+| Health checks | API `/health` runs a database query; dashboard and website check a page; db uses `pg_isready` |
+| Proxy addresses | The generic `/api` rewrite adds no extra `X-Forwarded-For` hop, so `TRUST_PROXY=1` behind Caddy is correct |
+| Data on disk | `pgdata` and `photos` are named volumes; `down` without `-v` keeps them |
+| Secrets in the frontend | Only `NEXT_PUBLIC_GOOGLE_MAPS_*`, which is public by design and must be restricted by referrer |
+
+New: [UBUNTU-SERVER.md](UBUNTU-SERVER.md), the exact guide for a new Ubuntu 24.04 server.
+
+## Windows continuation (10 November 2026)
+
+Ubuntu and Docker were set aside; everything below ran on the Windows development machine, on disposable copies. The live `geoattend` database and the developer's stack were not used for any test.
+
+### Windows reliability
+
+Disposable stack: API 4410, database 54352, data `D:\gh`.
+
+| Check | Result |
+|---|---|
+| Second API on a port already in use | **PASS**: exit 1 with "Port … is already in use"; the running API stays healthy |
+| Clean shutdown through the Windows IPC message, with a year-long dashboard request in flight | **PASS**: the request finished (200); exit 0 within 4.4 s; no job left marked running |
+| Database killed under the running API (`pg_ctl stop -m immediate`) | **PASS**: 503 while down; the watchdog restarted the database; healthy after 7 s; data intact |
+| API killed with no shutdown while jobs run | **PASS**: no job stuck; jobs ran again after the restart; counts unchanged (the 18 fewer location points were the retention job, which ran in that window) |
+| Restart time, 1,032-employee copy | **PASS**: healthy 5.6 s after a kill |
+| Monitoring right after a restart | Reports the worker as `fail` until its first tick (about 1 minute), then `ok`. Expected; noted here so it is not mistaken for a fault |
+| Online-backup restore by the RUNBOOK steps, into a new folder | **PASS**: served in 17 s; every count equal to the source databases; owner sign-in worked |
+| `db:restore` of a dump into a new database (with `PG_BIN`) | **PASS** after the fix below: identical counts; existing names and the live database refused |
+
+**Found and fixed:**
+
+| Problem | Fix | Test |
+|---|---|---|
+| `npm test` could not start while the dev stack ran: every built-in database logged to `data/logs/postgres.log`, which Windows locks for the running dev server | One log file per data folder; the dev server keeps `postgres.log` | `client-tools.test.ts`; the suite now runs beside the dev stack |
+| `db:backup` and `db:restore` failed with a bare npm error on Windows (no `pg_dump` in the embedded package) | `PG_BIN` honoured, and a clear message pointing to `db:backup:online` | `client-tools.test.ts` |
+| `db:restore` created the new, empty database before finding out `pg_restore` was missing; the retry was then refused | The tool is found first | `restore-target.test.ts` runs the script with an empty `PG_BIN` |
+
+### Performance with a large company
+
+A separate restored copy (`D:\gr`) was grown to **1,032 employees** with 90 days of history: 69,264 attendance records and sessions, and 322,896 location points.
+
+| Measure (1,032 employees) | Before | After the fixes |
+|---|---|---|
+| Dashboard, 30 days | 6.4 s | 2.7 s |
+| Dashboard, 90 days | 20 s | 7.9 s |
+| `monthly.csv` | 7 s | 2.4 s |
+| 40 users for 60 s, dashboard p50 / p95 | 9.0 s / 11.9 s | 3.3 s / 4.7 s |
+| 40 users for 60 s, throughput | 20 requests/s | 37–40 requests/s, 0 errors |
+| `overdue-approvals` job, every minute | average 5–6 s, worst 37 s | average 224 ms, worst 655 ms |
+
+Other figures, after the fixes:
+- Employees page: 13 ms. Live map: 42 ms. Reports overview: 52 ms (single requests).
+- Attendance list: about 0.5 s. `attendance.csv` for 30 days (3.6 MB): about 2 s.
+- 30 identical attendance submissions at once: 1 created, 29 refused.
+- API memory: 141 MB idle.
+
+**Causes:**
+- **No-show calculation:** each day's no-show check parsed a time-zone-aware time for every row, about 150 ms per day. It now does this once per shift time.
+- **Day-by-day lookups:** run 4 at a time instead of one after another.
+- **The approvals job:** re-sent its whole backlog every minute. It now skips items already raised.
+
+Tests prove the figures are unchanged (`report-speed.test.ts`), and each test fails when its fix is undone.
+
+**Still slow, not changed:** a 90-day dashboard for 1,000 employees takes about 8 s. Most of that is the per-record worked-time calculation. Making it faster means precomputing daily totals, which changes how hours are computed, so it needs approval first.
+
+**Not measured:** API CPU under load. The sampler lost the process, so no figure is given.
+
+### Independent reviews
+
+**Workflow review** (16 areas, a second company created through sign-up):
+- 11 areas PASS. Company isolation: 112 cross-company calls on id routes, with no leak. Supervisor scope: PASS.
+- Defects found: 2 High, 5 Medium and 6 Low.
+
+**UI/UX review** (22 screens, 3 widths, owner and supervisor):
+- No sideways scrolling anywhere. axe found no serious issues apart from the known Maps ones.
+- Issues found: 2 High, 6 Medium and 7 Low.
+
+**Fixed, each with a test:**
+
+| Finding | Fix |
+|---|---|
+| Time zone `IST` accepted. The API read it as India time and PostgreSQL as Israel time, so SQL dates and lateness were 3.5 h off | Only IANA names or UTC; the message suggests `Asia/Kolkata` |
+| A correction could store "not late" with 90 minutes late | The flag and the minutes always agree; "late" with 0 minutes is refused |
+| Phone app: a rooted-phone or emulator refusal was resent for ever, held back the check-out, and alerted the manager every 10 minutes | Treated as a final refusal and shown with its reason |
+| Phone app: a missing photo was re-uploaded every 15 s for ever | Waits longer after each attempt |
+| Approvals: a failed decision was shown only at the top of the page | Also shown as a toast |
+| Approvals: "Reject" on a new phone revoked it on one tap | Asks for a reason first |
+| Raw browser errors ("Failed to fetch", "Request failed (502)") and requests that never ended | Plain messages for no connection, proxy errors and the general rate limit; a 45 s limit |
+| Phone menu: focus left the menu, and the page behind stayed reachable | Behaves as a dialog: focus moves in, Tab stays inside, focus returns on close |
+| Touch targets smaller than 44 px on phones | Buttons, header icons and fields are 44 px on touch screens |
+
+A browser check confirmed all of these on the rebuilt dashboard (12/12). The existing browser suite: 46 of 47. The one left over needs a running shift, and none of the sample shifts runs after 16:00.
+
+**Not fixed (low impact, or a design question):**
+- **Phone app, shared phones (M4):** saved items are mixed between employees who share a phone. Changing that needs a decision on how shared phones should work.
+- **Phone app, fast phone clock (M1):** readings from a phone whose clock runs fast are refused and quietly dropped. The fix is to correct the phone's clock from the server time, which needs device testing.
+- **Keyboard:** focus is lost after Approve.
+- **Small text links:** "Open on map" and "before / after" are 16 px tall.
+- **Number and date formats:** Indian formatting is not used everywhere.
+- **Signed-out users:** no "session ended" notice.
+- **Demo mode:** a supervisor can open the demo page.
+- **Info icons:** their explanations appear only on hover.
+- **Empty company:** "Confirm day" shows with 0 of 0 present.
+- **Website:** the phone menu stays open after a tap.
+- **API only:** `/reports/overview` reports "present" only for today.
+- **Data checks:** employee codes are case-sensitive, and a 2099 joining date is accepted.
+
+**Still open from earlier:** while payroll is off, `/payroll/payslips/:id` and the payslip page still show a full salary slip, and `/payroll/:month/history` still answers.
+
+### More decisions waiting for the company
+
+- **Manual attendance on a day off:** refuse it, or record it as overtime without lateness? Today it is recorded as late (M3).
+- **One stray reading:** should a single reading far away re-lock a ready check-in, or should leaving need the same confirmation as during a shift (M2)?
+- **Leave on a day already attended:** refuse it, or let it replace the attendance (L1)?
+- **Leave for a deactivated employee:** allow it or not (L5)?
+- **Supervisor visibility:** should supervisors see only their own reports, or everyone at their workplaces (today)?
+- **Mock-location readings:** should they still trigger arrival alerts?
+- **Rooted phones:** is server-side attestation (Play Integrity) required? Today the phone reports these flags itself.
+- **Mistaken deactivation:** an employee deactivated by mistake and reactivated the same day loses that day's roster. Is that intended?
+- **Workplace names:** should two workplaces be allowed the same name?
 
 ## Open, not fixed
 

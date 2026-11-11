@@ -4,7 +4,7 @@ Development backups of the built-in database (`db:backup:online`) are described 
 
 ## What runs
 
-`npm run db:backup:production -w @geoattend/api` runs nightly from `deploy/geoattend-backup.timer`. Each run does four things:
+`npm run db:backup:production -w @geoattend/api` runs nightly from `deploy/geoattend-backup.timer`. On the Docker Compose stack, the timer runs it as the `backup` service, `docker compose --profile backup run --rm backup`. That service uses the API image, which carries `pg_dump` 17, and writes to `data/backups`. The API mounts the same folder read-only for its hourly check. Each run does four things:
 
 1. **Dump.** It counts every table's rows and runs `pg_dump` in one database snapshot, so the counts describe exactly what the dump holds.
 2. **Prove.** It restores the dump into a new scratch database on `BACKUP_VERIFY_DATABASE_URL` and compares every table's count. Only an exact match is `RESTORE_PROVEN`. The scratch database is then dropped; it is the only thing the script ever drops.
@@ -15,7 +15,7 @@ Development backups of the built-in database (`db:backup:online`) are described 
 
 ## Settings
 
-Put these in `/etc/geoattend/backup.env`, readable only by the backup user.
+Put these in `/etc/geoattend/backup.env`, chmod 600; the template is `deploy/backup.env.example`. On the Compose stack, `docker-compose.yml` sets `DATABASE_URL`, `PG_BIN` and `BACKUP_DIR` itself. Test the off-site bucket before the first run with `npm run integrations:check -w @geoattend/api -- --only offsite`.
 
 | Setting | What it is |
 |---|---|
@@ -52,6 +52,8 @@ Put these in `/etc/geoattend/backup.env`, readable only by the backup user.
 | Off-site upload, read-back checksum, retention keeping the newest 2 | **PASS** against a local S3-compatible server (SeaweedFS) |
 | Restore of the downloaded off-site copy into a new database: counts equal to the source | **PASS** |
 | Wrong off-site credentials: run recorded as `FAILED`, exit code 1 | **PASS** |
+| **PostgreSQL 17** (the Docker server's version), with the 17.6 client tools: logins from `docker/db-init`, migrations up to date, `db:backup:production` RESTORE_PROVEN 52/52, off-site copy verified, downloaded copy's SHA-256 equal, restored into a separate database with identical counts (49 users, 2,886 attendance records, migration 030) | **PASS** (disposable 17.6 server, 9 Nov 2026) |
+| Tools older than the server (pg_dump 17.6 against a PostgreSQL 18 server) | **PASS**: refused with "server version mismatch", run recorded `FAILED`, exit 1. So the API image must carry the server's major version: it installs `postgresql-client-17` |
 | A real off-machine bucket | **BLOCKED**: no bucket or credentials provided |
 | The systemd timer on a Linux server | **BLOCKED**: no Linux server |
 | An alert reaching a person | **BLOCKED**: no webhook or SMTP configured |

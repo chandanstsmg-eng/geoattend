@@ -80,7 +80,7 @@ mount(shiftsRouter, '/api/v1/shifts', 'shifts', [
     ownerOnly: true,
     body: createBody,
     handler: async ({ body, user, req, res }) => {
-      if (!isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone.');
+      if (!isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone. Use a name such as Asia/Kolkata, not an abbreviation such as IST.');
       checkLength(body.startTime, body.endTime, body.confirmLongShift);
       await assertInOrg('workplace', body.workplaceId, user.orgId);
       const s = await one(
@@ -106,7 +106,7 @@ mount(shiftsRouter, '/api/v1/shifts', 'shifts', [
     handler: async ({ params, body, user, req }) => {
       const before = await one(`${SELECT} WHERE s.id = $1`, [params.id]);
       if (!before) throw notFound('Shift');
-      if (body.timezone && !isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone.');
+      if (body.timezone && !isValidTimezone(body.timezone)) throw badRequest('BAD_TIMEZONE', 'Unknown time zone. Use a name such as Asia/Kolkata, not an abbreviation such as IST.');
       const start = body.startTime ?? before.start_time.slice(0, 5);
       const end = body.endTime ?? before.end_time.slice(0, 5);
       if (body.startTime !== undefined || body.endTime !== undefined) checkLength(start, end, body.confirmLongShift);

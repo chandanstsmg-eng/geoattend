@@ -30,18 +30,43 @@ function refreshSession() {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+/** A request still unanswered after this is ended with a message, instead of a spinner that never stops. */
+export const REQUEST_TIMEOUT_MS = 45_000;
+
+/**
+ * What to tell the user when a request fails without a usable answer from the API: no connection, no
+ * answer in time, the proxy reporting the API down (5xx without a message), or too many requests.
+ * The API's own messages are kept: they already say what is wrong.
+ */
+export function failureMessage(f: { network?: boolean; timeout?: boolean; status?: number; apiMessage?: string | null }): string {
+  if (f.timeout) return 'GeoAttend is taking too long to answer. Check your connection and try again in a moment.';
+  if (f.network) return 'Cannot reach GeoAttend. Check your internet connection and try again.';
+  // The general limiter says only "Too many requests"; sign-in's own limiter explains itself and is kept.
+  if (f.status === 429 && (!f.apiMessage || f.apiMessage === 'Too many requests')) return 'Too many requests in a short time. Wait a minute, then try again.';
+  if (f.apiMessage) return f.apiMessage;
+  if (f.status && f.status >= 500) return 'GeoAttend is not responding right now. Try again in a minute; if it keeps happening, contact support.';
+  return `Request failed (${f.status ?? 'no answer'})`;
+}
+
 export async function api<T = any>(path: string, opts: { method?: Method; body?: unknown } = {}): Promise<T> {
   const method = opts.method ?? 'GET';
-  const send = () =>
-    fetch(`/api/v1${path}`, {
-      method,
-      credentials: 'same-origin',
-      headers: {
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...(method !== 'GET' ? { 'X-CSRF-Token': csrfToken() } : {}),
-      },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : method === 'GET' ? undefined : '{}',
-    });
+  const send = async () => {
+    try {
+      return await fetch(`/api/v1${path}`, {
+        method,
+        credentials: 'same-origin',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...(method !== 'GET' ? { 'X-CSRF-Token': csrfToken() } : {}),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : method === 'GET' ? undefined : '{}',
+      });
+    } catch (err) {
+      const timeout = (err as Error)?.name === 'TimeoutError';
+      throw new ApiError(0, timeout ? 'TIMEOUT' : 'NETWORK', failureMessage({ timeout, network: !timeout }));
+    }
+  };
 
   let res = await send();
   if (res.status === 401 && !path.startsWith('/auth/login')) {
@@ -55,7 +80,7 @@ export async function api<T = any>(path: string, opts: { method?: Method; body?:
   }
   if (res.status === 204) return undefined as T;
   const json = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, json?.error?.code ?? 'HTTP_' + res.status, json?.error?.message ?? `Request failed (${res.status})`, json?.error?.details);
+  if (!res.ok) throw new ApiError(res.status, json?.error?.code ?? 'HTTP_' + res.status, failureMessage({ status: res.status, apiMessage: json?.error?.message }), json?.error?.details);
   return json as T;
 }
 

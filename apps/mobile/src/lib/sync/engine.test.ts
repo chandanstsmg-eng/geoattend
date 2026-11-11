@@ -109,6 +109,37 @@ for (const code of ['PASSWORD_CHANGE_REQUIRED', 'DEVICE_NOT_APPROVED', 'DEVICE_P
   });
 }
 
+test('a rooted phone or emulator refusal is final: shown with its reason, and the check-out behind it goes', async () => {
+  assert.equal(classify({ status: 403, code: 'DEVICE_NOT_TRUSTED', message: '' }), 'refused');
+  const d = disk(addEvent(addEvent(emptyOutbox(), checkIn('e1', 's1')), checkOut('e2', 's1')));
+  const sent: string[] = [];
+  const r = await runOutbox(deps(d, async (e) => {
+    if (e.kind === 'CHECK_IN') throw { status: 403, code: 'DEVICE_NOT_TRUSTED', message: 'This phone cannot be used for attendance.' };
+    sent.push(e.id);
+  }));
+  assert.equal(r.stopped, null);
+  const [ci] = d.read().events;
+  assert.equal(ci!.status, 'FAILED');
+  assert.equal(ci!.failureCode, 'DEVICE_NOT_TRUSTED');
+  assert.deepEqual(sent, ['e2']);
+});
+
+test('a photo the server cannot find is re-sent later and later, not every 15 s for ever', async () => {
+  let now = Date.parse('2026-11-05T18:00:00.000Z');
+  const d = disk(addEvent(emptyOutbox(), checkIn()));
+  const waits: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    await runOutbox(deps(d, async () => { throw { status: 409, code: 'PHOTO_MISSING', message: 'Photo missing.' }; }, { now: () => now }));
+    const e = d.read().events[0]!;
+    assert.equal(e.status, 'PENDING');
+    assert.equal(e.uploaded, false);
+    waits.push(e.nextAttemptAt - now);
+    now = e.nextAttemptAt;
+  }
+  assert.deepEqual(waits, [1, 2, 3, 4, 5].map((n) => backoff(n)));
+  assert.ok(waits[4]! > waits[0]!);
+});
+
 test('already recorded on the server counts as sent', async () => {
   const d = disk(addEvent(emptyOutbox(), checkIn()));
   const r = await runOutbox(deps(d, async () => { throw { status: 409, code: 'DUPLICATE_SUBMISSION', message: 'dup' }; }));

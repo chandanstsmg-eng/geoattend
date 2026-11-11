@@ -45,11 +45,15 @@ To restore one:
 3. Copy the backup folder to `data/pg`.
 4. Start the servers. PostgreSQL replays the included WAL on first start.
 
-`npm run db:backup` does not work on Windows, because the embedded package has no `pg_dump.exe`.
+`npm run db:backup` needs `pg_dump`, which the embedded Windows package does not include. On Windows, set `PG_BIN` to the `bin` folder of PostgreSQL 18 client tools (for example the EnterpriseDB "binaries" zip); without it the command says so and stops. Verified on 10 November 2026 with the 18.4 tools.
 
 **Production:** provider backups with point-in-time recovery, plus `pg_dump` as described in [DEPLOYMENT.md](DEPLOYMENT.md). This has not been set up or tested.
 
-`npm run db:restore -- <file> <new_name>` only ever creates a new database. It refuses the live database and any name that already exists, and with `NODE_ENV=production` it also needs `RESTORE_CONFIRM=<new_name>`. It needs `pg_restore`, which the embedded Windows package does not include.
+`npm run db:restore -- <file> <new_name>` only ever creates a new database. It refuses the live database and any name that already exists, and with `NODE_ENV=production` it also needs `RESTORE_CONFIRM=<new_name>`. It needs `pg_restore`: on Windows set `PG_BIN` as above. It checks for the tool before creating anything, so a failed attempt leaves no empty database behind.
+
+**Restore drills on Windows, 10 November 2026 (disposable copies, never `data/pg`):**
+- **Online backup, by the four steps above, into a new folder:** the copy served in 17 s, with WAL replay included. Every row count matched the source databases, and owner sign-in worked.
+- **`db:restore` of a dump into a new database:** counts identical to the source. It refused an existing name and the live database.
 
 ## Photos and secrets
 

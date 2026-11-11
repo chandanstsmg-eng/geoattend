@@ -132,6 +132,19 @@ describe('pending attendance', () => {
     expect((await one(`SELECT verification_status FROM attendance_records WHERE id = $1`, [id])).verification_status).toBe('PENDING_VERIFICATION');
   });
 
+  it('an item already raised is not handed to the next run again (the job no longer re-sends its whole backlog)', async () => {
+    const s = await session(A);
+    const id = await attendance(A, s, 'PENDING_VERIFICATION');
+    await old(id);
+    const { overdueItems } = await import('../src/modules/jobs/escalation.js');
+    const { withOrg } = await import('../src/db/pool.js');
+    const pending = () => withOrg(A.org, () => overdueItems()).then((items) => items.filter((i: any) => i.id === id));
+    expect(await pending()).toHaveLength(1);
+    await sweepOverdueApprovals();
+    expect(await pending()).toHaveLength(0);
+    expect(await q(`SELECT 1 FROM notifications WHERE type = 'APPROVAL_OVERDUE' AND data->>'id' = $1`, [id])).toHaveLength(1);
+  });
+
   it('no job anywhere turns a pending record into a verified one', async () => {
     const s = await session(A);
     const id = await attendance(A, s, 'PENDING_VERIFICATION');

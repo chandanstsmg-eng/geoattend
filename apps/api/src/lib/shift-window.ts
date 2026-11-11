@@ -101,6 +101,13 @@ const TZ_ALIASES: Record<string, string> = {
 };
 export const canonicalTimezone = (tz: string) => TZ_ALIASES[tz] ?? tz;
 
+/**
+ * A zone this server and PostgreSQL both read the same way: an IANA name ("Asia/Kolkata") or UTC.
+ * Abbreviations are refused: "IST" is India to the date library but Israel to PostgreSQL, which put SQL
+ * dates and lateness 3.5 hours off (Phase I review). Fixed offsets too ("+05:30", "UTC+5"): no daylight rules.
+ */
 export function isValidTimezone(tz: string) {
-  return DateTime.local().setZone(tz).isValid;
+  const name = canonicalTimezone(tz.trim());
+  if (name !== 'UTC' && !/^[A-Z][A-Za-z_]+(\/[A-Za-z0-9_+-]+)+$/.test(name)) return false;
+  return DateTime.local().setZone(name).isValid;
 }

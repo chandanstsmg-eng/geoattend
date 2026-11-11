@@ -2,8 +2,15 @@
 FROM node:24-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
-# pg_dump and pg_restore for db:backup and db:restore.
-RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+# pg_dump and pg_restore for db:backup, db:backup:production and db:restore. They must be at least the
+# server's major version (PostgreSQL 17 in docker-compose.yml): Debian bookworm's own client is 15, and
+# pg_dump 15 refuses to dump a 17 server. So the client comes from the PostgreSQL project's repository.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+ && install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update && apt-get install -y --no-install-recommends postgresql-client-17 \
+ && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/

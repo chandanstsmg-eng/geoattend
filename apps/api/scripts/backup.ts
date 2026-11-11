@@ -1,6 +1,6 @@
 /**
- * Database backup with pg_dump (custom format). Uses the embedded server's
- * pg_dump unless DATABASE_URL points elsewhere and pg_dump is on PATH.
+ * Database backup with pg_dump (custom format). Uses PG_BIN's pg_dump when set; otherwise the embedded
+ * package's (not included on Windows: use db:backup:online there), or PATH's for an external DATABASE_URL.
  *   npm run db:backup                → <BACKUP_DIR>/geoattend-<timestamp>.dump, and its .manifest.json
  * The manifest records the size and SHA-256, and whether pg_restore could read the file. That is not a
  * restore: try one on a test server. A failure is recorded too, and the command exits 1.
@@ -31,8 +31,10 @@ try {
   const external = !!config.externalDatabaseUrl;
   const client = clientEnvironment(url);
   const env = { ...process.env, PGPASSWORD: client.password };
-  execFileSync(external ? 'pg_dump' : await embeddedBinary('pg_dump'), ['--format=custom', '--no-owner', `--file=${file}`, client.url], { stdio: 'inherit', windowsHide: true, env });
-  execFileSync(external ? 'pg_restore' : await embeddedBinary('pg_restore'), ['--list', file], { stdio: 'ignore', windowsHide: true });
+  // PG_BIN, when set, wins; else PATH for an external server, else the embedded package.
+  const tool = async (name: 'pg_dump' | 'pg_restore') => (external && !process.env.PG_BIN ? name : await embeddedBinary(name));
+  execFileSync(await tool('pg_dump'), ['--format=custom', '--no-owner', `--file=${file}`, client.url], { stdio: 'inherit', windowsHide: true, env });
+  execFileSync(await tool('pg_restore'), ['--list', file], { stdio: 'ignore', windowsHide: true });
   await finish('READABLE');
   console.log(`  Backup written to ${file}. pg_restore can read it; it has not been restored.`);
 } catch (err) {

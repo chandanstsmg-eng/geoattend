@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Bell,
@@ -233,10 +233,41 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
   const [prefs, setPrefs] = useState(loadPrefs);
   const [awayOpen, setAwayOpen] = useState(false);
   const [tip, setTip] = useState<{ label: string; top: number } | null>(null);
+  // Phone menu as a dialog: focus moves into it when it opens, the page behind is inert while it is open,
+  // and closing it yourself (Escape, the X, the backdrop) returns focus to the menu button.
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const drawer = useRef<HTMLElement>(null);
+  const returnFocus = useRef(false);
+  const closeMenu = () => {
+    returnFocus.current = true; // focused after the re-render: the menu button is inert until then
+    setOpen(false);
+  };
   useEffect(() => setOpen(false), [path]);
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    if (!open) {
+      if (returnFocus.current) menuButton.current?.focus();
+      returnFocus.current = false;
+      return;
+    }
+    closeButton.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return closeMenu();
+      if (e.key !== 'Tab' || !drawer.current) return;
+      // Keep Tab inside the open menu: from the last item back to the first, and the other way round.
+      const items = [...drawer.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const inside = drawer.current.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
@@ -317,13 +348,15 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
           prefs.rail ? 'lg:w-16' : 'lg:w-60',
           open ? 'translate-x-0 shadow-2xl' : '-translate-x-full max-lg:invisible', // closed on phones: out of the tab order too
         )}
+        ref={drawer}
         aria-label="Main navigation"
+        {...(open ? { role: 'dialog', 'aria-modal': true } : {})}
       >
         <div className={cx('flex h-16 shrink-0 items-center gap-2.5 border-b border-gray-100', rail ? 'justify-center px-2' : 'px-4')}>
           <Link href="/" className="flex min-w-0 items-center gap-2.5 rounded-md" aria-label="GeoAttend by DhishaAI — overview">
             {rail ? <Mark className="h-9 w-9 shrink-0" /> : <Lockup />}
           </Link>
-          <button className="ml-auto rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 lg:hidden" onClick={() => setOpen(false)} aria-label="Close menu">
+          <button ref={closeButton} className="ml-auto rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 lg:hidden" onClick={closeMenu} aria-label="Close menu">
             <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
@@ -377,9 +410,9 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
           {tip.label}
         </div>
       )}
-      {open && <div className="fixed inset-0 z-30 bg-navy-950/40 lg:hidden" onClick={() => setOpen(false)} aria-hidden />}
-      <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-gray-200 bg-white/95 px-4 backdrop-blur-sm sm:px-6 lg:px-8 print:hidden">
-        <button className="-ml-2 rounded-md p-2 text-gray-700 hover:bg-gray-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu" aria-expanded={open}>
+      {open && <div className="fixed inset-0 z-30 bg-navy-950/40 lg:hidden" onClick={closeMenu} aria-hidden />}
+      <header inert={open || undefined} className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-gray-200 bg-white/95 px-4 backdrop-blur-sm sm:px-6 lg:px-8 print:hidden">
+        <button ref={menuButton} className="-ml-2 rounded-md p-2 text-gray-700 hover:bg-gray-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu" aria-expanded={open}>
           <MenuIcon className="h-5 w-5" aria-hidden />
         </button>
         <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-body-sm">
@@ -419,7 +452,7 @@ function Shell({ children, me }: { children: ReactNode; me: Me }) {
       </header>
       <SosBanner />
       {me.sampleData && <SampleBanner />}
-      <main id="main" tabIndex={-1} className="mx-auto max-w-[1600px] outline-none px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{ownerPage && !isOwner ? <EmptyState title="Not available">This page is for company owners.</EmptyState> : children}</main>
+      <main id="main" tabIndex={-1} inert={open || undefined} className="mx-auto max-w-[1600px] outline-none px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-5 sm:px-6 lg:px-8 lg:pt-6">{ownerPage && !isOwner ? <EmptyState title="Not available">This page is for company owners.</EmptyState> : children}</main>
       <AwayDialog open={awayOpen} onOpenChange={setAwayOpen} />
     </div>
   );
