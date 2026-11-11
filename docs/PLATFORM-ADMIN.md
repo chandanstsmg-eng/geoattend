@@ -65,6 +65,12 @@ Creates "GeoAttend Demo Company" (Professional): `owner@demo-company.test`, `sup
 
 It refuses to run with `NODE_ENV=production`, without `--confirm-development`, or on an external database unless `ALLOW_DEMO_ON_EXTERNAL_DB=1`. Nothing runs it automatically. Phone binding applies as usual: an employee's first sign-in on a new phone waits until an owner or supervisor approves the phone (Approvals › Approve phone, or in the employee's details).
 
+## Open decisions
+
+- **Owners are not counted against any limit.** A company could add extra owners (who can do more than supervisors) instead of supervisors. Decide whether owners count towards the supervisor limit, or get a limit of their own.
+- **Background jobs still run for a suspended company** (reminders, summaries, escalations, push). Its people cannot sign in and its open live dashboards are disconnected within a minute, but scheduled messages may still go out. Decide whether jobs should skip suspended companies; skipping them also means no day-closing while suspended.
+- Two platform console tabs refreshing at the same instant can end that platform sign-in (it looks like token reuse). Sign in again; the company side has a fix for this (migration 030) that the platform side does not yet copy.
+
 ## Not done
 
 - The mobile app has no "Forgot password?" link; employees use the web page. Mobile was frozen and is still untested on real devices.

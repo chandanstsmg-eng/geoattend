@@ -332,6 +332,9 @@ describe('suspension', () => {
 describe('passwords, invitations and sessions for company accounts', () => {
   it('a forgotten password: the same answer for any address, a one-time link, and every old sign-in ends', async () => {
     const { ownerEmail } = await companyViaPlatform();
+    // An existing sign-in, from before the reset was asked for (signing in after asking cancels the link).
+    const oldRefresh = (await request(app).post('/api/v1/auth/login').send({ email: ownerEmail, password: PASSWORD, client: 'web' }).expect(200)).headers['set-cookie'] as unknown as string[];
+    const rt = oldRefresh.find((c) => c.startsWith('ga_rt='))!.split(';')[0]!;
     const sent = testOutbox.length;
     const unknown = await request(app).post('/api/v1/auth/forgot-password').send({ email: `nobody-${uid()}@x.test` }).expect(202);
     expect(testOutbox.length).toBe(sent);
@@ -339,8 +342,6 @@ describe('passwords, invitations and sessions for company accounts', () => {
     expect(known.body).toEqual(unknown.body);
     const token = tokenFrom(ownerEmail)!;
     expect(token).toBeTruthy();
-    const oldRefresh = (await request(app).post('/api/v1/auth/login').send({ email: ownerEmail, password: PASSWORD, client: 'web' }).expect(200)).headers['set-cookie'] as unknown as string[];
-    const rt = oldRefresh.find((c) => c.startsWith('ga_rt='))!.split(';')[0]!;
     await request(app).post('/api/v1/auth/reset-password').send({ token, newPassword: 'weak' }).expect(400);
     await request(app).post('/api/v1/auth/reset-password').send({ token, newPassword: 'Brand-new-password-7' }).expect(200);
     await request(app).post('/api/v1/auth/reset-password').send({ token, newPassword: 'Brand-new-password-8' }).expect(400);
@@ -428,7 +429,7 @@ describe('self sign-up follows the platform settings', () => {
     const agent = request.agent(app);
     await agent.post('/api/v1/auth/signup').send({ companyName: `Self ${uid()}`, fullName: 'Self Owner', email: `self-${uid()}@x.test`, password: PASSWORD }).expect(201);
     const me = (await agent.get('/api/v1/auth/me').expect(200)).body;
-    expect(me.plan).toMatchObject({ edition: { code: 'STARTER' }, subscription: { status: 'TRIAL', endsOn: days(14) }, limits: { employees: 25, supervisors: 2 } });
+    expect(me.plan).toMatchObject({ edition: { code: 'STARTER' }, subscription: { status: 'TRIAL', endsOn: days(13) }, limits: { employees: 25, supervisors: 2 } });
     await send(P, 'put', '/api/v1/platform/settings', { signup: { enabled: false, editionCode: 'STARTER', trialDays: 14 } }).expect(200);
     expect((await request(app).post('/api/v1/auth/signup').send({ companyName: 'Closed', fullName: 'X', email: `closed-${uid()}@x.test`, password: PASSWORD }).expect(403)).body.error.code).toBe('SIGNUP_CLOSED');
     // Back to what the rest of the tests expect.
@@ -440,5 +441,54 @@ describe('self sign-up follows the platform settings', () => {
     const log = (await P.agent.get('/api/v1/platform/audit?limit=500').expect(200)).body.map((l: any) => l.action);
     for (const a of ['platform.company.create', 'platform.company.subscription', 'platform.company.suspend', 'platform.company.activate', 'platform.company.renew', 'platform.edition.update', 'platform.settings.update', 'platform.auth.login']) expect(log, a).toContain(a);
     await expect(q(`UPDATE platform_audit_logs SET action = 'x'`)).rejects.toThrow(/append-only/);
+  });
+});
+
+describe('fixes from the independent review', () => {
+  it('an invitation link stops working when the address changes, the person signs in, or a password is set another way', async () => {
+    const { orgId, owner } = await companyViaPlatform('PROFESSIONAL');
+    const wp = await one(`INSERT INTO workplaces (name, latitude, longitude, radius_m, timezone, org_id) VALUES ('Site', 12.97, 77.59, 50, 'UTC', $1) RETURNING id`, [orgId]);
+    // Address corrected: the link sent to the old one no longer opens the account.
+    const typo = `typo-${uid()}@gmial.test`;
+    const e = await send(owner, 'post', '/api/v1/employees', { fullName: 'Typo', email: typo, employeeCode: `T-${uid()}`, workplaceId: wp.id, delivery: 'invitation' }).expect(201);
+    const old = tokenFrom(typo)!;
+    await send(owner, 'patch', `/api/v1/employees/${e.body.employee.id}`, { email: `fixed-${uid()}@company.test` }).expect(200);
+    await request(app).post('/api/v1/auth/invitation').send({ token: old }).expect(400);
+    // The owner reset the password instead: the open link ends.
+    const other = `other-${uid()}@company.test`;
+    const e2 = await send(owner, 'post', '/api/v1/employees', { fullName: 'Other', email: other, employeeCode: `O-${uid()}`, workplaceId: wp.id, delivery: 'invitation' }).expect(201);
+    const t2 = tokenFrom(other)!;
+    await send(owner, 'post', `/api/v1/employees/${e2.body.employee.id}/reset-password`).expect(200);
+    await request(app).post('/api/v1/auth/accept-invitation').send({ token: t2, password: PASSWORD }).expect(400);
+    // A reset link asked for and then not needed ends at the next sign-in.
+    const { ownerEmail } = await companyViaPlatform();
+    await request(app).post('/api/v1/auth/forgot-password').send({ email: ownerEmail }).expect(202);
+    const reset = tokenFrom(ownerEmail)!;
+    await request(app).post('/api/v1/auth/login').send({ email: ownerEmail, password: PASSWORD, client: 'web' }).expect(200);
+    await request(app).post('/api/v1/auth/reset-password').send({ token: reset, newPassword: 'Another-password-77' }).expect(400);
+  });
+
+  it('one owner cannot issue an invitation for another owner', async () => {
+    const { orgId, owner } = await companyViaPlatform();
+    const added = await send(P, 'post', `/api/v1/platform/companies/${orgId}/owners`, { fullName: 'Owner B', email: `b-${uid()}@company.test` }).expect(201);
+    const r = await send(owner, 'post', `/api/v1/team/${added.body.owner.id}/invitation`).expect(400);
+    expect(r.body.error.code).toBe('OWNER_ACCOUNT');
+  });
+
+  it('a cancelled subscription needs an end date, and renewing one without an end date is refused', async () => {
+    const { orgId } = await companyViaPlatform('ENTERPRISE', { subscription: { status: 'ACTIVE', endsOn: null } });
+    expect((await send(P, 'put', `/api/v1/platform/companies/${orgId}/subscription`, { subscriptionStatus: 'CANCELLED' }).expect(400)).body.error.code).toBe('END_DATE_REQUIRED');
+    expect((await send(P, 'post', `/api/v1/platform/companies/${orgId}/renew`, {}).expect(400)).body.error.code).toBe('NO_END_DATE');
+    const c = await send(P, 'put', `/api/v1/platform/companies/${orgId}/subscription`, { subscriptionStatus: 'CANCELLED', startsOn: days(-60), endsOn: days(-30) }).expect(200);
+    expect(c.body.company.subscription).toMatchObject({ status: 'CANCELLED', state: 'EXPIRED', readOnly: true });
+  });
+
+  it('the overtime export and the employee earnings follow the plan too', async () => {
+    const { orgId, owner } = await companyViaPlatform('STARTER');
+    expect((await owner.agent.get(`/api/v1/reports/overtime.csv?from=${days(-7)}&to=${today()}`).expect(403)).body.error.code).toBe('FEATURE_NOT_IN_PLAN');
+    const wp = await one(`INSERT INTO workplaces (name, latitude, longitude, radius_m, timezone, org_id) VALUES ('Site', 12.97, 77.59, 50, 'UTC', $1) RETURNING id`, [orgId]);
+    const emp = await createEmployee({ workplaceId: wp.id, orgId });
+    const t = await mobileLogin(app, emp.email);
+    expect((await request(app).get('/api/v1/me/earnings').set('Authorization', `Bearer ${t}`).expect(200)).body).toMatchObject({ estimate: null, payslips: [] });
   });
 });

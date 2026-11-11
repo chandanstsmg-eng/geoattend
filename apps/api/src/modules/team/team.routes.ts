@@ -95,7 +95,10 @@ mount(teamRouter, '/api/v1/team', 'team', [
     params: idParams,
     scope: 'admin',
     handler: async ({ params, user, req }) => {
-      const a = await one('SELECT is_active, last_login_at FROM users WHERE id = $1', [params.id]);
+      const a = await one('SELECT u.is_active, u.last_login_at, ap.access FROM users u JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1', [params.id]);
+      // A link sets the password, so issuing one for another owner would let one owner take over another's account
+      // (the same rule as reset-password). Owners' invitations come from the platform.
+      if (a.access === 'OWNER') throw badRequest('OWNER_ACCOUNT', 'Another owner’s invitation is sent by GeoAttend, not from the dashboard.');
       if (!a.is_active) throw conflict('INACTIVE', 'Reactivate this administrator first.');
       if (a.last_login_at) throw conflict('ALREADY_SIGNED_IN', 'This administrator has already signed in. Use “Reset password” instead.');
       const link = await tx((db) => issueAccountToken(params.id, 'INVITE', user.id, db));

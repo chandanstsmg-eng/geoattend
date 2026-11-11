@@ -31,6 +31,14 @@ export async function issueAccountToken(userId: string, purpose: TokenPurpose, c
   return { token, url: accountLink(purpose, token), expiresAt: row!.expires_at };
 }
 
+/**
+ * Cancels every open link of a person. Called whenever a link could otherwise outlive its purpose: the address
+ * it was sent to changed, the password was set some other way, the person signed in, or was deactivated.
+ */
+export async function revokeAccountTokens(userId: string, db?: Queryable) {
+  await q('UPDATE account_tokens SET revoked_at = now() WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL', [userId], db);
+}
+
 /** The open token behind `raw`, with its user and company, or null (unknown, used, cancelled or expired). Nobody is signed in yet, so this looks past companies. */
 export async function findAccountToken(raw: string, purpose: TokenPurpose) {
   return asSystem(() =>

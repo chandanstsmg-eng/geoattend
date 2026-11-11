@@ -65,6 +65,16 @@ const linkLimiter = rateLimit({
   message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts. Try again in a few minutes.' } },
 });
 
+// Reset e-mails per address, whatever network asks: nobody can flood an inbox or keep cancelling someone's link.
+const resetPerAddressLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: config.isTest ? 1000 : 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => `reset|${String(req.body?.email ?? '').toLowerCase()}`,
+  message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts. Try again in a few minutes.' } },
+});
+
 const LOCK_AFTER = 8;
 const LOCK_MINUTES = 15;
 
@@ -120,6 +130,8 @@ mount(authRouter, '/api/v1/auth', 'auth', [
       if (body.client === 'mobile' && u.role !== 'EMPLOYEE') throw new HttpError(403, 'WRONG_APP', 'Administrators sign in to the web dashboard.');
       if (body.client === 'mobile') await checkDeviceAtLogin(u, body.deviceId, body.platform ?? 'unknown', body.model);
       await q('UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1', [u.id]);
+      // Signed in with a password they know: no unused invitation or reset link should still open the account.
+      await q('UPDATE account_tokens SET revoked_at = now() WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL', [u.id]);
       if (needsRehash(u.password_hash)) await q('UPDATE users SET password_hash = $2 WHERE id = $1', [u.id, await hashPassword(body.password)]);
 
       const accessToken = await signAccessToken(u, body.client === 'mobile' ? body.deviceId : null);
@@ -219,7 +231,7 @@ mount(authRouter, '/api/v1/auth', 'auth', [
         const edition = await one('SELECT * FROM editions WHERE code = $1 AND is_active', [signup.editionCode], db);
         const org = await one(
           `INSERT INTO organizations (name, phone, registration_source, edition_code, employee_limit, supervisor_limit, features, subscription_status, subscription_starts_on, subscription_ends_on)
-           SELECT $1, $2, 'SELF_SIGNUP', e.code, e.employee_limit, e.supervisor_limit, e.features, 'TRIAL', current_date, current_date + $4::int
+           SELECT $1, $2, 'SELF_SIGNUP', e.code, e.employee_limit, e.supervisor_limit, e.features, 'TRIAL', current_date, current_date + $4::int - 1
            FROM editions e WHERE e.code = $3 RETURNING id`,
           [body.companyName, body.phone || null, edition?.code ?? 'STARTER', signup.trialDays],
           db,
@@ -271,7 +283,7 @@ mount(authRouter, '/api/v1/auth', 'auth', [
     path: '/forgot-password',
     summary: 'E-mail a one-time password-reset link (the answer is the same whether or not the account exists)',
     access: 'public',
-    pre: [linkLimiter],
+    pre: [linkLimiter, resetPerAddressLimiter],
     body: z.object({ email: z.email().max(200) }),
     handler: async ({ body, req, res }) => {
       const work = (async () => {

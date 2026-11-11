@@ -32,7 +32,8 @@ export async function recheckClients() {
   for (const [res, c] of clients) {
     if (!c.userId) continue;
     const u = await one(
-      `SELECT u.is_active, u.org_id, ap.access, ap.site_ids FROM users u LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
+      // A suspended company counts as inactive: its open dashboards stop receiving events too.
+      `SELECT u.is_active AND o.status = 'ACTIVE' AS is_active, u.org_id, ap.access, ap.site_ids FROM users u JOIN organizations o ON o.id = u.org_id LEFT JOIN administrator_profiles ap ON ap.user_id = u.id WHERE u.id = $1`,
       [c.userId],
     ).catch(() => undefined);
     if (u === undefined) continue; // database unavailable: keep the stream and look again

@@ -11,7 +11,7 @@ import { revokeAllForUser, type AuthUser } from '../../lib/auth.js';
 import { assertInOrg, siteFilter, emailTaken } from '../../lib/tenancy.js';
 import { audit } from '../../lib/audit.js';
 import { assertWithinLimit } from '../../lib/company.js';
-import { issueAccountToken, sendInvitation, unusablePassword } from '../../lib/account-tokens.js';
+import { issueAccountToken, revokeAccountTokens, sendInvitation, unusablePassword } from '../../lib/account-tokens.js';
 import { endSession } from '../tracking/tracking.service.js';
 import { addRosterEntry, rosterEntryBody } from '../roster/roster.js';
 import { defaultDate } from '../reports/reports.routes.js';
@@ -230,6 +230,8 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
         if (body.email && (await emailTaken(body.email, params.id))) throw conflict('EMAIL_TAKEN', 'An account with this email already exists.');
         if (body.employeeCode && (await one('SELECT 1 FROM employee_profiles WHERE employee_code = $1 AND user_id <> $2 AND org_id = $3', [body.employeeCode, params.id, user.orgId], db))) throw conflict('CODE_TAKEN', 'This employee ID is already in use.');
         await q(`UPDATE users SET full_name = COALESCE($2, full_name), email = COALESCE($3, email), updated_at = now() WHERE id = $1`, [params.id, body.fullName ?? null, body.email ?? null], db);
+        // A link sent to the old address must not open the account now known by the new one.
+        if (body.email) await revokeAccountTokens(params.id, db);
         await q(
           `UPDATE employee_profiles SET employee_code = COALESCE($2, employee_code),
              phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,

@@ -148,7 +148,8 @@ mount(meRouter, '/api/v1/me', 'me', [
     access: 'employee',
     handler: async ({ user }) => {
       const month = (await orgToday(user.orgId)).slice(0, 7);
-      if (!config.payrollEnabled) return { month, estimate: null, payslips: [] };
+      // Off on the server, or not in the company's plan: no estimate and no payslips.
+      if (!config.payrollEnabled || !user.company?.features.payroll) return { month, estimate: null, payslips: [] };
       const [current] = await computeMonth(user.orgId, month, user.id);
       const payslips = await q(
         `SELECT p.id, p.month, p.net_amount::float AS net_amount, r.status, r.paid_at FROM payslips p JOIN payroll_runs r ON r.id = p.run_id

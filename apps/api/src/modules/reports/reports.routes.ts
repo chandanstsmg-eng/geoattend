@@ -11,7 +11,7 @@ import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
 import { attendanceCounts, callerTeam, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, supervisorTeam, workJoinForDays } from '../../lib/tenancy.js';
-import { badRequest } from '../../lib/errors.js';
+import { HttpError, badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { computeHours, hoursText, loadPendingHours, loadWorkRecords, withPendingHours } from './hours.js';
 
@@ -405,6 +405,7 @@ mount(reportsRouter, '/api/v1/reports', 'reports', [
     raw: true,
     query: hoursQuery,
     handler: async ({ query, res, user, req }) => {
+      if (user.company && !user.company.features.overtime) throw new HttpError(403, 'FEATURE_NOT_IN_PLAN', 'This module is not part of your GeoAttend plan.', { feature: 'overtime' });
       const { rows } = await hoursFor(user, query);
       await audit({ actor: user, action: 'report.export', resourceType: 'overtime_csv', after: { ...query, rows: rows.length }, req });
       sendCsv(res, `overtime_${query.from}_${query.to}.csv`, toCsv(['Employee Name', 'Total Overtime Hours'], rows.filter(official).map((r) => [r.full_name, hoursText(r.overtime_minutes)])));

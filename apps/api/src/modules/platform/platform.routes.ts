@@ -203,6 +203,12 @@ async function loadCompany(id: string, db?: Queryable) {
   return present(r);
 }
 
+/** Locks a company's row for the rest of the transaction, so two platform changes cannot overwrite each other. */
+async function lockCompany(id: string, db: Queryable) {
+  if (!(await one('SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE', [id], db))) throw notFound('Company');
+  return loadCompany(id, db);
+}
+
 async function loadEdition(code: string, db?: Queryable) {
   const e = await one('SELECT * FROM editions WHERE code = $1', [code], db);
   if (!e) throw badRequest('UNKNOWN_EDITION', 'Choose one of the editions.');
@@ -374,17 +380,19 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
     access: 'platform',
     params: idParams,
     body: z.object({ name: z.string().trim().min(2).max(200).optional(), phone: z.string().trim().max(40).nullable().optional(), registration: registrationBody.optional() }),
-    handler: async ({ params, body, platform, req }) => {
-      const before = await loadCompany(params.id);
-      await q(
-        `UPDATE organizations SET name = COALESCE($2, name), phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,
-           registration = CASE WHEN $5::jsonb IS NULL THEN registration ELSE $5::jsonb END, updated_at = now() WHERE id = $1`,
-        [params.id, body.name ?? null, 'phone' in body, body.phone ?? null, body.registration ? JSON.stringify(cleanRegistration(body.registration)) : null],
-      );
-      const after = await loadCompany(params.id);
-      await record(platform, req, { action: 'platform.company.update', orgId: params.id, targetType: 'organization', targetId: params.id, before: { name: before.name, phone: before.phone, registration: before.registration }, after: { name: after.name, phone: after.phone, registration: after.registration } });
-      return after;
-    },
+    handler: async ({ params, body, platform, req }) =>
+      tx(async (db) => {
+        const before = await lockCompany(params.id, db);
+        await q(
+          `UPDATE organizations SET name = COALESCE($2, name), phone = CASE WHEN $3::boolean THEN $4 ELSE phone END,
+             registration = CASE WHEN $5::jsonb IS NULL THEN registration ELSE $5::jsonb END, updated_at = now() WHERE id = $1`,
+          [params.id, body.name ?? null, 'phone' in body, body.phone ?? null, body.registration ? JSON.stringify(cleanRegistration(body.registration)) : null],
+          db,
+        );
+        const after = await loadCompany(params.id, db);
+        await record(platform, req, { action: 'platform.company.update', orgId: params.id, targetType: 'organization', targetId: params.id, before: { name: before.name, phone: before.phone, registration: before.registration }, after: { name: after.name, phone: after.phone, registration: after.registration } }, db);
+        return after;
+      }),
   }),
   route({
     method: 'post',
@@ -394,9 +402,9 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
     params: idParams,
     body: z.object({ status: z.enum(['ACTIVE', 'SUSPENDED']), reason: z.string().trim().min(3).max(500) }),
     handler: async ({ params, body, platform, req }) => {
-      const before = await loadCompany(params.id);
-      if (before.status === body.status) throw conflict('NO_CHANGE', `This company is already ${body.status === 'ACTIVE' ? 'active' : 'suspended'}.`);
       await tx(async (db) => {
+        const before = await lockCompany(params.id, db);
+        if (before.status === body.status) throw conflict('NO_CHANGE', `This company is already ${body.status === 'ACTIVE' ? 'active' : 'suspended'}.`);
         await q('UPDATE organizations SET status = $2, status_reason = $3, status_changed_at = now(), updated_at = now() WHERE id = $1', [params.id, body.status, body.reason], db);
         // Sign-ins end now: refreshing is refused anyway, this also stops phones from trying.
         if (body.status === 'SUSPENDED') await q('UPDATE refresh_tokens SET revoked_at = now() WHERE revoked_at IS NULL AND user_id IN (SELECT id FROM users WHERE org_id = $1)', [params.id], db);
@@ -426,7 +434,8 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
       })
       .strict(),
     handler: async ({ params, body, platform, req }) => {
-      const before = await loadCompany(params.id);
+      await tx(async (db) => {
+      const before = await lockCompany(params.id, db);
       const next = {
         editionCode: before.edition.code,
         employeeLimit: before.limits.employees,
@@ -437,7 +446,7 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
         endsOn: before.subscription.endsOn,
       };
       if (body.editionCode && body.editionCode !== before.edition.code) {
-        const e = await loadEdition(body.editionCode);
+        const e = await loadEdition(body.editionCode, db);
         next.editionCode = e.code;
         if (body.applyEditionDefaults) Object.assign(next, { employeeLimit: e.employee_limit, supervisorLimit: e.supervisor_limit, features: normalizeFeatures(e.features) });
       }
@@ -448,7 +457,8 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
       if (body.startsOn !== undefined) next.startsOn = body.startsOn;
       if (body.endsOn !== undefined) next.endsOn = body.endsOn;
       if (next.startsOn && next.endsOn && next.endsOn < next.startsOn) throw badRequest('BAD_DATES', 'The renewal date must be on or after the start date.');
-      await tx(async (db) => {
+      // Cancelled means "ends on a date": without one it would never end.
+      if (next.subscriptionStatus === 'CANCELLED' && !next.endsOn) throw badRequest('END_DATE_REQUIRED', 'A cancelled subscription needs the date it ends (the last day it covers).');
         await q(
           `UPDATE organizations SET edition_code = $2, employee_limit = $3, supervisor_limit = $4, features = $5, subscription_status = $6, subscription_starts_on = $7, subscription_ends_on = $8, updated_at = now() WHERE id = $1`,
           [params.id, next.editionCode, next.employeeLimit, next.supervisorLimit, JSON.stringify(next.features), next.subscriptionStatus, next.startsOn, next.endsOn],
@@ -473,12 +483,14 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
     params: idParams,
     body: z.object({ durationDays: z.number().int().min(1).max(3660).optional(), endsOn: isoDate.optional() }),
     handler: async ({ params, body, platform, req }) => {
-      const before = await loadCompany(params.id);
-      const e = await loadEdition(before.edition.code);
-      const from = before.subscription.endsOn && before.subscription.endsOn >= today() ? before.subscription.endsOn : DateTime.utc().minus({ days: 1 }).toISODate()!;
-      const endsOn = body.endsOn ?? DateTime.fromISO(from).plus({ days: body.durationDays ?? e.default_duration_days }).toISODate()!;
-      if (endsOn < today()) throw badRequest('BAD_DATES', 'The new renewal date must be today or later.');
       await tx(async (db) => {
+        const before = await lockCompany(params.id, db);
+        // A subscription with no end date never expires; renewing it would give it one.
+        if (!before.subscription.endsOn && !body.endsOn) throw badRequest('NO_END_DATE', 'This subscription has no end date, so there is nothing to renew. To set one, give the new renewal date.');
+        const e = await loadEdition(before.edition.code, db);
+        const from = before.subscription.endsOn && before.subscription.endsOn >= today() ? before.subscription.endsOn : DateTime.utc().minus({ days: 1 }).toISODate()!;
+        const endsOn = body.endsOn ?? DateTime.fromISO(from).plus({ days: body.durationDays ?? e.default_duration_days }).toISODate()!;
+        if (endsOn < today()) throw badRequest('BAD_DATES', 'The new renewal date must be today or later.');
         await q(`UPDATE organizations SET subscription_status = 'ACTIVE', subscription_ends_on = $2, subscription_starts_on = COALESCE(subscription_starts_on, current_date), updated_at = now() WHERE id = $1`, [params.id, endsOn], db);
         await record(platform, req, { action: 'platform.company.renew', orgId: params.id, targetType: 'organization', targetId: params.id, before: { subscription: before.subscription }, after: { endsOn, status: 'ACTIVE' } }, db);
       });
@@ -551,8 +563,10 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
         isActive: z.boolean().optional(),
       })
       .strict(),
-    handler: async ({ params, body, platform, req }) => {
-      const before = await loadEdition(params.code);
+    handler: async ({ params, body, platform, req }) =>
+      tx(async (db) => {
+      const before = await one('SELECT * FROM editions WHERE code = $1 FOR UPDATE', [params.code], db);
+      if (!before) throw badRequest('UNKNOWN_EDITION', 'Choose one of the editions.');
       const features = body.features ? { ...normalizeFeatures(before.features), ...Object.fromEntries(Object.entries(body.features).filter(([, v]) => v !== undefined)) } : normalizeFeatures(before.features);
       const e = await one(
         `UPDATE editions SET name = COALESCE($2, name), description = CASE WHEN $3::boolean THEN $4 ELSE description END,
@@ -560,10 +574,11 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
            features = $9, default_duration_days = COALESCE($10, default_duration_days), is_active = COALESCE($11, is_active), updated_at = now()
          WHERE code = $1 RETURNING *`,
         [params.code, body.name ?? null, 'description' in body, body.description ?? null, 'employeeLimit' in body, body.employeeLimit ?? null, 'supervisorLimit' in body, body.supervisorLimit ?? null, JSON.stringify(features), body.defaultDurationDays ?? null, body.isActive ?? null],
+        db,
       );
-      await platformAudit({ adminId: platform.id, action: 'platform.edition.update', targetType: 'edition', targetId: params.code, before: presentEdition(before), after: presentEdition(e), req });
+      await platformAudit({ adminId: platform.id, action: 'platform.edition.update', targetType: 'edition', targetId: params.code, before: presentEdition(before), after: presentEdition(e), req }, db);
       return presentEdition(e);
-    },
+      }),
   }),
 
   route({
@@ -590,15 +605,19 @@ mount(platformRouter, '/api/v1/platform', 'platform', [
       .strict(),
     handler: async ({ body, platform, req }) => {
       if (body.signup) await loadEdition(body.signup.editionCode);
-      const before = await getPlatformSettings();
-      for (const [key, value] of Object.entries(body)) {
-        if (!value) continue;
-        await q(`INSERT INTO platform_settings (key, value, updated_by, updated_at) VALUES ($1, $2, $3, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`, [key, JSON.stringify(value), platform.id]);
-      }
       invalidatePlatformSettings();
-      const after = await getPlatformSettings();
-      await platformAudit({ adminId: platform.id, action: 'platform.settings.update', targetType: 'platform_settings', before, after, req });
-      return after;
+      const before = await getPlatformSettings();
+      const after = structuredClone(before);
+      await tx(async (db) => {
+        for (const [key, value] of Object.entries(body)) {
+          if (!value) continue;
+          await q(`INSERT INTO platform_settings (key, value, updated_by, updated_at) VALUES ($1, $2, $3, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`, [key, JSON.stringify(value), platform.id], db);
+          (after as any)[key] = { ...(after as any)[key], ...value };
+        }
+        await platformAudit({ adminId: platform.id, action: 'platform.settings.update', targetType: 'platform_settings', before, after, req }, db);
+      });
+      invalidatePlatformSettings();
+      return getPlatformSettings();
     },
   }),
   route({

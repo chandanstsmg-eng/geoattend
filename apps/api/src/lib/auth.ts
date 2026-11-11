@@ -159,8 +159,10 @@ export async function revokeRefreshToken(token: string) {
   return (row?.user_id as string | undefined) ?? null;
 }
 
+/** Ends every sign-in of a person, and cancels their open invitation and reset links (password changed or reset, deactivated). */
 export async function revokeAllForUser(userId: string) {
   await q('UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
+  await q('UPDATE account_tokens SET revoked_at = now() WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL', [userId]);
 }
 
 export function setWebCookies(res: Response, accessToken: string, refreshToken: string) {
