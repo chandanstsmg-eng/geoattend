@@ -95,6 +95,123 @@ export async function withLeaveAndNoShow(orgId: string, date: string, rows: any[
   });
 }
 
+/** A roster row reduced to what the dashboard's daily counts read (see rosterDayCounts). */
+export interface DayCountRow {
+  employee_id: string;
+  workplace_id: string;
+  start_time: string;
+  timezone: string;
+  attendance_id: string | null;
+  verification_status: string | null;
+  is_late: boolean | null;
+  session_id: string | null;
+  ended_at: Date | null;
+  holiday: string | null;
+  on_leave: { id: string; leave_type: string; half_day: boolean } | null;
+  no_show: boolean;
+}
+
+/** Days per roster query in rosterDayCounts: bounds the rows held at once for a year-long range. */
+const DAY_COUNT_CHUNK_DAYS = 31;
+
+/**
+ * For every date in [from, to]: the rows of roster(orgId, date, …) after withLeaveAndNoShow, with only the
+ * columns the dashboard's daily counts read (attendance, lateness, verification, session end, leave,
+ * holiday, no-show). One query per 31 days and one leave and one holiday lookup for the whole range,
+ * instead of three or four queries per day. The rows, filters and rules are the roster's own:
+ * test/report-speed.test.ts checks that both give the same rows for every date.
+ */
+export async function rosterDayCounts(orgId: string, from: string, to: string, workplaceId: string | null, includeSimulated = true, sites: string[] | null = null, now = new Date()) {
+  const byDate = new Map<string, DayCountRow[]>();
+  if (to < from) return byDate;
+  const chunks: [string, string][] = [];
+  for (let d = DateTime.fromISO(from); d.toISODate()! <= to; d = d.plus({ days: DAY_COUNT_CHUNK_DAYS })) {
+    const end = d.plus({ days: DAY_COUNT_CHUNK_DAYS - 1 }).toISODate()!;
+    chunks.push([d.toISODate()!, end < to ? end : to]);
+  }
+  const rows: (Omit<DayCountRow, 'holiday' | 'on_leave' | 'no_show'> & { date: string })[] = [];
+  for (const [a, b] of chunks) {
+    rows.push(
+      ...(await q(
+        // The roster query (above) with the date taken from the series instead of one parameter. The range's
+        // attendance and sessions are read once by date and joined on (employee, shift, date): joined per row,
+        // the planner fetched each person's every record of the shift and checked company isolation on each.
+        `WITH ar AS MATERIALIZED (
+           SELECT id, employee_id, shift_id, shift_date, verification_status, is_late FROM attendance_records
+           WHERE shift_date BETWEEN $1::date AND $2::date AND verification_status <> 'VOIDED'
+         ), s AS MATERIALIZED (
+           SELECT id, employee_id, shift_id, shift_date, ended_at FROM tracking_sessions WHERE shift_date BETWEEN $1::date AND $2::date
+         )
+         SELECT to_char(d.day, 'YYYY-MM-DD') AS date, u.id AS employee_id, w.id AS workplace_id,
+                COALESCE(rev.start_time, sh.start_time) AS start_time, COALESCE(rev.timezone, sh.timezone) AS timezone,
+                ar.id AS attendance_id, ar.verification_status,
+                (ar.is_late AND ar.verification_status <> 'PENDING_VERIFICATION') AS is_late,
+                s.id AS session_id, s.ended_at
+         FROM (SELECT g::date AS day FROM generate_series($1::date, $2::date, interval '1 day') g) d
+         JOIN employee_shift_assignments esa ON esa.effective_from <= d.day AND (esa.effective_to IS NULL OR esa.effective_to >= d.day)
+         JOIN users u ON u.id = esa.employee_id AND u.role = 'EMPLOYEE'
+         JOIN employee_profiles ep ON ep.user_id = u.id
+         JOIN shifts sh ON sh.id = esa.shift_id
+         LEFT JOIN LATERAL (
+           SELECT r.* FROM shift_revisions r WHERE r.shift_id = sh.id AND d.day <= r.valid_to AND (r.valid_from IS NULL OR d.day >= r.valid_from) ORDER BY r.valid_to LIMIT 1
+         ) rev ON true
+         JOIN workplaces w ON w.id = sh.workplace_id AND (w.is_active OR d.day < w.deactivated_on)
+         LEFT JOIN ar ON ar.employee_id = u.id AND ar.shift_id = sh.id AND ar.shift_date = d.day
+         LEFT JOIN s ON s.employee_id = u.id AND s.shift_id = sh.id AND s.shift_date = d.day
+         WHERE COALESCE(rev.is_active, sh.is_active)
+           AND (ep.joined_on IS NULL OR d.day >= ep.joined_on)
+           AND (CASE WHEN ep.left_on IS NOT NULL THEN d.day <= ep.left_on ELSE u.is_active END)
+           AND EXTRACT(ISODOW FROM d.day)::smallint = ANY (COALESCE(rev.days_of_week, sh.days_of_week))
+           AND ($3::uuid IS NULL OR w.id = $3) AND ($4 OR NOT u.is_demo) AND u.org_id = $5 AND ${siteFilter('w.id', '$6')}`,
+        [a, b, workplaceId, includeSimulated, orgId, sites],
+      )),
+    );
+  }
+  const { alerts } = await getSettings(orgId);
+  // Approved leave and holidays for the whole range, applied per date exactly as approvedLeaveOn and holidaysOn do.
+  const employees = [...new Set(rows.map((r) => r.employee_id))];
+  const workplaces = [...new Set(rows.map((r) => r.workplace_id))];
+  const leave = employees.length
+    ? await q(
+        `SELECT employee_id, id, leave_type, half_day, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date FROM leave_requests
+         WHERE status = 'APPROVED' AND employee_id = ANY($1::uuid[]) AND start_date <= $3 AND end_date >= $2
+         ORDER BY employee_id, half_day`, // as approvedLeaveOn: a full-day leave wins over a half day
+        [employees, from, to],
+      )
+    : [];
+  const leaveOf = new Map<string, typeof leave>();
+  for (const l of leave) leaveOf.set(l.employee_id, [...(leaveOf.get(l.employee_id) ?? []), l]);
+  const holidays = workplaces.length
+    ? await q(
+        `SELECT DISTINCT ON (w.id, h.holiday_date) w.id AS workplace_id, to_char(h.holiday_date, 'YYYY-MM-DD') AS date, h.name FROM workplaces w
+         JOIN holidays h ON h.org_id = w.org_id AND h.holiday_date BETWEEN $1 AND $2 AND (h.workplace_id IS NULL OR h.workplace_id = w.id)
+         WHERE w.id = ANY($3::uuid[]) ORDER BY w.id, h.holiday_date, h.workplace_id NULLS LAST`, // a workplace's own holiday wins
+        [from, to, workplaces],
+      )
+    : [];
+  const holidayOf = new Map<string, string>(holidays.map((h) => [`${h.workplace_id}|${h.date}`, h.name as string]));
+  const noShowAt = new Map<string, number>();
+  const thresholdFor = (date: string, start: string, zone: string) => {
+    const key = `${date}|${start}|${zone}`;
+    let at = noShowAt.get(key);
+    if (at === undefined) {
+      at = DateTime.fromISO(`${date}T${start}`, { zone }).plus({ minutes: alerts.noShowAfterMinutes }).toMillis();
+      noShowAt.set(key, at);
+    }
+    return at;
+  };
+  for (const { date, ...r } of rows) {
+    const l = leaveOf.get(r.employee_id)?.find((x) => x.start_date <= date && x.end_date >= date);
+    const onLeave = l ? { id: l.id as string, leave_type: l.leave_type as string, half_day: l.half_day as boolean } : null;
+    const holiday = holidayOf.get(`${r.workplace_id}|${date}`) ?? null;
+    const noShow = !onLeave && !holiday && !r.attendance_id && !r.session_id && alerts.noShowAfterMinutes > 0 && now.getTime() >= thresholdFor(date, r.start_time, r.timezone);
+    let day = byDate.get(date);
+    if (!day) byDate.set(date, (day = []));
+    day.push({ ...r, holiday, on_leave: onLeave, no_show: noShow });
+  }
+  return byDate;
+}
+
 /**
  * Overtime and leaving early from an attendance_work row. Overtime is only what an administrator
  * approved (worked time itself stops at the scheduled end), so pending or rejected overtime is 0.
