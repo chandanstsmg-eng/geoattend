@@ -150,22 +150,28 @@ async function dashboardFor(user: AuthUser, query: z.infer<typeof dashboardQuery
   const sup = query.supervisorId ?? null;
   const emp = query.employeeId ?? null;
   // $1 company, $2 caller's sites (null = owner), $3 workplace filter, $4 supervisor filter, $5 include simulated
-  const P = [user.orgId, user.sites, wp, sup, includeSim];
+  const supSites = sup ? new Set<string>((await one(`SELECT ${SUPERVISOR_SITES('$1')} AS s`, [sup])).s) : null;
+  // The workplaces the data queries read. An owner filtering by a supervisor reads only that supervisor's sites, as the
+  // supervisor's own requests do: the supervisor filter keeps no other site anyway, so the rows are the same, but
+  // without it each query read the whole company first (90 days, 1,032 employees: 2.9 s instead of 0.7, 11 Nov 2026).
+  // `user.sites` itself still decides what only owners see (the supervisors section).
+  const sites = user.sites ?? (supSites ? [...supSites] : null);
+  const scope = { ...user, sites };
+  const P = [user.orgId, sites, wp, sup, includeSim];
   // Workplace scope, and (when the rows are about an employee) the supervisor's team: the signed-in supervisor's, or the
   // one an owner filters by (the whole dashboard then runs as that supervisor sees it, below).
   const inScope = (expr: string, employeeExpr?: string) => `${siteFilter(expr, '$2', employeeExpr)} AND ($3::uuid IS NULL OR ${expr} = $3) AND ($4::uuid IS NULL OR ${expr} = ANY(${SUPERVISOR_SITES('$4')}))`;
-  const supSites = sup ? new Set<string>((await one(`SELECT ${SUPERVISOR_SITES('$1')} AS s`, [sup])).s) : null;
   const keep = (wpId: string) => !supSites || supSites.has(wpId);
   const keepRow = (r: { workplace_id: string; employee_id: string }) => keep(r.workplace_id) && (!emp || r.employee_id === emp);
-  const dayRows = async (date: string) => (await withLeaveAndNoShow(user.orgId, date, await roster(user.orgId, date, wp, includeSim, user.sites))).filter(keepRow);
+  const dayRows = async (date: string) => (await withLeaveAndNoShow(user.orgId, date, await roster(user.orgId, date, wp, includeSim, sites))).filter(keepRow);
   // Rows per date for a run of days: days before today come from one range lookup (the same rows, reduced to
   // what the counts read); today keeps the full per-day roster, since its rows are listed and depend on the clock.
   const rowsForDays = async (dates: string[]) => {
     const past = dates.filter((d) => d < today);
-    const ranged = past.length ? await rosterDayCounts(user.orgId, past[0]!, past[past.length - 1]!, wp, includeSim, user.sites) : new Map<string, DayCountRow[]>();
+    const ranged = past.length ? await rosterDayCounts(user.orgId, past[0]!, past[past.length - 1]!, wp, includeSim, sites) : new Map<string, DayCountRow[]>();
     return Promise.all(dates.map(async (d) => (d < today ? (ranged.get(d) ?? []).filter(keepRow) : dayRows(d))));
   };
-  const workFor = (f: string, t: string) => loadWorkRecords(user, { from: f, to: t, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim }, { names: false });
+  const workFor = (f: string, t: string) => loadWorkRecords(scope, { from: f, to: t, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim }, { names: false });
 
   // ── workplaces and workers in scope ──
   const workplaces = await q(
@@ -271,7 +277,7 @@ async function dashboardFor(user: AuthUser, query: z.infer<typeof dashboardQuery
 
   const totalMinutes = split.reduce((n, r) => n + r.total, 0);
   const overtimeMinutes = split.reduce((n, r) => n + r.overtime, 0);
-  const pendingMinutes = (await loadPendingHours(user, { from, to, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
+  const pendingMinutes = (await loadPendingHours(scope, { from, to, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
   const summary = { from: days[0] ?? from, to: trendTo, ...summarize(trend, split), pendingMinutes };
 
   // The equally long period just before, judged by exactly the same rules (opt-in: it doubles the work).
@@ -282,7 +288,7 @@ async function dashboardFor(user: AuthUser, query: z.infer<typeof dashboardQuery
     const pFrom = DateTime.fromISO(pTo).minus({ days: len - 1 }).toISODate()!;
     const pDates = isoDays(pFrom, pTo);
     const pDays: DayOutcome[] = (await rowsForDays(pDates)).map((rows, i) => dayOutcome(rows, pDates[i]!, today));
-    const pPending = (await loadPendingHours(user, { from: pFrom, to: pTo, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
+    const pPending = (await loadPendingHours(scope, { from: pFrom, to: pTo, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
     previous = { from: pFrom, to: pTo, ...summarize(pDays, splitRecords(await workFor(pFrom, pTo), settings.workforce, pFrom, pTo)), pendingMinutes: pPending };
   }
 
