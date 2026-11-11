@@ -10,7 +10,7 @@ import { audit } from '../../lib/audit.js';
 import { getSettings } from '../settings/settings.service.js';
 import { approvedLeaveOn } from '../leave/leave.routes.js';
 import { holidaysOn } from '../holidays/holidays.routes.js';
-import { attendanceCounts, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, supervisorTeam, workJoinForDays } from '../../lib/tenancy.js';
+import { attendanceCounts, callerTeam, employeeSite, overtimeCounts, pendingMinutes, siteFilter, SUPERVISOR_SITES, supervisorTeam, workJoinForDays } from '../../lib/tenancy.js';
 import { badRequest } from '../../lib/errors.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { computeHours, hoursText, loadPendingHours, loadWorkRecords, withPendingHours } from './hours.js';
@@ -162,11 +162,15 @@ export async function rosterDayCounts(orgId: string, from: string, to: string, w
            AND (ep.joined_on IS NULL OR d.day >= ep.joined_on)
            AND (CASE WHEN ep.left_on IS NOT NULL THEN d.day <= ep.left_on ELSE u.is_active END)
            AND EXTRACT(ISODOW FROM d.day)::smallint = ANY (COALESCE(rev.days_of_week, sh.days_of_week))
-           AND ($3::uuid IS NULL OR w.id = $3) AND ($4 OR NOT u.is_demo) AND u.org_id = $5 AND ${siteFilter('w.id', '$6', 'u.id')}`,
+           AND ($3::uuid IS NULL OR w.id = $3) AND ($4 OR NOT u.is_demo) AND u.org_id = $5 AND ${siteFilter('w.id', '$6')}`,
         [a, b, workplaceId, includeSimulated, orgId, sites],
       )),
     );
   }
+  // A supervisor's own team (approved policy, Phase I), applied to the rows rather than inside the query: there it
+  // made the planner choose a join 5 times slower for short ranges. Same rule as teamFilter (lib/tenancy.ts).
+  const team = await callerTeam();
+  if (team) for (let i = rows.length - 1; i >= 0; i--) if (!team.has(rows[i]!.employee_id)) rows.splice(i, 1);
   const { alerts } = await getSettings(orgId);
   // Approved leave and holidays for the whole range, applied per date exactly as approvedLeaveOn and holidaysOn do.
   const employees = [...new Set(rows.map((r) => r.employee_id))];

@@ -309,6 +309,12 @@ Business decisions: [POLICY-DECISIONS.md](POLICY-DECISIONS.md).
 - phone widths;
 - no script errors.
 
+**Performance after the rules.** Measured on the 1,032-employee copy with the old code (`c2c2a04`) and the new code side by side, each request sent to both at the same moment, 27 cases. The machine was 2–3 times slower than in the morning for both versions, so only the side-by-side figures count:
+- **Owner views** give identical answers. Most are 0–10% slower, from the added team condition.
+- **Two owner views cost more:** the default dashboard (0.87 → 1.11 s) and an owner filtering by a supervisor (2.9 → 3.7 s).
+- **Supervisor views** are 25–35% faster, because they cover their team only; for example 90 days 1.9 → 1.3 s.
+- **A plan regression was found and fixed before commit.** The team condition inside the dashboard's range query made the planner choose a join 5 times slower for short ranges (7 days: 0.46 → 2.6 s). The team is now applied to that query's rows instead (`callerTeam`); 7 days: 0.40 → 0.49 s.
+
 ## Open, not fixed
 
 - **Employee notifications:** employees have no in-app list of their notifications; they rely on push, which is not configured.

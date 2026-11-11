@@ -65,6 +65,16 @@ export async function assertInOrg(scope: Scope, id: string, orgId: string, sites
   if (!row || (sites && !sites.includes(row.wp)) || row.in_team === false) throw notFound(what);
 }
 
+/**
+ * The calling supervisor's team as a set of employee ids, or null when there is no supervisor (owners, jobs).
+ * For large range queries that filter their rows afterwards: inside such a query the team condition made the
+ * planner expect a handful of rows and choose a join that was 5 times slower (11 Nov 2026, 1,032 employees).
+ */
+export async function callerTeam(): Promise<Set<string> | null> {
+  const r = await one(`SELECT ${CALLER_SUPERVISOR} AS sup, ARRAY(SELECT tp.user_id FROM employee_profiles tp WHERE tp.supervisor_id = ${CALLER_SUPERVISOR}) AS team`);
+  return r?.sup ? new Set<string>(r.team) : null;
+}
+
 /** Whether the calling supervisor may see this employee (always true for owners and system work). */
 export async function inCallerTeam(employeeId: string) {
   return !!(await one(`SELECT ${teamFilter('$1::uuid')} AS ok`, [employeeId]))?.ok;
