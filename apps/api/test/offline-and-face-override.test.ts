@@ -20,6 +20,8 @@ let base: Awaited<ReturnType<typeof seedBase>>;
 let owner: Awaited<ReturnType<typeof adminAgent>>;
 let sup: Awaited<ReturnType<typeof adminAgent>>;
 let shiftId: string;
+/** The site supervisor; workers at the base site are in their team (Phase I visibility policy). */
+let supId: string;
 
 beforeAll(async () => {
   db = await createTestDatabase();
@@ -28,6 +30,7 @@ beforeAll(async () => {
   owner = await adminAgent(app);
   const s = await one(`INSERT INTO users (email, password_hash, role, full_name, org_id) SELECT $1, password_hash, 'ADMIN', 'Sup', org_id FROM users WHERE id = $2 RETURNING id, email`, [`sup-${crypto.randomUUID()}@test.local`, base.adminId]);
   await q(`INSERT INTO administrator_profiles (user_id, access, site_ids) VALUES ($1,'SUPERVISOR',$2)`, [s.id, [base.workplaceId]]);
+  supId = s.id;
   sup = await adminAgent(app, s.email);
   shiftId = (await one(`INSERT INTO shifts (workplace_id, name, start_time, end_time, timezone, days_of_week, arrival_grace_minutes) VALUES ($1,'Day','09:00','17:00','UTC',$2,10) RETURNING id`, [base.workplaceId, [1, 2, 3, 4, 5, 6, 7]])).id;
 });
@@ -44,7 +47,7 @@ const ago = (minutes: number) => DateTime.utc().minus({ minutes }).toISO()!;
 
 /** An approved phone on an open session that started `minutes` ago, scheduled to start then too. */
 async function onShift(minutes = 120, scheduledAgo = minutes) {
-  const emp = await createEmployee({ workplaceId: base.workplaceId });
+  const emp = await createEmployee({ supervisorId: supId, workplaceId: base.workplaceId });
   await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,'2020-01-01')`, [emp.id, shiftId]);
   const token = await mobileLogin(app, emp.email);
   const date = DateTime.utc().minus({ minutes }).toISODate();

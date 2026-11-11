@@ -44,6 +44,8 @@ export interface ReadingResult {
   clientEventId: string;
   status: 'ACCEPTED' | 'DUPLICATE' | 'REJECTED';
   reason?: string;
+  /** Stored, but flagged as an impossible jump and left out of automatic decisions. */
+  suspect?: 'IMPOSSIBLE_SPEED';
 }
 
 const MAX_CLOCK_SKEW_MS = 2 * 60_000;
@@ -363,9 +365,12 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
     const lastClient = s.last_location_client_at ? new Date(s.last_location_client_at) : null;
     const isHistorical = closed || (lastClient !== null && clientTime <= lastClient);
     const delayed = now.getTime() - clientTime.getTime() > settings.tracking.staleAfterSec * 1000;
+    // Approved policy (Phase I): a reading implying impossible travel is kept and flagged, never discarded, and
+    // takes part in no automatic decision (arrival, departure, alerts, live position, attendance evidence).
+    const jumpKmh = await impossibleJump(db, s.id, r, clientTime, settings, rules.maxAccuracyM);
 
     // Evaluate first (pure) so the stored row carries the classification used.
-    const res = isHistorical
+    const res = isHistorical || jumpKmh !== null
       ? null
       : evaluate(
           {
@@ -384,8 +389,9 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
 
     const inserted = await one(
       `INSERT INTO location_updates (session_id, employee_id, client_event_id, latitude, longitude, accuracy_m, altitude_m, speed_mps, heading_deg,
-                                     is_mocked, source, client_time, distance_m, classification, validation_status, workplace_config_version, is_simulated)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                                     is_mocked, source, client_time, distance_m, classification, validation_status, workplace_config_version, is_simulated,
+                                     suspect_reason, implied_speed_kmh)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        ON CONFLICT (session_id, client_event_id) DO NOTHING RETURNING id`,
       [
         s.id,
@@ -405,6 +411,8 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
         isHistorical ? 'HISTORICAL' : delayed ? 'DELAYED' : 'EVALUATED',
         s.config_version,
         s.is_simulated,
+        jumpKmh !== null ? 'IMPOSSIBLE_SPEED' : null,
+        jumpKmh,
       ],
       db,
     );
@@ -412,7 +420,33 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
       results.push({ clientEventId: r.clientEventId, status: 'DUPLICATE' });
       continue;
     }
-    results.push({ clientEventId: r.clientEventId, status: 'ACCEPTED' });
+    results.push({ clientEventId: r.clientEventId, status: 'ACCEPTED', ...(jumpKmh !== null ? { suspect: 'IMPOSSIBLE_SPEED' as const } : {}) });
+    if (jumpKmh !== null) {
+      await audit(
+        {
+          actor: actor === 'EMPLOYEE' ? { id: s.employee_id, role: 'EMPLOYEE', orgId: s.org_id } : null,
+          orgId: s.org_id,
+          action: 'location.implausible_jump',
+          resourceType: 'tracking_session',
+          resourceId: s.id,
+          after: { locationUpdateId: inserted.id, clientTime: clientTime.toISOString(), latitude: r.latitude, longitude: r.longitude, accuracyM: r.accuracyM, impliedSpeedKmh: Math.round(jumpKmh), limitKmh: settings.tracking.maxPlausibleSpeedKmh },
+          reason: 'Reading kept and flagged; left out of automatic decisions',
+        },
+        db,
+      );
+      await notify(db, outbox, {
+        type: 'TECHNICAL_ISSUE_REPORTED',
+        severity: 'WARNING',
+        title: 'GPS jump ignored',
+        body: `${s.employee_name}'s phone reported a position implying ${Math.round(jumpKmh)} km/h. The reading is kept on the trail, flagged, and not used for attendance or alerts.`,
+        employeeId: s.employee_id,
+        workplaceId: s.workplace_id,
+        sessionId: s.id,
+        dedupeKey: `gps-jump:${s.id}`, // once per session, not once per reading
+        simulated: s.is_simulated,
+      });
+      continue;
+    }
     if (!res) continue;
     evaluated++;
 
@@ -468,6 +502,51 @@ export async function ingestLocked(db: pg.PoolClient, outbox: Outbox, s: any, re
     s.resume_state = res.resumeState;
   }
   return { results, evaluated };
+}
+
+/**
+ * The speed (km/h) a reading implies from the session's last reading that was not flagged, when that speed is
+ * above Settings › Tracking › maxPlausibleSpeedKmh; otherwise null. Both fixes' accuracy is subtracted from the
+ * distance first, so ordinary GPS noise is never a "jump". A reading too inaccurate to use is never compared
+ * (it is already uncertain), and is never the reference. The reference is the last good reading, so one jump
+ * cannot make the following, correct readings look like jumps back.
+ *
+ * If the reference itself was the wrong one (a bad first fix), every correct reading would look like a jump until
+ * enough time passed. So when this reading is plausible from each of the two flagged readings before it (three
+ * readings agreeing with one another), it is accepted and becomes the new reference. Those two stay flagged.
+ */
+export async function impossibleJump(db: Queryable, sessionId: string, r: ReadingInput, clientTime: Date, settings: Settings, maxAccuracyM: number) {
+  if (!(r.accuracyM > 0) || r.accuracyM > maxAccuracyM) return null;
+  const prev = await one(
+    `SELECT latitude, longitude, accuracy_m, client_time FROM location_updates
+     WHERE session_id = $1 AND suspect_reason IS NULL AND accuracy_m <= $3 AND client_time <= $2
+     ORDER BY client_time DESC, id DESC LIMIT 1`,
+    [sessionId, clientTime, maxAccuracyM],
+    db,
+  );
+  if (!prev) return null;
+  const limit = settings.tracking.maxPlausibleSpeedKmh;
+  const kmh = impliedKmh(prev, r, clientTime);
+  if (kmh <= limit) return null;
+  const flagged = await q(
+    `SELECT latitude, longitude, accuracy_m, client_time FROM location_updates
+     WHERE session_id = $1 AND suspect_reason IS NOT NULL AND client_time > $2 AND client_time <= $3
+     ORDER BY client_time DESC, id DESC LIMIT 2`,
+    [sessionId, prev.client_time, clientTime],
+    db,
+  );
+  if (flagged.length === 2 && flagged.every((f) => impliedKmh(f, r, clientTime) <= limit) && impliedKmh(flagged[1], { latitude: flagged[0].latitude, longitude: flagged[0].longitude, accuracyM: Number(flagged[0].accuracy_m) }, new Date(flagged[0].client_time)) <= limit) {
+    return null;
+  }
+  return kmh;
+}
+
+/** Speed in km/h between a stored reading and a new one, after subtracting both fixes' accuracy (0 if within it). */
+function impliedKmh(a: { latitude: number; longitude: number; accuracy_m: number | string; client_time: Date | string }, b: Pick<ReadingInput, 'latitude' | 'longitude' | 'accuracyM'>, bTime: Date) {
+  const metres = distanceMeters({ lat: a.latitude, lng: a.longitude }, { lat: b.latitude, lng: b.longitude }) - Number(a.accuracy_m) - b.accuracyM;
+  if (metres <= 0) return 0;
+  const seconds = Math.max(1, Math.abs(bTime.getTime() - new Date(a.client_time).getTime()) / 1000);
+  return (metres / seconds) * 3.6;
 }
 
 async function insertGeofenceEvent(db: Queryable, s: any, type: string, reading: { lat: number; lng: number; accuracy: number; distance: number; time: Date }, validation: Record<string, unknown>) {

@@ -9,7 +9,7 @@ import { addClient } from './live-hub.js';
 import { employeeSite, siteFilter } from '../../lib/tenancy.js';
 
 /** A notification belongs to its workplace, or to the employee's current workplace. */
-const notificationSites = (param: string) => siteFilter(`COALESCE(n.workplace_id, ${employeeSite('n.employee_id')})`, param);
+const notificationSites = (param: string) => siteFilter(`COALESCE(n.workplace_id, ${employeeSite('n.employee_id')})`, param, 'n.employee_id');
 
 /** The server posts to this address, so it may only be a browser vendor's push service, never an internal host. */
 const PUSH_HOSTS = [/^fcm\.googleapis\.com$/, /^updates\.push\.services\.mozilla\.com$/, /(^|\.)push\.services\.mozilla\.com$/, /(^|\.)notify\.windows\.com$/, /^web\.push\.apple\.com$/];

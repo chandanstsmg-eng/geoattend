@@ -40,7 +40,8 @@ async function company(name: string) {
   const supLogin = await supAgent.post('/api/v1/auth/login').send({ email: supEmail, password: team.body.temporaryPassword, client: 'web' }).expect(200);
   const supervisor: Agent = { agent: supAgent, csrf: supLogin.body.csrfToken };
 
-  const emp = await createEmployee({ workplaceId: wp.id, shiftId: shift.id, orgId });
+  // The worker reports to the company's supervisor (Phase I visibility policy: own team at own sites).
+  const emp = await createEmployee({ workplaceId: wp.id, shiftId: shift.id, orgId, supervisorId: team.body.admin.id });
   await q('UPDATE users SET full_name = $2 WHERE id = $1', [emp.id, `Employee ${tag}`]);
   const token = await mobileLogin(app, emp.email);
   const today = DateTime.now().setZone('Asia/Kolkata').toISODate()!;

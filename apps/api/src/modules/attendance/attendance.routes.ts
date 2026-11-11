@@ -71,7 +71,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
     }),
     handler: async ({ query, user }) => {
       // $8 = company, $9 = supervisor's sites (null for owners); limit/offset follow.
-      const where = `ar.employee_id IN (SELECT id FROM users WHERE org_id = $8) AND ${siteFilter('ar.workplace_id', '$9')}
+      const where = `ar.employee_id IN (SELECT id FROM users WHERE org_id = $8) AND ${siteFilter('ar.workplace_id', '$9', 'ar.employee_id')}
         AND ($1::date IS NULL OR ar.shift_date >= $1) AND ($2::date IS NULL OR ar.shift_date <= $2) AND ($3::uuid IS NULL OR ar.workplace_id = $3)
         AND ($4::uuid IS NULL OR ar.employee_id = $4) AND ($5::uuid IS NULL OR ar.shift_id = $5) AND ($6::text IS NULL OR ar.verification_status = $6)
         AND ($7::boolean IS NULL OR ar.is_late = $7)`;
@@ -119,7 +119,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
     handler: async ({ query, user }) =>
       q(
         `SELECT r.*, u.full_name, rq.full_name AS requested_by_name, rb.full_name AS resolved_by_name FROM review_requests r JOIN users u ON u.id = r.employee_id JOIN users rq ON rq.id = r.requested_by LEFT JOIN users rb ON rb.id = r.resolved_by
-         WHERE u.org_id = $4 AND ${siteFilter(employeeSite('u.id'), '$5')} AND ($1::text IS NULL OR r.status = $1) AND ($2::text IS NULL OR r.kind = $2) AND ($3::uuid IS NULL OR r.attendance_id = $3)
+         WHERE u.org_id = $4 AND ${siteFilter(employeeSite('u.id'), '$5', 'u.id')} AND ($1::text IS NULL OR r.status = $1) AND ($2::text IS NULL OR r.kind = $2) AND ($3::uuid IS NULL OR r.attendance_id = $3)
          ORDER BY r.created_at DESC LIMIT 200`,
         [query.status ?? null, query.kind ?? null, query.attendanceId ?? null, user.orgId, user.sites],
       ),
@@ -139,7 +139,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
     path: '/manual',
     summary: 'Create an attendance record without device evidence (audited, MANUAL_APPROVED)',
     access: 'admin',
-    body: z.object({ employeeId: z.uuid(), shiftId: z.uuid(), shiftDate: isoDate, recordedAt: z.iso.datetime({ offset: true }), workedMinutes: z.number().int().min(0).max(1440), reason: z.string().trim().min(5).max(1000) }),
+    body: z.object({ employeeId: z.uuid(), shiftId: z.uuid(), shiftDate: isoDate, recordedAt: z.iso.datetime({ offset: true }), workedMinutes: z.number().int().min(0).max(1440), reason: z.string().trim().min(5).max(1000), extraDay: z.boolean().optional() }),
     handler: async ({ user, body, req, res }) => {
       await assertInOrg('employee', body.employeeId, user.orgId, user.sites);
       await assertInOrg('shift', body.shiftId, user.orgId, user.sites);
@@ -177,7 +177,7 @@ mount(attendanceRouter, '/api/v1/attendance', 'attendance', [
       const rows = await q(
         `SELECT ar.id, p.id AS photo_id, p.object_key FROM attendance_records ar JOIN attendance_photos p ON p.id = ar.photo_id
          WHERE ar.id = ANY($1::uuid[]) AND p.status = 'ATTACHED' AND NOT p.is_simulated
-           AND ar.employee_id IN (SELECT id FROM users WHERE org_id = $2) AND ${siteFilter('ar.workplace_id', '$3')}`,
+           AND ar.employee_id IN (SELECT id FROM users WHERE org_id = $2) AND ${siteFilter('ar.workplace_id', '$3', 'ar.employee_id')}`,
         [body.ids, user.orgId, user.sites],
       );
       if (rows.length) {

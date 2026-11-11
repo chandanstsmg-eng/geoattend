@@ -558,7 +558,7 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const { isOwner } = useMe();
   const emps = useEmployees();
-  const [f, setF] = useState({ employeeId: '', shiftId: '', shiftDate: todayISO(), recordedAt: localDateTime(), workedHours: '', reason: '' });
+  const [f, setF] = useState({ employeeId: '', shiftId: '', shiftDate: todayISO(), recordedAt: localDateTime(), workedHours: '', reason: '', extraDay: false });
   const emp = emps.data?.find((e: any) => e.id === f.employeeId);
   const create = useMutation({ meta: { success: isOwner ? 'Attendance added' : 'Sent to the owner for approval' },
     mutationFn: () => {
@@ -589,7 +589,11 @@ function ManualDialog({ onClose }: { onClose: () => void }) {
         <Field label="Shift date"><Input type="date" required value={f.shiftDate} onChange={(e) => setF({ ...f, shiftDate: e.target.value })} /></Field>
         <Field label="Attendance time"><Input type="datetime-local" required value={f.recordedAt} onChange={(e) => setF({ ...f, recordedAt: e.target.value })} /></Field>
         <Field label="Hours worked" hint="Up to the shift's length; extra time is recorded as overtime."><Input type="number" required min={0} max={24} step="0.25" value={f.workedHours} onChange={(e) => setF({ ...f, workedHours: e.target.value })} /></Field>
-        <div className="sm:col-span-2"><Field label="Reason (required)"><Textarea required minLength={5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
+        <label className="sm:col-span-2 flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={f.extraDay} onChange={(e) => setF({ ...f, extraDay: e.target.checked })} />
+          <span>Extra day: the shift does not run on this date (for example a Sunday). Never counted late; {isOwner ? 'counts at once with your reason.' : 'counts only after the owner approves.'}</span>
+        </label>
+        <div className="sm:col-span-2"><Field label="Reason (required)" hint={f.extraDay ? 'At least 10 characters, for example “Stocktaking on Sunday”.' : undefined}><Textarea required minLength={f.extraDay ? 10 : 5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
         <div className="sm:col-span-2"><InlineError error={create.error} /></div>
         <div className="sm:col-span-2 flex justify-end gap-2">
           <Button type="button" onClick={onClose}>Cancel</Button>

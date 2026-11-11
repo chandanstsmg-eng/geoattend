@@ -14,7 +14,7 @@ import { one, q } from '../src/db/pool.js';
 import { createApp } from '../src/app.js';
 import { DEFAULT_SETTINGS, saveSettingsSection } from '../src/modules/settings/settings.service.js';
 import { computeHours, splitRecords, type WorkRecord } from '../src/modules/reports/hours.js';
-import { adminAgent, createEmployee, createTestDatabase, mobileLogin, seedBase, WP } from './helpers.js';
+import { adminAgent, assignTeam, createEmployee, createTestDatabase, mobileLogin, seedBase, WP } from './helpers.js';
 
 let app: Express;
 let db: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -91,6 +91,9 @@ beforeAll(async () => {
   const login = await agent.post('/api/v1/auth/login').send({ email, password: added.temporaryPassword, client: 'web' }).expect(200);
   sup = { agent, csrf: login.body.csrfToken, id: added.admin.id };
 });
+// Phase I visibility policy: a supervisor sees only their own team at their sites. The hierarchy tests below put
+// Bob B1 in Sam's team; tests where Sam acts on Cara B2 too put her in it first (assigning twice changes nothing).
+const bothInSamsTeam = () => assignTeam(sup.id, empB1.id, empB2.id);
 afterAll(async () => {
   await db.drop();
 });
@@ -188,6 +191,7 @@ describe('roster: bulk assignment, scope and clashes', () => {
   });
 
   it('limits supervisors to their own workers and workplaces', async () => {
+    await bothInSamsTeam();
     const later = DateTime.utc().plus({ days: 60 }).toISODate()!;
     const r = (await sup.agent.post('/api/v1/roster/bulk').set('X-CSRF-Token', sup.csrf).send({ employeeIds: [empA.id, empB2.id], shiftId: shiftB, effectiveFrom: later, effectiveTo: later }).expect(200)).body;
     expect(r.results.find((x: any) => x.employeeId === empA.id)).toMatchObject({ ok: false, code: 'NOT_FOUND' });
@@ -327,6 +331,7 @@ describe('attendance totals, CSV exports and scope', () => {
   });
 
   it('builds the dashboard from the same figures, scoped per role', async () => {
+    await bothInSamsTeam();
     const o = (await owner.agent.get(`/api/v1/analytics/dashboard?from=${d1}&to=${d3}&includeSimulated=false`).expect(200)).body;
     const hours = (await owner.agent.get(`/api/v1/reports/hours?from=${d1}&to=${d3}`).expect(200)).body.rows;
     expect(o.kpis.totalMinutes).toBe(hours.reduce((n: number, e: any) => n + e.total_minutes, 0));
@@ -394,6 +399,7 @@ describe('attendance totals, CSV exports and scope', () => {
   });
 
   it('counts only fresh positions as live, and fresh OUTSIDE readings as outside the geofence', async () => {
+    await bothInSamsTeam();
     const today = DateTime.utc().toISODate()!;
     await q(
       `INSERT INTO tracking_sessions (employee_id, shift_id, workplace_id, shift_date, scheduled_start_at, scheduled_end_at, state, started_at, last_location_at, last_latitude, last_longitude, last_accuracy_m, last_classification)

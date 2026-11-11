@@ -24,20 +24,28 @@ pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
  * limited by the policies. docs/COMPANY-ISOLATION.md lists what may do that.
  */
 export const TENANT_ROLE = 'geoattend_tenant';
-const scope = new AsyncLocalStorage<{ orgId: string | null }>();
-export const withOrg = <T>(orgId: string, fn: () => T): T => scope.run({ orgId }, fn);
+const scope = new AsyncLocalStorage<{ orgId: string | null; supervisorId?: string | null }>();
+/**
+ * Runs `fn` as the company `orgId`. `supervisorId` (a signed-in supervisor, or an owner's "as this supervisor
+ * sees it" filter) also limits employee rows to that supervisor's team (lib/tenancy.ts teamFilter).
+ */
+export const withOrg = <T>(orgId: string, fn: () => T, supervisorId: string | null = null): T => scope.run({ orgId, supervisorId }, fn);
+/** The same company, seen as `supervisorId` sees it (only ever narrows). */
+export const asSupervisor = <T>(supervisorId: string, fn: () => T): T => scope.run({ orgId: currentOrg(), supervisorId }, fn);
 export const asSystem = <T>(fn: () => T): T => scope.run({ orgId: null }, fn);
 /** The company of the current request; null for system work. */
 export const currentOrg = () => scope.getStore()?.orgId ?? null;
+const currentSupervisor = () => scope.getStore()?.supervisorId ?? null;
 
-// The company each restricted connection is currently set to, so it is only sent when it changes.
+// The company (and supervisor) each restricted connection is currently set to, so it is only sent when it changes.
 const applied = new WeakMap<pg.PoolClient, string>();
 
-async function applyCompany(client: pg.PoolClient, orgId: string) {
-  if (applied.get(client) === orgId) return;
+async function applyCompany(client: pg.PoolClient, orgId: string, supervisorId: string | null) {
+  const key = `${orgId}|${supervisorId ?? ''}`;
+  if (applied.get(client) === key) return;
   applied.delete(client);
-  await client.query(`SELECT set_config('app.org_id', $1, false)`, [orgId]);
-  applied.set(client, orgId);
+  await client.query(`SELECT set_config('app.org_id', $1, false), set_config('app.supervisor_id', $2, false)`, [orgId, supervisorId ?? '']);
+  applied.set(client, key);
 }
 
 let tenant: pg.Pool | null = null;
@@ -115,7 +123,7 @@ async function withClient<T>(fn: (client: pg.PoolClient, markBroken: (err: Error
   client.on('error', ignore);
   let failure: Error | undefined;
   try {
-    if (orgId) await applyCompany(client, orgId);
+    if (orgId) await applyCompany(client, orgId, currentSupervisor());
     return await fn(client, (err) => (failure = err));
   } catch (err: any) {
     if (connectionFault(err)) failure = err;

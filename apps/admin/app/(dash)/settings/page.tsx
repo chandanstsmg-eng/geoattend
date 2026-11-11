@@ -27,6 +27,7 @@ const TRACKING_FIELDS: Array<[string, string, string]> = [
   ['uncertainReviewAfterSec', 'Suggest manual review after uncertain GPS for (s)', ''],
   ['offlineQueueMax', 'Offline queue size on device (readings)', 'Oldest readings are dropped beyond this.'],
                         ['offlineAttendanceHours', 'Accept offline check-ins for (hours)', '0 turns this off. Delayed records are flagged and cannot be earlier than the shift start on the server.'],
+  ['maxPlausibleSpeedKmh', 'Impossible GPS jump above (km/h)', 'A reading implying faster travel than this from the last good reading is kept and flagged, but never used for automatic decisions.'],
   ['entryMinServerSpanSec', 'Arrival must also be seen by the server for (s)', 'Readings must arrive in separate uploads over this time, so a phone with a changed clock cannot unlock attendance at once. 0 turns it off.'],
 ];
 

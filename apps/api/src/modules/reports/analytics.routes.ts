@@ -31,10 +31,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
-import { one, q } from '../../db/pool.js';
+import { asSupervisor, one, q } from '../../db/pool.js';
 import { badRequest } from '../../lib/errors.js';
 import { isoDate, mount, route } from '../../lib/http.js';
-import { employeeSite, overtimeCounts, siteFilter, SUPERVISOR_SITES } from '../../lib/tenancy.js';
+import { employeeSite, overtimeCounts, siteFilter, SUPERVISOR_SITES, teamFilter } from '../../lib/tenancy.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { getSettings } from '../settings/settings.service.js';
 import { attended, defaultDate, isPending, roster, rosterDayCounts, withLeaveAndNoShow, type DayCountRow } from './reports.routes.js';
@@ -62,15 +62,22 @@ export const dashboardQuery = z.object({
 
 type DayOutcome = { date: string; scheduled: number; expected: number; present: number; pending: number; late: number; absent: number; leave: number; incomplete: number };
 
+/**
+ * A shift nobody expects: a holiday, or leave. Approved policy (Phase I): a half-day leave on a day the employee
+ * worked counts as present and expected (as the monthly summary counts it present), lateness measured from the
+ * shift start as always. A half-day leave without attendance, and full-day leave, stay not expected.
+ */
+const excused = (r: any) => !!r.holiday || (!!r.on_leave && !(r.on_leave.half_day && r.attendance_id));
+
 /** One day's roster outcome. Past days: no attendance = absent; today: only no-shows and finished shifts. */
 function dayOutcome(rows: any[], date: string, today: string): DayOutcome {
   return {
     date,
     scheduled: rows.length,
     // Today, a shift only counts once it has an outcome — one that has not started yet is not missed.
-    expected: rows.filter((r) => !isPending(r) && !r.on_leave && !r.holiday && (date < today || r.attendance_id || r.no_show || r.ended_at)).length,
-    // Work on a holiday or a leave day is not part of the rate: those days are not expected either.
-    present: rows.filter((r) => attended(r) && !r.on_leave && !r.holiday).length,
+    expected: rows.filter((r) => !isPending(r) && !excused(r) && (date < today || r.attendance_id || r.no_show || r.ended_at)).length,
+    // Work on a holiday or a full-day leave is not part of the rate: those days are not expected either.
+    present: rows.filter((r) => attended(r) && !excused(r)).length,
     pending: rows.filter(isPending).length,
     late: rows.filter((r) => r.is_late).length,
     absent: rows.filter((r) => !r.attendance_id && !r.on_leave && !r.holiday && (date < today || r.no_show || r.ended_at)).length,
@@ -120,6 +127,13 @@ const lastDays = (from: string, to: string) => {
 const inc = <K>(m: Map<K, number>, k: K, n = 1) => m.set(k, (m.get(k) ?? 0) + n);
 
 export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQuery>) {
+  // An owner's "filter by supervisor" shows exactly what that supervisor sees: their workplaces and only their own
+  // team (approved policy, Phase I). A supervisor's own requests already run that way (lib/http.ts).
+  const sup = query.supervisorId ?? null;
+  return sup && !user.sites ? asSupervisor(sup, () => dashboardFor(user, query)) : dashboardFor(user, query);
+}
+
+async function dashboardFor(user: AuthUser, query: z.infer<typeof dashboardQuery>) {
   const settings = await getSettings(user.orgId);
   const today = await defaultDate(user.orgId, query.workplaceId);
   const to = query.to ?? today;
@@ -137,7 +151,9 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const emp = query.employeeId ?? null;
   // $1 company, $2 caller's sites (null = owner), $3 workplace filter, $4 supervisor filter, $5 include simulated
   const P = [user.orgId, user.sites, wp, sup, includeSim];
-  const inScope = (expr: string) => `${siteFilter(expr, '$2')} AND ($3::uuid IS NULL OR ${expr} = $3) AND ($4::uuid IS NULL OR ${expr} = ANY(${SUPERVISOR_SITES('$4')}))`;
+  // Workplace scope, and (when the rows are about an employee) the supervisor's team: the signed-in supervisor's, or the
+  // one an owner filters by (the whole dashboard then runs as that supervisor sees it, below).
+  const inScope = (expr: string, employeeExpr?: string) => `${siteFilter(expr, '$2', employeeExpr)} AND ($3::uuid IS NULL OR ${expr} = $3) AND ($4::uuid IS NULL OR ${expr} = ANY(${SUPERVISOR_SITES('$4')}))`;
   const supSites = sup ? new Set<string>((await one(`SELECT ${SUPERVISOR_SITES('$1')} AS s`, [sup])).s) : null;
   const keep = (wpId: string) => !supSites || supSites.has(wpId);
   const keepRow = (r: { workplace_id: string; employee_id: string }) => keep(r.workplace_id) && (!emp || r.employee_id === emp);
@@ -155,13 +171,13 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const workplaces = await q(
     `SELECT w.id, w.name, w.min_staff, w.latitude, w.longitude, w.radius_m::float AS radius_m,
             (SELECT count(*)::int FROM workplace_assignments wa JOIN users u ON u.id = wa.employee_id
-              WHERE wa.workplace_id = w.id AND wa.effective_to IS NULL AND u.is_active AND u.role = 'EMPLOYEE' AND ($5 OR NOT u.is_demo)) AS home_workers
+              WHERE wa.workplace_id = w.id AND wa.effective_to IS NULL AND u.is_active AND u.role = 'EMPLOYEE' AND ($5 OR NOT u.is_demo) AND ${teamFilter('u.id')}) AS home_workers
      FROM workplaces w WHERE w.org_id = $1 AND w.is_active AND ${inScope('w.id')} ORDER BY w.name`,
     P,
   );
   const workers = await one(
     `SELECT count(*) FILTER (WHERE u.is_active)::int AS n, count(*)::int AS all_workers FROM users u LEFT JOIN workplace_assignments wa ON wa.employee_id = u.id AND wa.effective_to IS NULL
-     WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND ($5 OR NOT u.is_demo) AND ($6::uuid IS NULL OR u.id = $6)
+     WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND ($5 OR NOT u.is_demo) AND ($6::uuid IS NULL OR u.id = $6) AND ${teamFilter('u.id')}
        AND (($2::uuid[] IS NULL AND $3::uuid IS NULL AND $4::uuid IS NULL) OR (wa.workplace_id IS NOT NULL AND ${inScope('wa.workplace_id')}))`,
     [...P, emp],
   );
@@ -171,7 +187,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     `SELECT s.id, s.employee_id, u.full_name, s.state, s.workplace_id, s.last_location_at, s.last_classification, s.sim_clock_offset_sec, (ar.id IS NOT NULL) AS checked_in
      FROM tracking_sessions s JOIN users u ON u.id = s.employee_id
      LEFT JOIN attendance_records ar ON ar.session_id = s.id AND ar.verification_status <> 'VOIDED'
-     WHERE s.ended_at IS NULL AND u.org_id = $1 AND ${inScope('s.workplace_id')} AND ($5 OR NOT s.is_simulated) AND ($6::uuid IS NULL OR s.employee_id = $6)`,
+     WHERE s.ended_at IS NULL AND u.org_id = $1 AND ${inScope('s.workplace_id', 's.employee_id')} AND ($5 OR NOT s.is_simulated) AND ($6::uuid IS NULL OR s.employee_id = $6)`,
     [...P, emp],
   );
   const nowMs = Date.now();
@@ -198,7 +214,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     const rows = rowsByDay[i]!;
     if (date === today) todayRows = rows;
     for (const r of rows) {
-      if (r.on_leave || r.holiday || isPending(r)) continue;
+      if (excused(r) || isPending(r)) continue;
       // As in dayOutcome: today, a shift that has not started has no outcome yet, so it is not missed.
       if (date >= today && !r.attendance_id && !r.no_show && !r.ended_at) continue;
       inc(expectedByWp, r.workplace_id);
@@ -245,7 +261,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
         `WITH t AS (
            SELECT s.workplace_id, x.to_state, x.at, LEAD(x.at) OVER (PARTITION BY x.session_id ORDER BY x.at, x.id) AS next_at, s.ended_at
            FROM session_state_transitions x JOIN tracking_sessions s ON s.id = x.session_id JOIN users u ON u.id = s.employee_id
-           WHERE u.org_id = $1 AND ${inScope('s.workplace_id')} AND ($5 OR NOT s.is_simulated) AND s.shift_date BETWEEN $6::date AND $7::date)
+           WHERE u.org_id = $1 AND ${inScope('s.workplace_id', 's.employee_id')} AND ($5 OR NOT s.is_simulated) AND s.shift_date BETWEEN $6::date AND $7::date)
          SELECT workplace_id, COALESCE(ROUND(SUM(EXTRACT(EPOCH FROM (COALESCE(next_at, ended_at, now()) - at))) / 60), 0)::int AS minutes
          FROM t WHERE to_state IN ('TRACKING_INTERRUPTED', 'TRACKING_PERMISSION_REQUIRED') GROUP BY workplace_id`,
         [...P, from, to],
@@ -290,7 +306,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
             COALESCE(SUM(ROUND(EXTRACT(EPOCH FROM (COALESCE(o.ended_at, now()) - o.started_at)) / 60)), 0)::int AS claimed,
             COALESCE(SUM(o.approved_minutes) FILTER (WHERE o.status = 'APPROVED'), 0)::int AS approved
      FROM overtime_entries o JOIN users u ON u.id = o.employee_id JOIN tracking_sessions s ON s.id = o.session_id
-     WHERE u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated) AND ($6::uuid IS NULL OR o.employee_id = $6)
+     WHERE u.org_id = $1 AND ${inScope('o.workplace_id', 'o.employee_id')} AND ($5 OR NOT o.is_simulated) AND ($6::uuid IS NULL OR o.employee_id = $6)
        AND s.shift_date BETWEEN $7::date AND $8::date AND ${overtimeCounts()}
      GROUP BY 1`,
     [...P, emp, from, to],
@@ -372,19 +388,19 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const pendingCorrections = await one(
     `SELECT count(*)::int AS n FROM review_requests r JOIN users u ON u.id = r.employee_id
      WHERE r.status = 'OPEN' AND (r.kind IN ('MANUAL_REVIEW', 'DISPUTE', 'TECHNICAL_ISSUE') OR (r.kind = 'ADMIN_CORRECTION' AND $2::uuid[] IS NULL))
-       AND u.org_id = $1 AND ${inScope(employeeSite('u.id'))} AND ($5::uuid IS NULL OR r.employee_id = $5)`, // supervisors' corrections wait for an owner, as in Approvals
+       AND u.org_id = $1 AND ${inScope(employeeSite('u.id'), 'u.id')} AND ($5::uuid IS NULL OR r.employee_id = $5)`, // supervisors' corrections wait for an owner, as in Approvals
     [...P.slice(0, 4), emp],
   );
   const overtimePending = await one(
     `SELECT count(*)::int AS n FROM overtime_entries o JOIN users u ON u.id = o.employee_id
-     WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${inScope('o.workplace_id')} AND ($5 OR NOT o.is_simulated) AND ${overtimeCounts()}
+     WHERE o.status = 'PENDING' AND o.ended_at IS NOT NULL AND u.org_id = $1 AND ${inScope('o.workplace_id', 'o.employee_id')} AND ($5 OR NOT o.is_simulated) AND ${overtimeCounts()}
        AND ($6::uuid IS NULL OR o.employee_id = $6)`,
     [...P, emp],
   );
   const activity = await q(
     `SELECT n.id, n.type, n.severity, n.title, n.body, n.created_at, n.employee_id, u.full_name AS employee_name, w.name AS workplace_name, n.is_simulated
      FROM notifications n LEFT JOIN users u ON u.id = n.employee_id LEFT JOIN workplaces w ON w.id = n.workplace_id
-     WHERE n.audience = 'ADMIN' AND n.org_id = $1 AND n.type = ANY($6::text[]) AND ${inScope(`COALESCE(n.workplace_id, ${employeeSite('n.employee_id')})`)}
+     WHERE n.audience = 'ADMIN' AND n.org_id = $1 AND n.type = ANY($6::text[]) AND ${inScope(`COALESCE(n.workplace_id, ${employeeSite('n.employee_id')})`, 'n.employee_id')}
        AND ($5 OR NOT n.is_simulated) AND n.created_at < ${dayEndSql('$7', '$1')} AND ($8::uuid IS NULL OR n.employee_id = $8)
      ORDER BY n.created_at DESC LIMIT 25`,
     [...P, ACTIVITY_TYPES, to, emp],

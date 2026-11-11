@@ -56,13 +56,22 @@ export async function seedBase(orgId = DEFAULT_ORG_ID, adminEmail = 'admin@test.
 }
 
 let counter = 0;
-export async function createEmployee(opts: { workplaceId?: string | null; shiftId?: string | null; ack?: boolean; orgId?: string } = {}) {
+/**
+ * Puts employees in a supervisor's team (employee_profiles.supervisor_id). Since the Phase I visibility policy a
+ * supervisor sees only their own team at their workplaces, so tests of a supervisor acting on a worker say so.
+ */
+export async function assignTeam(supervisorId: string, ...employeeIds: string[]) {
+  await q('UPDATE employee_profiles SET supervisor_id = $1 WHERE user_id = ANY($2::uuid[])', [supervisorId, employeeIds]);
+}
+
+export async function createEmployee(opts: { workplaceId?: string | null; shiftId?: string | null; ack?: boolean; orgId?: string; supervisorId?: string } = {}) {
   const n = ++counter;
   const u = await one(`INSERT INTO users (email, password_hash, role, full_name, org_id) VALUES ($1, $2, 'EMPLOYEE', $3, $4) RETURNING id`, [`emp${n}-${crypto.randomUUID()}@test.local`, await hashPassword(PASSWORD), `Employee ${n}`, opts.orgId ?? DEFAULT_ORG_ID]);
   await q(`INSERT INTO employee_profiles (user_id, employee_code) VALUES ($1, $2)`, [u.id, `E-${n}-${crypto.randomBytes(2).toString('hex')}`]);
   if (opts.workplaceId) await q('INSERT INTO workplace_assignments (employee_id, workplace_id) VALUES ($1, $2)', [u.id, opts.workplaceId]);
   if (opts.shiftId) await q('INSERT INTO employee_shift_assignments (employee_id, shift_id) VALUES ($1, $2)', [u.id, opts.shiftId]);
   if (opts.ack !== false) await q('INSERT INTO notice_acknowledgements (user_id, notice_version) VALUES ($1, $2)', [u.id, DEFAULT_SETTINGS.privacy.version]);
+  if (opts.supervisorId) await assignTeam(opts.supervisorId, u.id);
   const email = (await one('SELECT email FROM users WHERE id = $1', [u.id])).email;
   return { id: u.id as string, email: email as string };
 }

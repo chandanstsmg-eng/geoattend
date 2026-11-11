@@ -12,7 +12,7 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { offsetMeters } from '@geoattend/shared';
+import { distanceMeters, offsetMeters } from '@geoattend/shared';
 import { one, q, tx } from '../../db/pool.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { mount, route } from '../../lib/http.js';
@@ -77,14 +77,19 @@ async function simulateMove(employeeId: string, position: Position, hold: boolea
   const span = hold ? Math.max(t.entryStabilizationSec, t.exitStabilizationSec, t.returnStabilizationSec) : 0;
   const step = count > 1 ? Math.ceil(span / (count - 1)) + 1 : 0;
   const p = placeFor(position, { lat: wp.latitude, lng: wp.longitude, radius: Number(wp.radius_m) });
+  // The demo employee walks to the new position (about 1.4 m/s) on the virtual clock: moving instantly would be an
+  // impossible jump, which the live rules flag and ignore (Settings › Tracking › maxPlausibleSpeedKmh).
+  const last = await one('SELECT last_latitude, last_longitude FROM tracking_sessions WHERE id = $1', [s.id]);
+  const walkSec = last?.last_latitude != null ? Math.ceil(distanceMeters({ lat: last.last_latitude, lng: last.last_longitude }, p) / 1.4) : 0;
   let advanced = 0;
   for (let i = 0; i < count; i++) {
     if (i > 0) {
       await advanceClock(s.id, step);
       advanced += step;
     } else {
-      await advanceClock(s.id, 1); // never collide with the previous reading's timestamp
-      advanced += 1;
+      const first = Math.max(1, walkSec); // at least 1 s: never collide with the previous reading's timestamp
+      await advanceClock(s.id, first);
+      advanced += first;
     }
     const fresh = await one('SELECT sim_clock_offset_sec FROM tracking_sessions WHERE id = $1', [s.id]);
     // jitter each fix by up to 1.5 m, as a real receiver would

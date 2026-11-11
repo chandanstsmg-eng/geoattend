@@ -57,7 +57,7 @@ const bySup = () => as(sup);
 
 let dayOffset = 40;
 async function employee() {
-  const emp = await createEmployee({ workplaceId: base.workplaceId });
+  const emp = await createEmployee({ supervisorId: supId, workplaceId: base.workplaceId });
   await q(`INSERT INTO employee_shift_assignments (employee_id, shift_id, effective_from) VALUES ($1,$2,'2020-01-01')`, [emp.id, shiftId]);
   await q(`UPDATE employee_profiles SET joined_on = '2020-01-01' WHERE user_id = $1`, [emp.id]);
   return emp;

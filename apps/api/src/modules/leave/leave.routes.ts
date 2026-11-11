@@ -56,6 +56,30 @@ async function validate(employeeId: string, body: z.infer<typeof leaveBody>, db:
     db,
   );
   if (overlap) throw conflict('LEAVE_OVERLAP', 'These dates overlap a leave request that is already pending or approved.');
+  if (!body.halfDay) await assertNoAttendance(employeeId, body.startDate, body.endDate, db);
+}
+
+/**
+ * Approved policy (Phase I): full-day leave is refused on a day the employee already has attendance, so one
+ * day never counts as both worked and on leave. Records waiting for verification block it too. Half-day leave
+ * stays allowed: worked half the day, on leave the other half. The answer lists the records to correct.
+ */
+async function assertNoAttendance(employeeId: string, start: string, end: string, db: Queryable) {
+  const records = await q(
+    `SELECT ar.id, to_char(ar.shift_date, 'YYYY-MM-DD') AS date, sh.name AS shift, ar.verification_status AS status
+     FROM attendance_records ar JOIN shifts sh ON sh.id = ar.shift_id
+     WHERE ar.employee_id = $1 AND ar.shift_date BETWEEN $2::date AND $3::date AND ar.verification_status <> 'VOIDED'
+     ORDER BY ar.shift_date, sh.name`,
+    [employeeId, start, end],
+    db,
+  );
+  if (!records.length) return;
+  const dates = [...new Set(records.map((r) => DateTime.fromISO(r.date).toFormat('d LLL')))].join(', ');
+  throw conflict(
+    'LEAVE_ON_ATTENDED_DAY',
+    `There is attendance on ${dates}. Correct or void that attendance first, or choose a half day.`,
+    { records },
+  );
 }
 
 async function loadLeave(id: string, db?: Queryable) {
@@ -156,7 +180,7 @@ mount(leaveRouter, '/api/v1/leave', 'leave', [
     handler: async ({ query, user }) =>
       q(
         `${SELECT}
-         WHERE u.org_id = $6 AND ${siteFilter(employeeSite('u.id'), '$7')} AND ($1 = 'ALL' OR l.status = $1) AND ($2::uuid IS NULL OR l.employee_id = $2)
+         WHERE u.org_id = $6 AND ${siteFilter(employeeSite('u.id'), '$7', 'u.id')} AND ($1 = 'ALL' OR l.status = $1) AND ($2::uuid IS NULL OR l.employee_id = $2)
            AND ($3::date IS NULL OR l.end_date >= $3) AND ($4::date IS NULL OR l.start_date <= $4)
          ORDER BY (l.status = 'PENDING') DESC, l.start_date DESC, l.created_at DESC LIMIT $5`,
         [query.status, query.employeeId ?? null, query.from ?? null, query.to ?? null, query.limit, user.orgId, user.sites],
@@ -217,6 +241,8 @@ mount(leaveRouter, '/api/v1/leave', 'leave', [
         if (l.status !== 'PENDING') throw conflict('LEAVE_CLOSED', `This request is already ${l.status.toLowerCase()}.`);
         await assertPayrollMonthOpen(user.orgId, l.start_date, db);
         await assertPayrollMonthOpen(user.orgId, l.end_date, db);
+        // Attendance can appear between the request and the decision: checked again before approving.
+        if (body.decision === 'APPROVED' && !l.half_day) await assertNoAttendance(l.employee_id, l.start_date, l.end_date, db);
         await q(`UPDATE leave_requests SET status = $2, decided_by = $3, decided_at = now(), decision_note = $4, updated_at = now() WHERE id = $1`, [params.id, body.decision, user.id, body.note ?? null], db);
         await audit({ actor: user, action: body.decision === 'APPROVED' ? 'leave.approve' : 'leave.reject', resourceType: 'leave_request', resourceId: params.id, before: { status: l.status }, after: { status: body.decision }, reason: body.note, req }, db);
         const range = fmtRange(l.start_date, l.end_date);

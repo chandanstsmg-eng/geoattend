@@ -129,7 +129,7 @@ mount(insightsRouter, '/api/v1/insights', 'insights', [
       const since = DateTime.fromISO(await orgToday(user.orgId)).minus({ days: query.days }).toISODate()!;
       const rows = await q(
         `WITH emp AS (SELECT u.id, u.full_name, ep.employee_code FROM users u JOIN employee_profiles ep ON ep.user_id = u.id
-                      WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND u.is_active AND ${siteFilter(employeeSite('u.id'), '$4')})
+                      WHERE u.org_id = $1 AND u.role = 'EMPLOYEE' AND u.is_active AND ${siteFilter(employeeSite('u.id'), '$4', 'u.id')})
          SELECT e.id, e.full_name, e.employee_code,
            (SELECT count(*)::int FROM attendance_records ar WHERE ar.employee_id = e.id AND ar.is_late AND ar.shift_date >= $2 AND ${attendanceCounts()}) AS late,
            (SELECT array_agg(EXTRACT(ISODOW FROM ar.shift_date)::int) FROM attendance_records ar WHERE ar.employee_id = e.id AND ar.is_late AND ar.shift_date >= $2 AND ${attendanceCounts()}) AS late_days,

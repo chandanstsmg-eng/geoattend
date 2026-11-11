@@ -129,7 +129,7 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     handler: async ({ query, user }) =>
       q(
         `${SELECT_EMPLOYEE}
-         WHERE u.role = 'EMPLOYEE' AND u.org_id = $4 AND ${siteFilter('wa.workplace_id', '$5')}
+         WHERE u.role = 'EMPLOYEE' AND u.org_id = $4 AND ${siteFilter('wa.workplace_id', '$5', 'u.id')}
            AND ($1::text IS NULL OR u.full_name ILIKE '%' || $1 || '%' OR u.email ILIKE '%' || $1 || '%' OR ep.employee_code ILIKE '%' || $1 || '%')
            AND ($2::uuid IS NULL OR wa.workplace_id = $2)
            AND ($3 = 'all' OR ($3 = 'active') = u.is_active)
@@ -410,7 +410,7 @@ mount(employeesRouter, '/api/v1/employees', 'employees', [
     handler: async ({ params, query, user, req }) => {
       await audit({ actor: user, action: 'location_history.view', resourceType: 'user', resourceId: params.id, after: query, req });
       return q(
-        `SELECT lu.id, lu.session_id, lu.latitude, lu.longitude, lu.accuracy_m, lu.client_time, lu.received_at, lu.distance_m, lu.classification, lu.source, lu.is_mocked, lu.is_simulated
+        `SELECT lu.id, lu.session_id, lu.latitude, lu.longitude, lu.accuracy_m, lu.client_time, lu.received_at, lu.distance_m, lu.classification, lu.source, lu.is_mocked, lu.is_simulated, lu.suspect_reason, lu.implied_speed_kmh
          FROM location_updates lu WHERE lu.employee_id = $1 AND lu.client_time BETWEEN $2 AND $3 ORDER BY lu.client_time LIMIT 5000`,
         [params.id, query.from, query.to],
       );

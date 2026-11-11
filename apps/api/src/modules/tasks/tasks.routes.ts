@@ -114,7 +114,7 @@ mount(tasksRouter, '/api/v1/tasks', 'tasks', [
     query: z.object({ status: z.enum(['OPEN', 'SUBMITTED', 'APPROVED', 'REOPENED', 'CANCELLED', 'ALL']).default('ALL'), assigneeId: z.uuid().optional(), limit: z.coerce.number().int().min(1).max(500).default(200) }),
     handler: async ({ query, user }) =>
       q(
-        `${SELECT} WHERE t.org_id = $1 AND ${siteFilter(`COALESCE(t.workplace_id, ${employeeSite('t.assignee_id')})`, '$2')}
+        `${SELECT} WHERE t.org_id = $1 AND ${siteFilter(`COALESCE(t.workplace_id, ${employeeSite('t.assignee_id')})`, '$2', 't.assignee_id')}
            AND ($3 = 'ALL' OR t.status = $3) AND ($4::uuid IS NULL OR t.assignee_id = $4)
          ORDER BY (t.status = 'SUBMITTED') DESC, t.due_date NULLS LAST, t.created_at DESC LIMIT $5`,
         [user.orgId, user.sites, query.status, query.assigneeId ?? null, query.limit],
