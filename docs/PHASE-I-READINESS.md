@@ -248,9 +248,16 @@ A browser check confirmed all of these on the rebuilt dashboard (12/12). The exi
 | **Shared phones** | The phone shows, retries and removes only the signed-in employee's saved items. Both sync loops stop when the signed-in employee changes. A refusal that comes back under another sign-in leaves the item waiting instead of "not accepted". Saved items are hidden at sign-out and when the sign-in is lost. 4 tests; 3 fail if the sign-in check is removed |
 | **Large-company dashboard** | On the 1,032-employee copy, under row-level security: 90 days 11.6 s → 7.1 s, 30 days 4.2 s → 2.7 s, hours 2.2 s → 1.6 s, `monthly.csv` 3.9 s → 3.0 s. Every response is identical to before (only `serverTime` differs) |
 
-**What still limits the 90-day dashboard.** The hours query takes about 4 s for 67,000 records because row-level security checks each session, break, absence and overtime row against the company, one lookup per row. That check *is* the company isolation and was not weakened.
+**What still limits the 90-day dashboard** (measured 11 November 2026 on the same copy; this corrects the earlier note, which put most of it on row-level security):
+- **One roster lookup per day.** 90 days make 259 queries. A day's roster runs in about 49 ms in the database (29 ms without row-level security) but takes about 200 ms in the dashboard: 1,008 rows to transfer and read each day, four days at a time.
+- **The hours query sends 67,514 rows to the API.** It runs in about 1.65 s with row-level security and 1.5–1.8 s without, when the cache is warm. It takes about 3.9 s in the dashboard because of the transfer and the work running beside it.
+- **Company isolation costs about 0.5–1 s of the 7–8 s.** Existing indexes are used, and no missing index was found.
 
-The next step would add a company column to those child tables (a migration), so the check needs no lookup, or precompute daily totals. Both change the schema and need approval.
+Changes tried on the copy inside a transaction that was rolled back, so nothing was kept:
+- **Company column on 6 child tables:** the hours query went from 1.65 s to 1.0 s. The backfill took 13 s.
+- **Precomputed totals per record:** about 75 ms to read, against 1.65 s. That was a prototype query, not identical to the real one.
+
+Recommended order: first batch the per-day roster into one range query and slim the hours rows; neither changes the schema. Measure again, and only then consider precomputed totals, which change the schema and need approval.
 
 Business decisions: [POLICY-DECISIONS.md](POLICY-DECISIONS.md).
 
