@@ -257,7 +257,14 @@ Changes tried on the copy inside a transaction that was rolled back, so nothing 
 - **Company column on 6 child tables:** the hours query went from 1.65 s to 1.0 s. The backfill took 13 s.
 - **Precomputed totals per record:** about 75 ms to read, against 1.65 s. That was a prototype query, not identical to the real one.
 
-Recommended order: first batch the per-day roster into one range query and slim the hours rows; neither changes the schema. Measure again, and only then consider precomputed totals, which change the schema and need approval.
+**Done, 11 November 2026: the range query and the slimmer hours rows** (commit `bfed10b`, no schema change). On the same copy, the old and new code ran side by side and were asked the same question at the same moment:
+- 27 cases are byte-identical: every filter, compare, the supervisor login, ranges including today, 1 to 366 days, and the hours, hours CSV and monthly CSV reports.
+- 90 days: 3.8 s → 2.3 s; 259 → 22 queries; 51 MB → 26.6 MB read from the database; peak extra memory 180 → 126 MB.
+- 30 days: 1.3 s → 0.7 s.
+
+The rest is mostly the hours query itself, about 1.6 s in the database for 67,000 records. Precomputed totals remain the only larger step, and they need approval.
+
+Business rule specifications: [POLICY-SPECS.md](POLICY-SPECS.md). Backup recovery drill: [BACKUPS.md](BACKUPS.md).
 
 Business decisions: [POLICY-DECISIONS.md](POLICY-DECISIONS.md).
 
