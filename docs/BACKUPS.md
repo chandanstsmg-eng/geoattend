@@ -44,6 +44,39 @@ Put these in `/etc/geoattend/backup.env`, chmod 600; the template is `deploy/bac
 5. **Switch over.** Point `DATABASE_URL` and `APP_DATABASE_URL` at the restored database and start the API. Migrations run on start; a restored backup from before a migration is brought up to date.
 6. **Record it.** Note the time of the backup used, and tell the companies affected about any lost hours.
 
+## Recovery drill on a Windows development machine
+
+This is the procedure that was run on 11 November 2026. Use it before trusting a new backup. It never restores over a database: the restore goes to a new database on a separate, throw-away PostgreSQL cluster.
+
+1. **Fingerprint the existing backups.** Record the size and SHA-256 of every file in `data/backups`, so you can show afterwards that nothing was overwritten.
+2. **Take the backup.**
+   ```
+   set PG_BIN=<folder with pg_dump/pg_restore 18.x>
+   set DATABASE_URL=postgresql://<owner>@127.0.0.1:54340/geoattend_demo
+   npm run db:backup -w @geoattend/api
+   ```
+   `pg_dump` only reads the database. The new `geoattend-<time>.dump` and its `.manifest.json`, which holds the size and SHA-256, get a new timestamped name, so an existing file is never replaced.
+3. **Check the checksum independently.** Run `Get-FileHash <dump> -Algorithm SHA256`; it must equal `files[0].sha256` in the manifest. Then run `npm run db:backup:verify -w @geoattend/api`.
+4. **Restore into a new database on a throw-away cluster.** Leave `DATABASE_URL` unset.
+   ```
+   set DATA_DIR=D:\gbk
+   set PG_PORT=54362
+   npm run db:restore -w @geoattend/api -- <dump> geoattend_restore_drill
+   ```
+   The command refuses a target that already exists.
+5. **Compare.** Compare every table's row count and a fingerprint of all its rows with the source, reading the source in a read-only transaction. Also compare migrations, policies, foreign keys, indexes, views and triggers.
+6. **Confirm nothing was overwritten.** Fingerprint the backup folder again: the only change must be the new dump and its manifest.
+
+**Result on 11 November 2026, for the dev database `geoattend_demo`:**
+- **Backup:** a 2.5 MB dump in 3 s, with status `READABLE`. The SHA-256 computed independently equals the manifest's (`c899e7d4…4c8b6b`).
+- **Restore:** 10 s.
+- **Tables:** 50 of 52 are identical in every row. The other 2 are the job scheduler's own tables, `job_runs` and `job_state`, which the running dev server kept writing after the dump. All 26,459 `job_runs` rows from before the dump are identical. The 50 rows started after the dump, and the newer `job_state` times and counters, are the only differences.
+- **Structure:** identical. Migration 030, 45 isolation policies, 116 foreign keys (all validated), 156 indexes, 2 views and 6 triggers.
+- **Existing backups:** all 25 earlier items unchanged.
+- **Live database:** `geoattend` was not read by the backup, and is still at migration 020.
+
+**The 9 old backups without manifests** are `pg-online-*` folders from 4–5 November, taken before manifests existed. They have not been checked and are kept as they are; nothing was deleted. They are older than the backups verified since.
+
 ## Verified here, and not verified
 
 | Check | Status |
@@ -54,6 +87,7 @@ Put these in `/etc/geoattend/backup.env`, chmod 600; the template is `deploy/bac
 | Wrong off-site credentials: run recorded as `FAILED`, exit code 1 | **PASS** |
 | **PostgreSQL 17** (the Docker server's version), with the 17.6 client tools: logins from `docker/db-init`, migrations up to date, `db:backup:production` RESTORE_PROVEN 52/52, off-site copy verified, downloaded copy's SHA-256 equal, restored into a separate database with identical counts (49 users, 2,886 attendance records, migration 030) | **PASS** (disposable 17.6 server, 9 Nov 2026) |
 | Tools older than the server (pg_dump 17.6 against a PostgreSQL 18 server) | **PASS**: refused with "server version mismatch", run recorded `FAILED`, exit 1. So the API image must carry the server's major version: it installs `postgresql-client-17` |
+| Fresh development backup: SHA-256 checked independently, restored on a separate cluster, every table and the structure compared with the source, no earlier backup changed | **PASS** (11 Nov 2026, see the drill above) |
 | A real off-machine bucket | **BLOCKED**: no bucket or credentials provided |
 | The systemd timer on a Linux server | **BLOCKED**: no Linux server |
 | An alert reaching a person | **BLOCKED**: no webhook or SMTP configured |

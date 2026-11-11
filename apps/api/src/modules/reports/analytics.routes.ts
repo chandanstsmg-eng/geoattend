@@ -37,10 +37,9 @@ import { isoDate, mount, route } from '../../lib/http.js';
 import { employeeSite, overtimeCounts, siteFilter, SUPERVISOR_SITES } from '../../lib/tenancy.js';
 import type { AuthUser } from '../../lib/auth.js';
 import { getSettings } from '../settings/settings.service.js';
-import { attended, defaultDate, isPending, roster, withLeaveAndNoShow } from './reports.routes.js';
-import { computeHours, loadPendingHours, loadWorkRecords, splitRecords } from './hours.js';
+import { attended, defaultDate, isPending, roster, rosterDayCounts, withLeaveAndNoShow, type DayCountRow } from './reports.routes.js';
+import { hoursFromSplit, loadPendingHours, loadWorkRecords, splitRecords, weekOf, withNames } from './hours.js';
 import { dayEndSql } from '../../lib/dates.js';
-import { DAY_LOOKUPS_AT_ONCE, mapLimit } from '../../lib/concurrency.js';
 
 /** Longest range the dashboard answers. Attendance and hours always cover the same days; longer asks are refused. */
 export const MAX_RANGE_DAYS = 366;
@@ -143,7 +142,14 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const keep = (wpId: string) => !supSites || supSites.has(wpId);
   const keepRow = (r: { workplace_id: string; employee_id: string }) => keep(r.workplace_id) && (!emp || r.employee_id === emp);
   const dayRows = async (date: string) => (await withLeaveAndNoShow(user.orgId, date, await roster(user.orgId, date, wp, includeSim, user.sites))).filter(keepRow);
-  const workFor = (f: string, t: string) => loadWorkRecords(user, { from: f, to: t, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim });
+  // Rows per date for a run of days: days before today come from one range lookup (the same rows, reduced to
+  // what the counts read); today keeps the full per-day roster, since its rows are listed and depend on the clock.
+  const rowsForDays = async (dates: string[]) => {
+    const past = dates.filter((d) => d < today);
+    const ranged = past.length ? await rosterDayCounts(user.orgId, past[0]!, past[past.length - 1]!, wp, includeSim, user.sites) : new Map<string, DayCountRow[]>();
+    return Promise.all(dates.map(async (d) => (d < today ? (ranged.get(d) ?? []).filter(keepRow) : dayRows(d))));
+  };
+  const workFor = (f: string, t: string) => loadWorkRecords(user, { from: f, to: t, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim }, { names: false });
 
   // ── workplaces and workers in scope ──
   const workplaces = await q(
@@ -183,8 +189,11 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const lateByWp = new Map<string, number>();
   const trend: DayOutcome[] = [];
   let todayRows: any[] = [];
-  // Looked up a few days at a time, then processed in date order exactly as before.
-  const rowsByDay = await mapLimit(days, DAY_LOOKUPS_AT_ONCE, (date) => dayRows(date));
+  // The period's hours are read meanwhile (read-only, independent of the daily counts).
+  const recordsP = workFor(from, to);
+  recordsP.catch(() => undefined); // awaited below; this only keeps an early failure from going unhandled
+  // Looked up in one range, then processed in date order exactly as before.
+  const rowsByDay = await rowsForDays(days);
   for (const [i, date] of days.entries()) {
     const rows = rowsByDay[i]!;
     if (date === today) todayRows = rows;
@@ -203,9 +212,9 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
   const absentToday = todayRows.filter((r) => !r.attendance_id && !r.on_leave && !r.holiday && (r.no_show || r.ended_at));
 
   // ── hours, overtime and worksite time over the period ──
-  const records = await workFor(from, to);
+  const records = await withNames(await recordsP);
   const split = splitRecords(records, settings.workforce, from, to);
-  const perEmployee = computeHours(records, settings.workforce, from, to);
+  const perEmployee = hoursFromSplit(split); // = computeHours(records, …, from, to), without splitting twice
   const byDay = new Map<string, { worked: number; scheduled: number; overtime: number }>();
   const byWpHours = new Map<string, { total: number; overtime: number; employees: Map<string, { name: string; minutes: number }> }>();
   const byWeek = new Map<string, number>();
@@ -222,7 +231,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     e.minutes += r.total;
     w.employees.set(r.employee_id, e);
     byWpHours.set(r.workplace_id, w);
-    inc(byWeek, DateTime.fromISO(r.shift_date).startOf('week').toISODate()!, r.overtime);
+    inc(byWeek, weekOf(r.shift_date), r.overtime);
     if (r.incomplete) {
       const t = trend.find((x) => x.date === r.shift_date);
       if (t) t.incomplete++;
@@ -256,7 +265,7 @@ export async function dashboard(user: AuthUser, query: z.infer<typeof dashboardQ
     const pTo = DateTime.fromISO(days[0]!).minus({ days: 1 }).toISODate()!;
     const pFrom = DateTime.fromISO(pTo).minus({ days: len - 1 }).toISODate()!;
     const pDates = isoDays(pFrom, pTo);
-    const pDays: DayOutcome[] = (await mapLimit(pDates, DAY_LOOKUPS_AT_ONCE, (date) => dayRows(date))).map((rows, i) => dayOutcome(rows, pDates[i]!, today));
+    const pDays: DayOutcome[] = (await rowsForDays(pDates)).map((rows, i) => dayOutcome(rows, pDates[i]!, today));
     const pPending = (await loadPendingHours(user, { from: pFrom, to: pTo, workplaceId: wp, supervisorId: sup, employeeId: emp, includeSimulated: includeSim })).reduce((n, p) => n + p.minutes, 0);
     previous = { from: pFrom, to: pTo, ...summarize(pDays, splitRecords(await workFor(pFrom, pTo), settings.workforce, pFrom, pTo)), pendingMinutes: pPending };
   }

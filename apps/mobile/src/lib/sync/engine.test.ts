@@ -261,6 +261,63 @@ test('readings from a finished shift are still sent after the next one starts', 
   assert.equal(d.read().items.length, 0);
 });
 
+// ── shared phone: several employees sign in on one phone ──
+
+test("shared phone: an employee sees, retries and removes only their own saved items", async () => {
+  const { eventsOf } = await import('./engine.ts');
+  let s = addEvent(addEvent(emptyOutbox(), checkIn('a1', 'sA', 'u1')), checkIn('b1', 'sB', 'u2'));
+  s = { events: s.events.map((e) => ({ ...e, status: 'FAILED' as const, lastError: 'Not inside.' })) };
+  assert.deepEqual(eventsOf(s, 'u2').map((e) => e.id), ['b1']);
+  assert.deepEqual(eventsOf(s, null), []);
+  // B cannot remove or retry A's refused check-in…
+  assert.deepEqual(dismissEvent(s, 'a1', 'u2'), s);
+  assert.deepEqual(retryEvent(s, 'a1', 'u2'), s);
+  // …but can their own.
+  assert.deepEqual(dismissEvent(s, 'b1', 'u2').events.map((e) => e.id), ['a1']);
+  assert.equal(retryEvent(s, 'b1', 'u2').events.find((e) => e.id === 'b1')!.status, 'PENDING');
+});
+
+test('shared phone: signing out mid-sync sends nothing more of that employee, under anyone', async () => {
+  let current: string | null = 'u1';
+  const d = disk(addEvent(addEvent(emptyOutbox(), checkIn('e1', 's1')), checkIn('e2', 's2', 'u1', '2026-11-05T09:05:00.000Z')));
+  const sent: string[] = [];
+  const r = await runOutbox(deps(d, async (e) => {
+    sent.push(e.id);
+    current = 'u2'; // A signs out and B signs in while the first one is on its way
+  }, { userId: async () => current }));
+  assert.equal(r.stopped, 'signed-out');
+  assert.deepEqual(sent, ['e1']);
+  assert.equal(d.read().events.find((e) => e.id === 'e2')!.status, 'PENDING');
+});
+
+test("shared phone: a refusal that came back under someone else's sign-in leaves the item waiting, not 'not accepted'", async () => {
+  let current: string | null = 'u1';
+  const d = disk(addEvent(emptyOutbox(), checkIn()));
+  const r = await runOutbox(deps(d, async () => {
+    current = 'u2';
+    throw { status: 404, code: 'NOT_FOUND', message: 'Session not found' }; // B's sign-in does not own A's session
+  }, { userId: async () => current }));
+  assert.equal(r.stopped, 'signed-out');
+  const e = d.read().events[0]!;
+  assert.equal(e.status, 'PENDING');
+  assert.equal(e.failureCode, null);
+  // A signs in again later: it goes.
+  current = 'u1';
+  const again = await runOutbox(deps(d, async () => {}, { userId: async () => current }));
+  assert.equal(again.sent, 1);
+});
+
+test('shared phone: location readings stop at a sign-out and are not set aside when refused under another sign-in', async () => {
+  let current: string | null = 'u1';
+  const d = qdisk(enqueue(emptyQueue(), [reading(1), reading(2)], 100));
+  let gone = 0;
+  const r = await flushReadings({ update: d.update, userId: async () => current, post: async () => { current = 'u2'; throw { status: 404, code: 'NOT_FOUND', message: 'x' }; }, onSessionGone: async () => { gone++; } });
+  assert.equal(r.stopped, 'signed-out');
+  assert.equal(d.read().items.length, 2);
+  assert.equal(d.read().failed.length, 0);
+  assert.equal(gone, 0);
+});
+
 test('one malformed reading does not cost the rest of the batch', async () => {
   const d = qdisk(enqueue(emptyQueue(), Array.from({ length: 9 }, (_, i) => reading(i)), 100));
   const r = await flushReadings({

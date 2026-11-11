@@ -25,7 +25,7 @@
 import { DateTime } from 'luxon';
 import { q } from '../../db/pool.js';
 import type { AuthUser } from '../../lib/auth.js';
-import { SUPERVISOR_SITES, siteFilter, workJoin } from '../../lib/tenancy.js';
+import { SUPERVISOR_SITES, siteFilter, workJoinForDays } from '../../lib/tenancy.js';
 
 export interface WorkRecord {
   employee_id: string;
@@ -65,7 +65,24 @@ export interface EmployeeHours {
 }
 
 export const roundTo = (m: number, step: number) => (step > 0 ? Math.round(m / step) * step : m);
-const weekOf = (iso: string) => DateTime.fromISO(iso).startOf('week').toISODate()!; // ISO weeks start on Monday
+// A 90-day report of a 1,000-person company asks this ~65,000 times for ~90 dates: parsed once per date.
+const weeks = new Map<string, string>();
+/** Monday of the ISO week of a YYYY-MM-DD date. */
+export const weekOf = (iso: string) => {
+  let w = weeks.get(iso);
+  if (w === undefined) {
+    w = DateTime.fromISO(iso).startOf('week').toISODate()!; // ISO weeks start on Monday
+    if (weeks.size > 20_000) weeks.clear();
+    weeks.set(iso, w);
+  }
+  return w;
+};
+/**
+ * Order of YYYY-MM-DD dates, then employee ids (lower-case UUIDs): plain character order, which for these
+ * fixed-format strings is the order localeCompare gave, without its per-call collation cost.
+ */
+export const byDateThenEmployee = (a: { shift_date: string; employee_id: string }, b: { shift_date: string; employee_id: string }) =>
+  a.shift_date < b.shift_date ? -1 : a.shift_date > b.shift_date ? 1 : a.employee_id < b.employee_id ? -1 : a.employee_id > b.employee_id ? 1 : 0;
 
 /**
  * Per-record split into regular and overtime minutes, applying rounding and the weekly rule in
@@ -74,7 +91,7 @@ const weekOf = (iso: string) => DateTime.fromISO(iso).startOf('week').toISODate(
  */
 export function splitRecords(records: WorkRecord[], policy: HoursPolicy, from: string, to: string) {
   const limit = policy.weeklyRegularHours > 0 ? policy.weeklyRegularHours * 60 : Infinity;
-  const sorted = [...records].sort((a, b) => a.shift_date.localeCompare(b.shift_date) || a.employee_id.localeCompare(b.employee_id));
+  const sorted = [...records].sort(byDateThenEmployee);
   const used = new Map<string, number>(); // employee|week → regular minutes so far
   const out: Array<WorkRecord & { regular: number; overtime: number; total: number }> = [];
   for (const r of sorted) {
@@ -92,8 +109,13 @@ export function splitRecords(records: WorkRecord[], policy: HoursPolicy, from: s
 
 /** Per-employee totals for [from, to], sorted by name. */
 export function computeHours(records: WorkRecord[], policy: HoursPolicy, from: string, to: string): EmployeeHours[] {
+  return hoursFromSplit(splitRecords(records, policy, from, to));
+}
+
+/** The same totals from records already split (the dashboard has them, and splitting twice cost ~1 s). */
+export function hoursFromSplit(split: ReturnType<typeof splitRecords>): EmployeeHours[] {
   const by = new Map<string, EmployeeHours & { dates: Set<string> }>();
-  for (const r of splitRecords(records, policy, from, to)) {
+  for (const r of split) {
     let t = by.get(r.employee_id);
     if (!t) {
       t = { employee_id: r.employee_id, full_name: r.full_name, employee_code: r.employee_code ?? null, days: 0, total_minutes: 0, regular_minutes: 0, overtime_minutes: 0, scheduled_minutes: 0, incomplete: 0, unmeasured: 0, pending_minutes: 0, pending_records: 0, dates: new Set() };
@@ -153,7 +175,7 @@ export async function loadPendingHours(user: Pick<AuthUser, 'orgId' | 'sites'>, 
   return q(
     `SELECT ar.employee_id, u.full_name, ep.employee_code, COALESCE(SUM(aw.worked_minutes), 0)::int AS minutes, count(*)::int AS records
      FROM attendance_records ar
-     JOIN ${workJoin('ar', 'aw', 'attendance_work_all')}
+     JOIN ${workJoinForDays('$3::date', '$4::date', 'ar', 'aw', 'attendance_work_all')}
      JOIN users u ON u.id = ar.employee_id
      LEFT JOIN employee_profiles ep ON ep.user_id = u.id
      WHERE ar.verification_status = 'PENDING_VERIFICATION' AND u.org_id = $1 AND ${siteFilter('ar.workplace_id', '$2')}
@@ -166,14 +188,19 @@ export async function loadPendingHours(user: Pick<AuthUser, 'orgId' | 'sites'>, 
   );
 }
 
-export async function loadWorkRecords(user: Pick<AuthUser, 'orgId' | 'sites'>, f: RecordFilter): Promise<WorkRecord[]> {
+/**
+ * `names: false` leaves out the employee's name and code and the workplace name: the same rows (same joins
+ * and filters), about a third fewer bytes. The dashboard adds names once per employee with withNames.
+ */
+export async function loadWorkRecords(user: Pick<AuthUser, 'orgId' | 'sites'>, f: RecordFilter, opts: { names?: boolean } = {}): Promise<WorkRecord[]> {
   const start = weekOf(f.from);
+  const named = opts.names !== false;
   const rows = await q(
-    `SELECT ar.employee_id, u.full_name, ep.employee_code, to_char(ar.shift_date, 'YYYY-MM-DD') AS shift_date, ar.workplace_id, w.name AS workplace_name,
+    `SELECT ar.employee_id, ${named ? 'u.full_name, ep.employee_code, ' : ''}to_char(ar.shift_date, 'YYYY-MM-DD') AS shift_date, ar.workplace_id${named ? ', w.name AS workplace_name' : ''},
             aw.worked_minutes, aw.overtime_minutes, aw.scheduled_minutes, aw.in_progress,
             (s.authorization_status = 'EXPIRED' OR (s.ended_at IS NULL AND s.state <> 'ON_OVERTIME' AND s.scheduled_end_at < now())) AS incomplete
      FROM attendance_records ar
-     JOIN ${workJoin()}
+     JOIN ${workJoinForDays('$3::date', '$4::date')}
      JOIN users u ON u.id = ar.employee_id
      LEFT JOIN employee_profiles ep ON ep.user_id = u.id
      JOIN workplaces w ON w.id = ar.workplace_id
@@ -188,4 +215,22 @@ export async function loadWorkRecords(user: Pick<AuthUser, 'orgId' | 'sites'>, f
     [user.orgId, user.sites, start, f.to, f.workplaceId ?? null, f.employeeId ?? null, f.supervisorId ?? null, !!f.includeSimulated],
   );
   return rows.map((r) => ({ ...r, incomplete: !!r.incomplete, in_progress: !!r.in_progress, overtime_minutes: r.overtime_minutes ?? 0 }));
+}
+
+/**
+ * Records loaded with `names: false`, with the employee's name and code and the workplace name looked up once
+ * each (the same columns the join gives, in the same order).
+ */
+export async function withNames(records: WorkRecord[]): Promise<WorkRecord[]> {
+  if (!records.length) return records;
+  const ids = [...new Set(records.map((r) => r.employee_id))];
+  const sites = [...new Set(records.map((r) => r.workplace_id))];
+  const people = new Map(
+    (await q(`SELECT u.id, u.full_name, ep.employee_code FROM users u LEFT JOIN employee_profiles ep ON ep.user_id = u.id WHERE u.id = ANY($1::uuid[])`, [ids])).map((p) => [p.id as string, p]),
+  );
+  const places = new Map((await q(`SELECT id, name FROM workplaces WHERE id = ANY($1::uuid[])`, [sites])).map((w) => [w.id as string, w.name as string]));
+  return records.map(({ employee_id, shift_date, workplace_id, full_name: _n, employee_code: _c, workplace_name: _w, ...rest }) => {
+    const p = people.get(employee_id);
+    return { employee_id, full_name: p?.full_name as string, employee_code: (p?.employee_code ?? null) as string | null, shift_date, workplace_id, workplace_name: places.get(workplace_id), ...rest };
+  });
 }

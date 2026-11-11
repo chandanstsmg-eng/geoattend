@@ -213,7 +213,7 @@ Tests prove the figures are unchanged (`report-speed.test.ts`), and each test fa
 A browser check confirmed all of these on the rebuilt dashboard (12/12). The existing browser suite: 46 of 47. The one left over needs a running shift, and none of the sample shifts runs after 16:00.
 
 **Not fixed (low impact, or a design question):**
-- **Phone app, shared phones (M4):** saved items are mixed between employees who share a phone. Changing that needs a decision on how shared phones should work.
+- **Phone app, shared phones (M4):** fixed afterwards. See "Post Phase I fixes".
 - **Phone app, fast phone clock (M1):** readings from a phone whose clock runs fast are refused and quietly dropped. The fix is to correct the phone's clock from the server time, which needs device testing.
 - **Keyboard:** focus is lost after Approve.
 - **Small text links:** "Open on map" and "before / after" are 16 px tall.
@@ -226,7 +226,7 @@ A browser check confirmed all of these on the rebuilt dashboard (12/12). The exi
 - **API only:** `/reports/overview` reports "present" only for today.
 - **Data checks:** employee codes are case-sensitive, and a 2099 joining date is accepted.
 
-**Still open from earlier:** while payroll is off, `/payroll/payslips/:id` and the payslip page still show a full salary slip, and `/payroll/:month/history` still answers.
+**Payslip routes while payroll is off:** fixed afterwards. See "Post Phase I fixes".
 
 ### More decisions waiting for the company
 
@@ -239,6 +239,34 @@ A browser check confirmed all of these on the rebuilt dashboard (12/12). The exi
 - **Rooted phones:** is server-side attestation (Play Integrity) required? Today the phone reports these flags itself.
 - **Mistaken deactivation:** an employee deactivated by mistake and reactivated the same day loses that day's roster. Is that intended?
 - **Workplace names:** should two workplaces be allowed the same name?
+
+## Post Phase I fixes (10 November 2026, branch `post-phase-i-fixes`)
+
+| Issue | Result |
+|---|---|
+| **Payroll information while payroll is off** | `GET /payroll/payslips/:id`, `GET /payroll/:month` (frozen payslips) and `/:month/history` now refuse with `PAYROLL_DISABLED`, like every other payroll route. The dashboard payslip page shows the release notice. A test calls **every** registered payroll route while payroll is off (all reads must be 403), and shows the same records return once payroll is on. **This reverses the earlier rule that approved history stays readable to the owner**: one line per route if that rule is wanted back. Calculation logic not touched |
+| **Shared phones** | The phone shows, retries and removes only the signed-in employee's saved items. Both sync loops stop when the signed-in employee changes. A refusal that comes back under another sign-in leaves the item waiting instead of "not accepted". Saved items are hidden at sign-out and when the sign-in is lost. 4 tests; 3 fail if the sign-in check is removed |
+| **Large-company dashboard** | On the 1,032-employee copy, under row-level security: 90 days 11.6 s → 7.1 s, 30 days 4.2 s → 2.7 s, hours 2.2 s → 1.6 s, `monthly.csv` 3.9 s → 3.0 s. Every response is identical to before (only `serverTime` differs) |
+
+**What still limits the 90-day dashboard** (measured 11 November 2026 on the same copy; this corrects the earlier note, which put most of it on row-level security):
+- **One roster lookup per day.** 90 days make 259 queries. A day's roster runs in about 49 ms in the database (29 ms without row-level security) but takes about 200 ms in the dashboard: 1,008 rows to transfer and read each day, four days at a time.
+- **The hours query sends 67,514 rows to the API.** It runs in about 1.65 s with row-level security and 1.5–1.8 s without, when the cache is warm. It takes about 3.9 s in the dashboard because of the transfer and the work running beside it.
+- **Company isolation costs about 0.5–1 s of the 7–8 s.** Existing indexes are used, and no missing index was found.
+
+Changes tried on the copy inside a transaction that was rolled back, so nothing was kept:
+- **Company column on 6 child tables:** the hours query went from 1.65 s to 1.0 s. The backfill took 13 s.
+- **Precomputed totals per record:** about 75 ms to read, against 1.65 s. That was a prototype query, not identical to the real one.
+
+**Done, 11 November 2026: the range query and the slimmer hours rows** (commit `bfed10b`, no schema change). On the same copy, the old and new code ran side by side and were asked the same question at the same moment:
+- 27 cases are byte-identical: every filter, compare, the supervisor login, ranges including today, 1 to 366 days, and the hours, hours CSV and monthly CSV reports.
+- 90 days: 3.8 s → 2.3 s; 259 → 22 queries; 51 MB → 26.6 MB read from the database; peak extra memory 180 → 126 MB.
+- 30 days: 1.3 s → 0.7 s.
+
+The rest is mostly the hours query itself, about 1.6 s in the database for 67,000 records. Precomputed totals remain the only larger step, and they need approval.
+
+Business rule specifications: [POLICY-SPECS.md](POLICY-SPECS.md). Backup recovery drill: [BACKUPS.md](BACKUPS.md).
+
+Business decisions: [POLICY-DECISIONS.md](POLICY-DECISIONS.md).
 
 ## Open, not fixed
 

@@ -103,6 +103,26 @@ describe('payroll switched off', () => {
     }
   });
 
+  it('every payroll route refuses while off, reads included (no route can be added without the guard unnoticed)', async () => {
+    const { registry } = await import('../src/lib/http.js');
+    const payroll = registry.filter((r) => r.fullPath.startsWith('/api/v1/payroll'));
+    expect(payroll.length).toBeGreaterThan(10);
+    // Each route gets a real id of its own kind, so it is the payroll guard that answers, not "not found".
+    const adj = await one(`INSERT INTO pay_adjustments (employee_id, month, kind, amount, note) VALUES ($1, $2, 'BONUS', 1, 'test') RETURNING id`, [emp.id, month]);
+    const idFor = (p: string) => (p.includes('/payslips/') ? slipId : p.includes('/adjustments/') ? adj.id : emp.id);
+    const fill = (p: string) => p.replace(':month', month).replace(':id', idFor(p));
+    for (const r of payroll) {
+      const method = String(r.def.method).toLowerCase();
+      const res = await (owner.agent as any)[method === 'delete' ? 'delete' : method](fill(r.fullPath)).set('X-CSRF-Token', owner.csrf).send(method === 'get' ? undefined : {});
+      // A read must be refused outright. A write may also stop at 400 when its empty body fails validation:
+      // that happens before the handler, so nothing is read or changed either.
+      if (method === 'get') expect(res.status, `GET ${r.fullPath} answered ${res.status}`).toBe(403);
+      else expect([403, 400], `${method.toUpperCase()} ${r.fullPath} answered ${res.status}`).toContain(res.status);
+      if (res.status === 403) expect(res.body.error.code, r.fullPath).toBe('PAYROLL_DISABLED');
+    }
+    expect(payroll.filter((r) => r.def.method === 'get').length).toBeGreaterThan(3);
+  });
+
   it('shows employees no pay figures, and tells the interface it is off', async () => {
     const token = await mobileLogin(app, emp.email);
     const mine = (await request(app).get('/api/v1/me/earnings').set(bearer(token)).expect(200)).body;
@@ -112,9 +132,21 @@ describe('payroll switched off', () => {
     expect((await get('/auth/me').expect(200)).body.features.payroll).toBe(false);
   });
 
-  it('keeps existing payroll records, and leaves attendance and hours reports working', async () => {
+  it('keeps existing payroll records closed while off, unchanged for when it is turned on, and leaves attendance and hours reports working', async () => {
     expect(await q(`SELECT 1 FROM payslips WHERE id = $1`, [slipId])).toHaveLength(1);
-    expect((await get(`/payroll/${month}`).expect(200)).body.run.status).toBe('PAID');
+    // Phase I review: frozen payslips, a month's approved run and its history hold salaries, so they are closed too.
+    for (const path of [`/payroll/${month}`, `/payroll/${month}/history`, `/payroll/payslips/${slipId}`]) {
+      const res = await get(path);
+      expect(res.status, path).toBe(403);
+      expect(res.body.error.code, path).toBe('PAYROLL_DISABLED');
+    }
+    config.payrollEnabled = true;
+    try {
+      expect((await get(`/payroll/${month}`).expect(200)).body.run.status).toBe('PAID');
+      expect((await get(`/payroll/payslips/${slipId}`).expect(200)).body.id).toBe(slipId);
+    } finally {
+      config.payrollEnabled = false;
+    }
     await get(`/reports/monthly?month=${month}`).expect(200);
     await get(`/reports/hours.csv?from=${monthsAgo(1).toISODate()}&to=${monthsAgo(1).endOf('month').toISODate()}`).expect(200);
   });

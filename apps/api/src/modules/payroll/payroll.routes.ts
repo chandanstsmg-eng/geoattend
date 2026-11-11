@@ -4,7 +4,8 @@
  * Until a month is approved the numbers are live; approving freezes a payslip per
  * employee and locks the month. Reopening (with a reason) supersedes that run: it and its
  * payslips stay as history, and the next approval is a new revision.
- * Off unless PAYROLL_ENABLED=true (guard.ts); approved history stays readable to the owner.
+ * Off unless PAYROLL_ENABLED=true (guard.ts). While off, every route answers PAYROLL_DISABLED, reads included:
+ * frozen payslips and run history hold salaries, so they stay closed too (kept in the database, unchanged).
  */
 import { Router } from 'express';
 import { z } from 'zod';
@@ -178,7 +179,11 @@ mount(payrollRouter, '/api/v1/payroll', 'payroll', [
     ownerOnly: true,
     params: idParams,
     scope: 'payslip',
-    handler: async ({ params }) => one(`${payslipSelect} WHERE p.id = $1`, [params.id]),
+    handler: async ({ params }) => {
+      // Salary details stay closed while payroll is off, frozen payslips included (Phase I review).
+      assertPayrollEnabled();
+      return one(`${payslipSelect} WHERE p.id = $1`, [params.id]);
+    },
   }),
 
   // ── month ──
@@ -190,6 +195,8 @@ mount(payrollRouter, '/api/v1/payroll', 'payroll', [
     ownerOnly: true,
     params: monthParam,
     handler: async ({ params, user }) => {
+      // Checked before the frozen payslips too: they hold every employee's salary.
+      assertPayrollEnabled();
       const run = await runFor(user.orgId, params.month);
       if (run) {
         const slips = await q(`SELECT id, employee_id, net_amount::float AS net_amount, data FROM payslips WHERE run_id = $1 ORDER BY data->'employee'->>'fullName'`, [run.id]);
@@ -279,14 +286,16 @@ mount(payrollRouter, '/api/v1/payroll', 'payroll', [
     access: 'admin',
     ownerOnly: true,
     params: monthParam,
-    handler: async ({ params, user }) =>
-      q(
+    handler: async ({ params, user }) => {
+      assertPayrollEnabled(); // totals and who approved them are payroll information too
+      return q(
         `SELECT r.id, r.revision, r.status, r.total_net::float AS total_net, r.employees, r.approved_at, r.paid_at, r.superseded_at, r.supersede_reason,
                 a.full_name AS approved_by_name, s.full_name AS superseded_by_name
          FROM payroll_runs r LEFT JOIN users a ON a.id = r.approved_by LEFT JOIN users s ON s.id = r.superseded_by
          WHERE r.org_id = $1 AND r.month = $2 ORDER BY r.revision DESC`,
         [user.orgId, params.month],
-      ),
+      );
+    },
   }),
   route({
     method: 'get',
